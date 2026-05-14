@@ -24,9 +24,9 @@ for line in read:
 		if line.startswith('##FORMAT=<ID=GQ'):
 			riga=(line.split(','))
 			try:
-		 		riga[riga.index('Type=Integer')]='Type=Float'
-		 	except:
-		 		pass
+				riga[riga.index('Type=Integer')]='Type=Float'
+			except:
+				pass
 			line=','.join(riga)
 
 		

@@ -476,8 +476,8 @@ def get_info_varscan(chrom,pos,ref,alt,filter,info,format,tumor,normal,varscan):
 		varscan.AF_n='.'
 		varscan.DP_n=0
 
- 	for ind in info:
- 		if ind.startswith("MULTIALLEL"):
+	for ind in info:
+		if ind.startswith("MULTIALLEL"):
 			varscan.MULTIALLELE=1
 		if ind.startswith("SS=3"):
 			varscan.LOH=1
@@ -534,11 +534,11 @@ def get_info_vardict(chrom,pos,ref,alt,filter,info,format,tumor,normal,vardict):
 		vardict.DP_n=0
 		vardict.AF_n='.'
 	
- 	for ind in info:
- 		
- 		if ind.startswith("SHIFT3"):
- 			vardict.SHIFT3=ind.split('=')[1]
- 		if ind.startswith("MSI"):	
+	for ind in info:
+		
+		if ind.startswith("SHIFT3"):
+			vardict.SHIFT3=ind.split('=')[1]
+		if ind.startswith("MSI"):	
 			vardict.MSI=ind.split('=')[1]
 		if ind.startswith("MSILEN"):	
 			vardict.MSILEN=ind.split('=')[1]

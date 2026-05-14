@@ -713,8 +713,8 @@ def get_info_varscan(chrom,pos,ref,alt,filter,info,format,sample,varscan,merged)
 
 		varscan.RF=(varscan.RO + varscan.AO)/varscan.SDP
 	
-	 	for ind in info:
-	 		if ind.startswith("ADP"+suffisso+"="):
+		for ind in info:
+			if ind.startswith("ADP"+suffisso+"="):
 				varscan.ADP=ind.split('=')[1]
 			if ind.startswith("WT"+suffisso+"="):
 				varscan.WT=ind.split('=')[1]
@@ -1369,7 +1369,7 @@ def main():
 		if opts.split:
 			print('Splitto le varianti per campione.')
 			split_vcf(opts.merged,samples)
-			print'\nSplitto le varianti per campione:Done'
+			print('\nSplitto le varianti per campione:Done')
 
 		if opts.feat_extraction:
 			print('\nFEATURES EXTRACTION.')

@@ -530,8 +530,8 @@ def get_info_Freebayes(chrom,pos,ref,alt,filter,info,format,sample,freebayes):
 
 		try:
 			symmetricalRatio  = ((freebayes.RO_f_TOT)*(freebayes.AO_r_TOT))/((freebayes.RO_r_TOT)*(freebayes.AO_f_TOT)) + ((freebayes.RO_r_TOT)*(freebayes.AO_f_TOT))/((freebayes.RO_f_TOT)*(freebayes.AO_r_TOT))
-	 		refRatio = min(freebayes.RO_f_TOT, freebayes.RO_r_TOT) / max(freebayes.RO_f_TOT, freebayes.RO_r_TOT)
-	 		altRatio = min(freebayes.AO_f_TOT, freebayes.AO_r_TOT) / max(freebayes.AO_f_TOT, freebayes.AO_r_TOT)
+			refRatio = min(freebayes.RO_f_TOT, freebayes.RO_r_TOT) / max(freebayes.RO_f_TOT, freebayes.RO_r_TOT)
+			altRatio = min(freebayes.AO_f_TOT, freebayes.AO_r_TOT) / max(freebayes.AO_f_TOT, freebayes.AO_r_TOT)
 			freebayes.STROR = math.log(symmetricalRatio) + math.log(refRatio) - math.log(altRatio)
 			if freebayes.GT == '1/1' or freebayes.GT == '1|1':
 				freebayes.STROR='.'
@@ -637,8 +637,8 @@ def get_info_GATK(chrom,pos,ref,alt,filter,info,format,sample,GATK):
 
 		try:
 			symmetricalRatio  = ((GATK.RO_f+1.0)*(GATK.AO_r+1.0))/((GATK.RO_r+1.0)*(GATK.AO_f+1.0)) + ((GATK.RO_r+1.0)*(GATK.AO_f+1.0))/((GATK.RO_f+1.0)*(GATK.AO_r+1.0))
-	 		refRatio = min(GATK.RO_f + 1.0, GATK.RO_r + 1.0) / max(GATK.RO_f + 1.0, GATK.RO_r + 1.0)
-	 		altRatio = min(GATK.AO_f + 1.0, GATK.AO_r + 1.0) / max(GATK.AO_f + 1.0, GATK.AO_r + 1.0)
+			refRatio = min(GATK.RO_f + 1.0, GATK.RO_r + 1.0) / max(GATK.RO_f + 1.0, GATK.RO_r + 1.0)
+			altRatio = min(GATK.AO_f + 1.0, GATK.AO_r + 1.0) / max(GATK.AO_f + 1.0, GATK.AO_r + 1.0)
 			GATK.STROR = math.log(symmetricalRatio) + math.log(refRatio) - math.log(altRatio)
 			if GATK.GT == '1/1' or GATK.GT == '1|1':
 				GATK.STROR='.'
@@ -668,8 +668,8 @@ def get_info_Varscan(chrom,pos,ref,alt,filter,info,format,sample,varscan):
 
 		varscan.RF=(varscan.RO + varscan.AO)/varscan.SDP
 	
-	 	for ind in info:
-	 		if ind.startswith("ADP"):
+		for ind in info:
+			if ind.startswith("ADP"):
 				varscan.ADP=ind.split('=')[1]
 			if ind.startswith("WT"):
 				varscan.WT=ind.split('=')[1]
@@ -713,8 +713,8 @@ def get_info_Varscan(chrom,pos,ref,alt,filter,info,format,sample,varscan):
 
 		try:
 			symmetricalRatio  = ((varscan.RO_f+1.0)*(varscan.AO_r+1.0))/((varscan.RO_r+1.0)*(varscan.AO_f+1.0)) + ((varscan.RO_r+1.0)*(varscan.AO_f+1.0))/((varscan.RO_f+1.0)*(varscan.AO_r+1.0))
-	 		refRatio = min(varscan.RO_f + 1.0, varscan.RO_r + 1.0) / max(varscan.RO_f + 1.0, varscan.RO_r + 1.0)
-	 		altRatio = min(varscan.AO_f + 1.0, varscan.AO_r + 1.0) / max(varscan.AO_f + 1.0, varscan.AO_r + 1.0)
+			refRatio = min(varscan.RO_f + 1.0, varscan.RO_r + 1.0) / max(varscan.RO_f + 1.0, varscan.RO_r + 1.0)
+			altRatio = min(varscan.AO_f + 1.0, varscan.AO_r + 1.0) / max(varscan.AO_f + 1.0, varscan.AO_r + 1.0)
 			varscan.SOR = math.log(symmetricalRatio) + math.log(refRatio) - math.log(altRatio)
 		except:
 			varscan.SOR='.'
