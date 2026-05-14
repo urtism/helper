@@ -1,0 +1,369 @@
+{
+    "id": "helper_test-cohort",
+    "analysis": "Germline",
+    "reference_version": "hg19",
+    "workflow": [
+        "postprocessing",
+        "variant_annotation",
+        "cnv_annotation",
+        "postannotation",
+        "preprocessing",
+        "variantcalling",
+        "cnvcalling",
+        "alignment"
+    ],
+    "prealignment": {
+        "workflow": [],
+        "threads": "1",
+        "ram": "1g",
+        "trim_adapters": {
+            "tool": "CUTADAPT",
+            "adapter1": "CTGTCTCTTATACACATCT",
+            "adapter2": "CTGTCTCTTATACACATCT",
+            "CUTADAPT": {
+                "args": []
+            }
+        },
+        "filter_fastq_by_qual": {
+            "tool": "CUTADAPT",
+            "base_quality": "25",
+            "CUTADAPT": {
+                "args": []
+            },
+            "quality": "25"
+        },
+        "filter_fastq_by_len": {
+            "tool": "CUTADAPT",
+            "maxlen": "150",
+            "minlen": "100",
+            "CUTADAPT": {
+                "args": []
+            }
+        },
+        "fastq_QC": {
+            "tool": "FASTQC v.0.11.8",
+            "FASTQC v.0.11.8": {
+                "args": []
+            }
+        }
+    },
+    "alignment": {
+        "workflow": [
+            "fastq_alignment",
+            "sam_to_bam",
+            "sortSam",
+            "bam_QC"
+        ],
+        "threads": "2",
+        "ram": "1g",
+        "merge_UMI": {
+            "tool": ""
+        },
+        "fastq_alignment": {
+            "tool": "BOWTIE2",
+            "BWA v.0.7.17": {
+                "args": [],
+                "algorithm": "mem"
+            },
+            "BOWTIE2 v.2.3.5.1": {
+                "args": []
+            },
+            "BOWTIE2": {
+                "args": []
+            }
+        },
+        "sam_to_bam": {
+            "tool": "PICARD v.2.7.1",
+            "PICARD v.2.7.1": {
+                "args": []
+            }
+        },
+        "sortSam": {
+            "tool": "PICARD v.2.7.1",
+            "PICARD v.2.7.1": {
+                "args": [
+                    "SORT_ORDER=coordinate"
+                ]
+            }
+        },
+        "bam_QC": {
+            "tool": "FASTQC v.0.11.8",
+            "FASTQC v.0.11.8": {
+                "args": []
+            }
+        }
+    },
+    "preprocessing": {
+        "workflow": [
+            "add_readgroups",
+            "mark_pcr_dup",
+            "indel_realignment",
+            "BQ_recalibration"
+        ],
+        "threads": "2",
+        "ram": "1g",
+        "filter_bam": {
+            "tool": ""
+        },
+        "merge_UMI": {
+            "tool": ""
+        },
+        "add_readgroups": {
+            "tool": "PICARD v.2.7.1",
+            "PICARD v.2.7.1": {
+                "args": []
+            }
+        },
+        "mark_pcr_dup": {
+            "tool": "PICARD v.2.7.1",
+            "PICARD v.2.7.1": {
+                "args": []
+            }
+        },
+        "indel_realignment": {
+            "tool": "GATK v.3.7",
+            "GATK v.3.7": {
+                "args": [],
+                "mills": "MILLS"
+            }
+        },
+        "BQ_recalibration": {
+            "tool": "GATK v.3.7",
+            "GATK v.3.7": {
+                "args": [],
+                "dbsnp": "DBSNP v.138",
+                "mills": "MILLS"
+            }
+        }
+    },
+    "variantcalling": {
+        "tools": [
+            "VARSCAN2",
+            "FREEBAYES v.1.1",
+            "GATK v.4.1"
+        ],
+        "threads": "6",
+        "ram": "2g",
+        "filters": {
+            "min_base_quality_score": "",
+            "min_alt_coverage": "3",
+            "min_alt_freq": "",
+            "min_mapping_quality_score": ""
+        },
+        "GATK v.3.7": {
+            "args": []
+        },
+        "FREEBAYES v.1.1": {
+            "args": []
+        },
+        "samples_org": "cohort",
+        "GATK v.4.1": {
+            "args": []
+        },
+        "VARDICT": {
+            "args": []
+        },
+        "VARSCAN v.2.3.9": {
+            "args": []
+        },
+        "VARSCAN2": {
+            "args": []
+        }
+    },
+    "cnvcalling": {
+        "tools": [
+            "CNVkit"
+        ],
+        "threads": "6",
+        "ram": "2g",
+        "GATK v.4.1": {
+            "args": []
+        },
+        "DECON": {
+            "args": [
+                "--transProb",
+                "0.01"
+            ]
+        },
+        "CONVADING": {
+            "args": []
+        },
+        "CNVkit": {
+            "args": [],
+            "algorithm": "hmm-germline",
+            "threshold": ""
+        },
+        "samples_org": "single-sample"
+    },
+    "postprocessing": {
+        "workflow": [
+            "vcf_filter",
+            "vcf_norm",
+            "vcf_to_tsv"
+        ],
+        "threads": "2",
+        "ram": "1g",
+        "vcf_norm": {
+            "tool": "BCFTOOLS",
+            "BCFTOOLS": {
+                "args": []
+            }
+        },
+        "vcf_to_tsv": {
+            "tool": "",
+            "args": {
+                "tags_file": "",
+                "format_tags": "",
+                "info_tags": ""
+            }
+        },
+        "vcf_filter": {
+            "tool": "GATK v.4.1",
+            "GATK v.4.1": {
+                "args": [
+                    "--filter-name",
+                    "Low-Qual",
+                    "--filter-expression",
+                    "\"QD",
+                    "<",
+                    "2.0\"",
+                    "--filter-name",
+                    "High-FS",
+                    "--filter-expression",
+                    "\"FS",
+                    ">",
+                    "60.0\"",
+                    "--filter-name",
+                    "High-SOR",
+                    "--filter-expression",
+                    "\"SOR",
+                    ">",
+                    "3.0\"",
+                    "--filter-name",
+                    "Low-MapQual",
+                    "--filter-expression",
+                    "\"MQ",
+                    "<",
+                    "40.0\"",
+                    "--filter-name",
+                    "LOW-MQMQRS",
+                    "--filter-expression",
+                    "\"MQRankSum",
+                    "<",
+                    "-2.5\"",
+                    "--filter-name",
+                    "HIGH-RPOS",
+                    "--filter-expression",
+                    "\"ReadPosRankSum",
+                    "<",
+                    "-8.0",
+                    "||",
+                    "ReadPosRankSum",
+                    ">",
+                    "8.0",
+                    "\""
+                ]
+            }
+        }
+    },
+    "variant_annotation": {
+        "tool": "VEP v.95",
+        "threads": "2",
+        "ram": "1g",
+        "VEP v.95": {
+            "args": {
+                "assembly": "GRCh37",
+                "species": "homo_sapiens",
+                "args": [
+                    "--vcf_info_field",
+                    "ANN",
+                    "--force_overwrite",
+                    "--no_stats",
+                    "--cache",
+                    "--offline",
+                    "--merged",
+                    "--use_given_ref",
+                    "--canonical",
+                    "--sift",
+                    "b",
+                    "--polyphen",
+                    "b",
+                    "--numbers",
+                    "--hgvs",
+                    "--transcript_version",
+                    "--symbol",
+                    "--check_existing",
+                    "max_af",
+                    "canonical",
+                    "--af",
+                    "--max_af",
+                    "--af_1kg",
+                    "--af_esp",
+                    "--af_gnomad"
+                ],
+                "plugins": {
+                    "list": [
+                        "GeneSplicer",
+                        "MaxEntScan",
+                        "SpliceRegion",
+                        "dbNSFP"
+                    ],
+                    "GeneSplicer": {
+                        "files": "",
+                        "fields": "/home/jarvis/.vep/Plugins/GeneSplicer/GeneSplicer/human"
+                    },
+                    "MaxEntScan": {
+                        "files": "",
+                        "fields": "/home/jarvis/.vep/Plugins/GeneSplicer/GeneSplicer/human"
+                    },
+                    "SpliceRegion": {
+                        "files": "",
+                        "fields": ""
+                    },
+                    "CADD": {
+                        "files": "",
+                        "fields": ""
+                    },
+                    "Conservation": {
+                        "files": "",
+                        "fields": "GERP_CONSERVATION_SCORE,mammals"
+                    },
+                    "dbNSFP": {
+                        "files": "/home/jarvis/.vep/Plugins/dbSNFP/dbNSFP_replacement_logic",
+                        "fields": "LRT_score"
+                    },
+                    "dbscSNV": {
+                        "files": "",
+                        "fields": ""
+                    }
+                }
+            }
+        }
+    },
+    "cnv_annotation": {
+        "tool": "VEP v.95",
+        "threads": "2",
+        "ram": "1g",
+        "VEP v.95": {
+            "args": []
+        }
+    },
+    "postannotation": {
+        "workflow": [
+            "filter_by_trs_list"
+        ],
+        "ann_filter": {
+            "tool": "",
+            "args": []
+        },
+        "filter_by_trs_list": {
+            "tool": "",
+            "args": {
+                "tags_file": "/home/jarvis/git/Powercall2/configs/lista_features_annotazione.list"
+            }
+        },
+        "ann_vcf_to_tsv": {
+            "tool": ""
+        }
+    }
+}
