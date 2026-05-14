@@ -14,7 +14,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 import regex as re
-import sample_organizer as so
+from . import sample_organizer as so
 import json
 
 
@@ -927,7 +927,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 import regex as re
-import sample_organizer as so
+from . import sample_organizer as so
 import json
 
 

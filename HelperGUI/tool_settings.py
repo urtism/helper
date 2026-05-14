@@ -11,7 +11,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 import os.path
 import subprocess
 import json
-import add_tool as at
+from . import add_tool as at
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
