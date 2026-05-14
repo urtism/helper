@@ -1,0 +1,32 @@
+GT	
+DP	
+AF	
+RO	Allelic depths for the ref allele
+AO	Allelic depths for the alt allele
+#GQ	Genotype Quality (Not present in Mutect2 v1.2.1)
+#PL	Normalized, Phred-scaled likelihoods for genotypes as defined in the VCF specification
+#PS	Phasing set (typically the position of the first variant in the set)
+PGT	Physical phasing haplotype information, describing how the alternate alleles are phased in relation to one another
+PID	Physical phasing ID information, where each unique ID within a given sample (but not across samples) connects records within a phasing group
+FStBias	Fisher's Exact Test to detect strand bias
+StOR	Strand bias Odds Ratio
+CONTQ	Phred-scaled qualities that alt allele are not due to contamination
+#ECNT	Number of events in this haplotype
+GERMQ	Phred-scaled quality that alt alleles are not germline variants
+#MBQ_ref	median base quality REF
+MBQ_alt	median base quality ALT
+#MFRL_ref	median fragment length REF
+#MFRL_alt	median fragment length ALT
+#MMQ_ref	median mapping quality REF
+MMQ_alt	median mapping quality ALT
+MPOS	median distance from end of read
+#POPAF	negative log 10 population allele frequencies of alt alleles
+PON	site found in panel of normals
+#RPA_ref	Number of times tandem repeat unit is repeated for REF
+#RPA_alt	Number of times tandem repeat unit is repeated for ALT
+#RU	Tandem repeat unit (bases)
+STR	Variant is a short tandem repeat
+SEQQ	Phred-scaled quality that alt alleles are not sequencing errors
+STRANDQ	Phred-scaled quality of strand bias artifact
+STRQ	Phred-scaled quality that alt alleles in STRs are not polymerase slippage errors
+tumor_lod	Log 10 likelihood ratio score of variant existing versus not existing	

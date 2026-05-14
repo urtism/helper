@@ -1,0 +1,60 @@
+{
+"fastq_qc":{
+	"FASTQC v.0.11.8":{ "path":"/home/jarvis/NGS_TOOLS/FastQC/v1.11.8/fastqc", "version":"0.11.8" }
+},
+"trim_adapters":{
+	"SURECALLTRIMMER v.3.5.1.46":{ "path":"/home/jarvis/NGS_TOOLS/AGeNT/SurecallTrimmer_v3.5.1.46.jar", "ram":"32g", "version":"3.5.1.46"}
+},
+"merge_UMI":{
+	"LOCATIT v.3.5.1.46":{ "path":"/home/jarvis/NGS_TOOLS/AGeNT/LocatIt_v3.5.1.46.jar", "ram":"32g", "version":"3.5.1.46" }
+},
+"alignment":{
+	"BOWTIE2 v.2.3.5.1":{ "path":"/home/jarvis/NGS_TOOLS/ALIGNMENT/bowtie2-2.3.5.1/bowtie2", "version":"2.3.5.1" },
+	"BWA v.0.7.17":{ "path":"/home/jarvis/NGS_TOOLS/ALIGNMENT/bwa-0.7.15/bwa", "version":"0.7.17" },
+	"PICARD v.2.7.1":{ "path":"/home/jarvis/NGS_TOOLS/picard-tools-2.7.1/picard.jar", "ram":"32g", "version":"2.7.1" }
+},
+"preprocessing":{
+	"PICARD v.2.7.1":{ "path":"/home/jarvis/NGS_TOOLS/picard-tools-2.7.1/picard.jar", "ram":"32g", "version":"2.7.1" },
+	"GATK v.3.7":{ "path":"/home/jarvis/NGS_TOOLS/GATK/GenomeAnalysisTK.jar", "version":"3.7" }
+},
+"variantcalling":{
+	"GATK v.4.1":{ "path":"/home/jarvis/NGS_TOOLS/GATK/v4.1.2.0/gatk", "version":"4.1.2.0"},
+	"GATK v.3.7":{ "path":"/home/jarvis/NGS_TOOLS/GATK/GenomeAnalysisTK.jar", "version":"3.7" },
+	"VARSCAN v.2.3.9":{ "path":"/home/jarvis/NGS_TOOLS/VarScan/VarScan.v2.3.9.jar", "version":"2.3.9" },
+	"FREEBAYES v.3.7":{ "path":"/home/jarvis/NGS_TOOLS/freebayes/bin/freebayes", "version":"3.7"},
+	"VARDICT":{ "path":"/home/jarvis/NGS_TOOLS/VarDictJava-master/build/install/VarDict/bin/VarDict", "script_dir":"/home/jarvis/NGS_TOOLS/VarDictJava-master/VarDict", "version":""},
+	"SNVER_INDIVIDUAL v.0.5.3":{ "path":"/home/jarvis/NGS_TOOLS/SNVer-0.5.3/SNVerIndividual.jar", "version":"0.5.3"},
+	"SNVER_POOL v.0.5.3":{ "path":"/home/jarvis/NGS_TOOLS/SNVer-0.5.3/SNVerPool.jar", "version":"0.5.3"},
+	"PLATYPUS v.0.8.1":{ "path":"/home/jarvis/NGS_TOOLS/Platypus_0.8.1/Platypus.py", "version":"0.8.1"},
+	"SCALPEL v.0.5.3":{ "path":"/home/jarvis/NGS_TOOLS/scalpel-0.5.3/scalpel-discovery", "version":"0.5.3" },
+},
+"annotation":{
+	"VEP v.95":{ "path":"/home/jarvis/NGS_TOOLS/ensembl-vep-release-95/vep", "version":"95" },
+	"GeneSplicer":{ "path":"/home/jarvis/.vep/Plugins/GeneSplicer/GeneSplicer/sources/genesplicer" },
+	"MaxEntScan":{ "path":"/home/jarvis/.vep/Plugins/MaxEntScan/fordownload" },
+	"SpliceRegion":{ "path":"" },
+	"CADD":{ "path":".vep/Plugins/CADD/InDels.tsv.gz" },
+	"LD":{ "path":""},
+	"AncestralAllele":{ "path":""},
+	"Conservation":{ "path":"" },
+	"dbNSFP v.4.0":{ "path":"/home/jarvis/.vep/Plugins/dbSNFP/dbNSFP4.0/dbNSFP4.0a_hg19.gz","files":"/home/jarvis/.vep/Plugins/dbSNFP/dbNSFP_replacement_logic", "version":"4.0" },
+	"dbscSNV":{ "path":"/home/jarvis/.vep/Plugins/dbscSNV/dbscSNV.txt.gz"},
+	"ExACpLI":{ "path":"" },
+	"G2P":{ "path":""},
+	"DBSNP v.138":{ "path":"/home/jarvis/NGS_TOOLS/hg19/dbsnp_138.hg19.vcf", "version":"138"},
+	"MILLS":{ "path":"/home/jarvis/NGS_TOOLS/hg19/Mills_and_1000G_gold_standard.indels.hg19.sites.vcf"},
+	"COSMOS v.70":{ "path":"/home/jarvis/DB_ANNOTAZIONE/COSMIC_DB/hg19_cosmic70.vcf", "version":"70"}
+},
+"CNV_calling":{
+	"GATK v.4.1":{ "path":"/home/jarvis/NGS_TOOLS/GATK/v4.1.2.0/gatk", "version":"4.1.2.0"},
+	"DECON":{"path":"/home/jarvis/NGS_TOOLS/CNV/DECoN/Linux", "version":""}
+},
+"others":{
+	"BCFTOOLS":{ "path":"bcftools", "version":"" },
+	"BEDTOOLS":{ "path":"bedtools", "version":"" },
+	"VCFTOOLS":{ "path":"vcftools", "version":"" }
+},
+"reference":{
+	"hg19":{ "fasta":"/home/jarvis/NGS_TOOLS/hg19/ucsc.hg19.fasta", "dict":"/home/jarvis/NGS_TOOLS/hg19/ucsc.hg19.dict", "version":"hg19" }
+}
+}
