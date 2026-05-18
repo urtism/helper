@@ -372,6 +372,9 @@ def _row_payload(step, row):
 
 
 def load_samplesheet_text(content, selected_step=None):
+    if not content.strip().startswith(("{", "[")):
+        return load_tabular_samplesheet(content, selected_step)
+
     data = json.loads(content)
     step = selected_step if selected_step in STEP_COLUMNS else next((name for name in STEP_COLUMNS if name in data), "prealignment")
     organization = data.get("sample_organization", "only cases")
@@ -383,6 +386,57 @@ def load_samplesheet_text(content, selected_step=None):
         "organization_rows": organization_rows_from_samplesheet(data, step, organization),
         "samplesheet": data,
     }
+
+
+def load_tabular_samplesheet(content, selected_step=None):
+    table = [line.split("\t") for line in (raw.strip() for raw in content.splitlines()) if line]
+    rows = tabular_rows(table)
+    step = selected_step if selected_step in STEP_COLUMNS and selected_step != "prealignment" else infer_tabular_step(rows)
+    organization = "only cases"
+    samplesheet = build_samplesheet(step, organization, rows)
+    return {
+        "step": step,
+        "organization": organization,
+        "rows": rows,
+        "organization_rows": default_organization_rows(rows, organization),
+        "samplesheet": samplesheet,
+    }
+
+
+def tabular_rows(table):
+    rows = []
+    for fields in table:
+        if len(fields) < 2:
+            continue
+        sample_name = normalize_sample_name(fields[0])
+        values = fields[1:]
+        row = {"sample_name": sample_name}
+        file_type = detect_file_type(values[0])
+        if file_type == "fastq":
+            row.update(
+                {
+                    "fastq_R1": values[0],
+                    "fastq_R2": values[1] if len(values) > 1 else "",
+                    "fastq_I2": values[3] if len(values) > 3 else values[2] if len(values) > 2 else "",
+                }
+            )
+        elif file_type == "alignment":
+            row["bam"] = values[0]
+        elif file_type == "vcf":
+            row["merged_vcf"] = values[0]
+            row["variants_tsv"] = values[1] if len(values) > 1 else ""
+        else:
+            row["bam"] = values[0]
+        rows.append(row)
+    return rows
+
+
+def infer_tabular_step(rows):
+    if any("fastq_R1" in row for row in rows):
+        return "prealignment"
+    if any("merged_vcf" in row or "variants_tsv" in row for row in rows):
+        return "annotation"
+    return "preprocessing"
 
 
 def flatten_samplesheet(data, step):

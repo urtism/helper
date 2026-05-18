@@ -136,3 +136,32 @@ def test_load_existing_samplesheet():
     assert loaded["step"] == "preprocessing"
     assert loaded["rows"] == [{"sample_name": "S1", "bam": "/data/S1.bam"}]
     assert loaded["organization_rows"] == [{"sample_id": "S1", "case": "S1"}]
+
+
+def test_load_legacy_tabular_samplesheet_bam():
+    content = "S1\t/data/S1.bam\nS2\t/data/S2.bam\n"
+
+    loaded = load_samplesheet_text(content)
+
+    assert loaded["step"] == "preprocessing"
+    assert loaded["rows"] == [
+        {"sample_name": "S1", "bam": "/data/S1.bam"},
+        {"sample_name": "S2", "bam": "/data/S2.bam"},
+    ]
+    assert loaded["samplesheet"]["sample_list"] == ["S1", "S2"]
+
+
+def test_load_legacy_tabular_samplesheet_fastq():
+    content = "S1\t/data/S1_R1.fastq.gz\t/data/S1_R2.fastq.gz\n"
+
+    loaded = load_samplesheet_text(content)
+
+    assert loaded["step"] == "prealignment"
+    assert loaded["rows"] == [
+        {
+            "sample_name": "S1",
+            "fastq_R1": "/data/S1_R1.fastq.gz",
+            "fastq_R2": "/data/S1_R2.fastq.gz",
+            "fastq_I2": "",
+        }
+    ]

@@ -1,7 +1,8 @@
-import {buildSampleSheet as buildSampleSheetApi, getPickerSelection, loadSampleSheet, previewSampleSheetFiles} from "../api.js?v=20260518-2";
+import {buildSampleSheet as buildSampleSheetApi, getPickerSelection, loadSampleSheet, previewSampleSheetFiles} from "../api.js?v=20260518-6";
 
 const pickerStorageKey = "helper-next-selected-files";
 const pickerBroadcastChannel = "helper-next-file-picker";
+const samplesheetAccept = ".ss,.samplesheet,.json,application/json,text/plain";
 
 const sampleSheet = {
   step: "prealignment",
@@ -15,6 +16,7 @@ const sampleSheet = {
   buildTimer: null,
   rows: [],
   organizationRows: [],
+  selectedRowIndex: -1,
   json: {},
 };
 
@@ -70,6 +72,7 @@ export function initSampleSheet() {
     }
     sampleSheet.rows = [];
     sampleSheet.organizationRows = [];
+    sampleSheet.selectedRowIndex = -1;
     sampleSheet.json = {};
     renderSampleSheet();
   });
@@ -81,20 +84,22 @@ export function initSampleSheet() {
     buildSampleSheet().catch(showSampleSheetError);
   });
 
-  document.querySelector("#samplesheet-preview-files").addEventListener("click", previewFiles);
-  document.querySelector("#samplesheet-open").addEventListener("change", openSampleSheetFile);
-  document.querySelector("#samplesheet-data-open").addEventListener("change", openDataFiles);
-  document.querySelector("#samplesheet-search-files").addEventListener("click", () => {
+  bindClick("#samplesheet-preview-files", previewFiles);
+  bindChange("#samplesheet-open", openSampleSheetFile);
+  bindChange("#samplesheet-data-open", openDataFiles);
+  bindClick("#samplesheet-search-files", () => {
     openFilePickerPage();
   });
-  document.querySelector("#samplesheet-search-existing").addEventListener("click", () => {
-    document.querySelector("#samplesheet-open").click();
+  bindClick("#samplesheet-search-existing", () => {
+    const input = document.querySelector("#samplesheet-open");
+    input.accept = samplesheetAccept;
+    input.click();
   });
-  document.querySelector("#samplesheet-add-row").addEventListener("click", addSampleRow);
-  document.querySelector("#samplesheet-remove-row").addEventListener("click", removeSampleRow);
-  document.querySelector("#samplesheet-build").addEventListener("click", () => buildSampleSheet().catch(showSampleSheetError));
-  document.querySelector("#samplesheet-copy").addEventListener("click", copySampleSheetJson);
-  document.querySelector("#samplesheet-download").addEventListener("click", downloadSampleSheetJson);
+  bindClick("#samplesheet-add-row", addSampleRow);
+  bindClick("#samplesheet-remove-row", removeSampleRow);
+  bindClick("#samplesheet-build", () => buildSampleSheet().catch(showSampleSheetError));
+  bindClick("#samplesheet-copy", copySampleSheetJson);
+  bindClick("#samplesheet-download", downloadSampleSheetJson);
   initSampleSheetDropZone();
   initFilePickerMessages();
 
@@ -104,13 +109,20 @@ export function initSampleSheet() {
   renderDroppedFiles();
 }
 
+function bindClick(selector, callback) {
+  const element = document.querySelector(selector);
+  if (element) element.addEventListener("click", callback);
+}
+
+function bindChange(selector, callback) {
+  const element = document.querySelector(selector);
+  if (element) element.addEventListener("change", callback);
+}
+
 function initSampleSheetDropZone() {
-  const dataDropzone = document.querySelector("#samplesheet-data-dropzone");
   const samplesheetDropzone = document.querySelector("#samplesheet-samplesheet-dropzone");
 
-  bindDropZone(dataDropzone, async (files) => {
-    await loadDataFiles(files);
-  });
+  preventFileDropNavigation();
 
   bindDropZone(samplesheetDropzone, async (files) => {
     const samplesheetFile = files.find((file) => /\.(ss|samplesheet|json)$/i.test(file.name));
@@ -123,9 +135,12 @@ function initSampleSheetDropZone() {
 }
 
 function bindDropZone(dropzone, onDrop) {
+  if (!dropzone) return;
+
   ["dragenter", "dragover"].forEach((eventName) => {
     dropzone.addEventListener(eventName, (event) => {
       event.preventDefault();
+      event.stopPropagation();
       event.dataTransfer.dropEffect = "copy";
       dropzone.classList.add("active");
     });
@@ -134,13 +149,71 @@ function bindDropZone(dropzone, onDrop) {
   ["dragleave", "drop"].forEach((eventName) => {
     dropzone.addEventListener(eventName, (event) => {
       event.preventDefault();
+      event.stopPropagation();
       dropzone.classList.remove("active");
     });
   });
 
   dropzone.addEventListener("drop", async (event) => {
-    const files = Array.from(event.dataTransfer.files || []);
+    const files = await droppedFiles(event.dataTransfer);
     if (files.length) await onDrop(files);
+    if (!files.length) renderWarnings(["No readable files found in the drop"]);
+  });
+}
+
+function preventFileDropNavigation() {
+  ["dragover", "drop"].forEach((eventName) => {
+    window.addEventListener(eventName, (event) => {
+      if (!hasFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+    });
+  });
+}
+
+function hasFileDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  return Array.from(dataTransfer.types || []).includes("Files");
+}
+
+async function droppedFiles(dataTransfer) {
+  const itemFiles = await filesFromItems(Array.from(dataTransfer.items || []));
+  if (itemFiles.length) return itemFiles;
+  return Array.from(dataTransfer.files || []);
+}
+
+async function filesFromItems(items) {
+  const files = [];
+  for (const item of items) {
+    if (item.kind !== "file") continue;
+    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+    if (entry && entry.isDirectory) {
+      files.push(...(await filesFromDirectory(entry)));
+      continue;
+    }
+    const file = item.getAsFile();
+    if (file) files.push(file);
+  }
+  return files;
+}
+
+function filesFromDirectory(entry) {
+  const reader = entry.createReader();
+  return new Promise((resolve) => {
+    reader.readEntries(async (entries) => {
+      const nested = await Promise.all(
+        entries.map((child) => {
+          if (child.isDirectory) return filesFromDirectory(child);
+          return fileFromEntry(child).then((file) => [file]);
+        })
+      );
+      resolve(nested.flat().filter(Boolean));
+    });
+  });
+}
+
+function fileFromEntry(entry) {
+  return new Promise((resolve) => {
+    entry.file(resolve, () => resolve(null));
   });
 }
 
@@ -232,6 +305,7 @@ async function loadDataFiles(files) {
 }
 
 function fileDisplayPaths(files) {
+  const warnings = [];
   const paths = files.map((file) => {
     const directPath = file.path || "";
     if (directPath) return directPath;
@@ -240,9 +314,10 @@ function fileDisplayPaths(files) {
     const directory = dataFilesDirectory();
     if (directory) return joinPath(directory, relativePath);
 
+    warnings.push(`Browser did not expose the full path for ${relativePath}; using the filename only`);
     return relativePath;
   });
-  return {paths, warnings: []};
+  return {paths, warnings};
 }
 
 function dataFilesDirectory() {
@@ -271,12 +346,13 @@ function isAbsolutePath(path) {
 }
 
 function updateDataDropZoneText() {
-  document.querySelector("#samplesheet-data-dropzone").textContent = `Drop ${stepFileTypes[sampleSheet.step]} files here`;
+  document.querySelector("#samplesheet-data-dropzone").textContent = `${stepFileTypes[sampleSheet.step]} drag and drop disabled. Use Search files to keep full paths.`;
 }
 
 function updateExpectedFileControls() {
   document.querySelector("#samplesheet-file-type").textContent = stepFileTypes[sampleSheet.step];
   document.querySelector("#samplesheet-data-open").accept = stepFileAccepts[sampleSheet.step] || "";
+  document.querySelector("#samplesheet-open").accept = samplesheetAccept;
 }
 
 async function previewFiles() {
@@ -285,6 +361,7 @@ async function previewFiles() {
   if (!files.length) {
     sampleSheet.rows = [];
     sampleSheet.organizationRows = [];
+    sampleSheet.selectedRowIndex = -1;
     sampleSheet.json = {};
     renderWarnings([]);
     renderSampleSheet();
@@ -296,6 +373,7 @@ async function previewFiles() {
   sampleSheet.columns = data.columns;
   sampleSheet.rows = data.rows;
   sampleSheet.organizationRows = data.organization_rows;
+  sampleSheet.selectedRowIndex = -1;
   sampleSheet.json = {};
   renderWarnings(sampleSheet.pathWarnings.concat(data.warnings));
   renderSampleSheet();
@@ -318,6 +396,7 @@ async function loadSampleSheetContent(content) {
   sampleSheet.columns = stepColumns[sampleSheet.step];
   sampleSheet.rows = data.rows;
   sampleSheet.organizationRows = data.organization_rows;
+  sampleSheet.selectedRowIndex = -1;
   sampleSheet.json = data.samplesheet;
   document.querySelector("#samplesheet-step").value = sampleSheet.step;
   document.querySelector("#samplesheet-organization").value = sampleSheet.organization;
@@ -381,6 +460,10 @@ function renderSampleRows() {
 
   sampleSheet.rows.forEach((row, rowIndex) => {
     const tr = document.createElement("tr");
+    tr.classList.toggle("selected-row", rowIndex === sampleSheet.selectedRowIndex);
+    tr.tabIndex = 0;
+    tr.addEventListener("click", () => selectSampleRow(rowIndex));
+    tr.addEventListener("focusin", () => selectSampleRow(rowIndex));
     for (const column of sampleSheet.columns) {
       const td = document.createElement("td");
       const input = document.createElement("input");
@@ -397,6 +480,14 @@ function renderSampleRows() {
       tr.appendChild(td);
     }
     body.appendChild(tr);
+  });
+}
+
+function selectSampleRow(rowIndex) {
+  if (rowIndex === sampleSheet.selectedRowIndex) return;
+  sampleSheet.selectedRowIndex = rowIndex;
+  document.querySelectorAll("#samplesheet-body tr").forEach((row, index) => {
+    row.classList.toggle("selected-row", index === rowIndex);
   });
 }
 
@@ -486,13 +577,19 @@ function addSampleRow() {
     row[column] = "";
   });
   sampleSheet.rows.push(row);
+  sampleSheet.selectedRowIndex = sampleSheet.rows.length - 1;
   sampleSheet.organizationRows = defaultOrganizationRows();
   renderSampleSheet();
   scheduleBuildSampleSheet();
 }
 
 function removeSampleRow() {
-  sampleSheet.rows.pop();
+  if (sampleSheet.selectedRowIndex < 0 || sampleSheet.selectedRowIndex >= sampleSheet.rows.length) {
+    renderWarnings(["Select a row before removing it"]);
+    return;
+  }
+  sampleSheet.rows.splice(sampleSheet.selectedRowIndex, 1);
+  sampleSheet.selectedRowIndex = Math.min(sampleSheet.selectedRowIndex, sampleSheet.rows.length - 1);
   sampleSheet.organizationRows = defaultOrganizationRows();
   renderSampleSheet();
   scheduleBuildSampleSheet();

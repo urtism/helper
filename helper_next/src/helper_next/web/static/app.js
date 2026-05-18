@@ -1,5 +1,5 @@
-import {getProject} from "./api.js?v=20260518-2";
-import {initSampleSheet} from "./sections/samplesheet.js?v=20260518-2";
+import {getProject} from "./api.js?v=20260518-6";
+import {initSampleSheet} from "./sections/samplesheet.js?v=20260518-6";
 
 const sectionTitles = {
   samplesheet: "Compile Sample Sheet",
