@@ -9,6 +9,7 @@
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 import sys
+import os
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
@@ -179,7 +180,7 @@ class samplesheet_designer(QWidget):
         clickeditem = self.tableWidget.item(item.row(),item.column())
         file_searcher = QFileDialog.Options()
         file_searcher |= QFileDialog.DontUseNativeDialog    
-        file,_ = QFileDialog.getOpenFileName(self,"Select one file","~")
+        file,_ = QFileDialog.getOpenFileName(self,"Select one file",os.path.expanduser("~"), options=file_searcher)
         if file:
             try:
                 clickeditem.setText(file)
@@ -189,7 +190,7 @@ class samplesheet_designer(QWidget):
     def search_files(self):
         file_searcher = QFileDialog.Options()
         file_searcher |= QFileDialog.DontUseNativeDialog    
-        files,_ = QFileDialog.getOpenFileNames(self,"Select one or more files","~","FASTQ .fastq .fq .fastq.gz fq.gz (*.fastq *.fq *.fastq.gz *.fq.gz);; BAM .bam (*.bam) ;; VCF .vcf(*.vcf)")
+        files,_ = QFileDialog.getOpenFileNames(self,"Select one or more files",os.path.expanduser("~"),"FASTQ .fastq .fq .fastq.gz fq.gz (*.fastq *.fq *.fastq.gz *.fq.gz);; BAM .bam (*.bam) ;; VCF .vcf(*.vcf)", options=file_searcher)
         if files:
             self.createSamplesheet_byfilesearch(files)
 
@@ -197,7 +198,7 @@ class samplesheet_designer(QWidget):
     def search_samplesheet(self):
         file_searcher = QFileDialog.Options()
         file_searcher |= QFileDialog.DontUseNativeDialog    
-        file,_ = QFileDialog.getOpenFileName(self,"Select one samplesheet","~","SAMPLESHEET file .samplesheet .ss (*.samplesheet *.ss)")
+        file,_ = QFileDialog.getOpenFileName(self,"Select one samplesheet",os.path.expanduser("~"),"SAMPLESHEET file .samplesheet .ss (*.samplesheet *.ss)", options=file_searcher)
         if file:
             self.open_existing_Samplesheet(file)
 
@@ -858,7 +859,9 @@ class samplesheet_designer(QWidget):
             self.out_samplesheet["sample_organization"] = "only cases"
 
         self.info_from_table()
-        fileName,_ = QFileDialog.getSaveFileName(self, 'Dialog Title', '', "Samplesheet file ( *.ss *.samplesheet)")
+        options = QFileDialog.Options()
+        options |= QFileDialog.DontUseNativeDialog
+        fileName,_ = QFileDialog.getSaveFileName(self, 'Dialog Title', os.path.expanduser("~"), "Samplesheet file ( *.ss *.samplesheet)", options=options)
         if fileName:
             with open(fileName, 'w') as ss:
                 json.dump(self.out_samplesheet, ss, indent=4)
@@ -1092,7 +1095,7 @@ class samplesheet_designer(QWidget):
         clickeditem = self.tableWidget.item(item.row(),item.column())
         file_searcher = QFileDialog.Options()
         file_searcher |= QFileDialog.DontUseNativeDialog    
-        file,_ = QFileDialog.getOpenFileName(self,"Select one file","~")
+        file,_ = QFileDialog.getOpenFileName(self,"Select one file",os.path.expanduser("~"), options=file_searcher)
         if file:
             try:
                 clickeditem.setText(file)
@@ -1102,7 +1105,7 @@ class samplesheet_designer(QWidget):
     def search_files(self):
         file_searcher = QFileDialog.Options()
         file_searcher |= QFileDialog.DontUseNativeDialog    
-        files,_ = QFileDialog.getOpenFileNames(self,"Select one or more files","~","FASTQ .fastq .fq .fastq.gz fq.gz (*.fastq *.fq *.fastq.gz *.fq.gz);; BAM .bam (*.bam) ;; VCF .vcf(*.vcf)")
+        files,_ = QFileDialog.getOpenFileNames(self,"Select one or more files",os.path.expanduser("~"),"FASTQ .fastq .fq .fastq.gz fq.gz (*.fastq *.fq *.fastq.gz *.fq.gz);; BAM .bam (*.bam) ;; VCF .vcf(*.vcf)", options=file_searcher)
         if files:
             self.createSamplesheet_byfilesearch(files)
 
@@ -1110,7 +1113,7 @@ class samplesheet_designer(QWidget):
     def search_samplesheet(self):
         file_searcher = QFileDialog.Options()
         file_searcher |= QFileDialog.DontUseNativeDialog    
-        file,_ = QFileDialog.getOpenFileName(self,"Select one samplesheet","~","SAMPLESHEET file .samplesheet .ss (*.samplesheet *.ss)")
+        file,_ = QFileDialog.getOpenFileName(self,"Select one samplesheet",os.path.expanduser("~"),"SAMPLESHEET file .samplesheet .ss (*.samplesheet *.ss)", options=file_searcher)
         if file:
             self.open_existing_Samplesheet(file)
 
@@ -1771,7 +1774,9 @@ class samplesheet_designer(QWidget):
             self.out_samplesheet["sample_organization"] = "only cases"
 
         self.info_from_table()
-        fileName,_ = QFileDialog.getSaveFileName(self, 'Dialog Title', '', "Samplesheet file ( *.ss *.samplesheet)")
+        options = QFileDialog.Options()
+        options |= QFileDialog.DontUseNativeDialog
+        fileName,_ = QFileDialog.getSaveFileName(self, 'Dialog Title', os.path.expanduser("~"), "Samplesheet file ( *.ss *.samplesheet)", options=options)
         if fileName:
             with open(fileName, 'w') as ss:
                 json.dump(self.out_samplesheet, ss, indent=4)

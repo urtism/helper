@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Helper Next</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Helper sections">
+        <div class="brand">
+          <span class="brand-mark">H</span>
+          <div>
+            <h1>Helper Next</h1>
+            <p>NGS workspace</p>
+          </div>
+        </div>
+
+        <nav class="section-nav">
+          <button class="nav-item active" type="button" data-section="samplesheet">Sample Sheet</button>
+          <button class="nav-item" type="button" data-section="pipeline">Pipeline</button>
+          <button class="nav-item" type="button" data-section="tools">Tools</button>
+          <button class="nav-item" type="button" data-section="panels">Gene Panels</button>
+          <button class="nav-item" type="button" data-section="analysis">Analysis</button>
+        </nav>
+
+        <div class="repo-status">
+          <span class="status-dot"></span>
+          <span id="project-root">Loading project...</span>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Helper v1.0 replacement prototype</p>
+            <h2 id="section-title">Compile Sample Sheet</h2>
+          </div>
+          <button id="refresh-project" class="ghost-button" type="button">Refresh</button>
+        </header>
+
+        <section class="module active" id="samplesheet" aria-labelledby="samplesheet-title">
+          <div class="module-header">
+            <div>
+              <h3 id="samplesheet-title">Compile Sample Sheet</h3>
+              <p>Create or inspect sample sheets from FASTQ, BAM, VCF, or existing `.ss` files.</p>
+            </div>
+          </div>
+
+          <div id="samplesheet-editor" class="samplesheet-editor">
+            <article>
+              <h4>1. Step and files</h4>
+              <div class="samplesheet-toolbar">
+                <label>Pipeline Step
+                  <select id="samplesheet-step">
+                    <option value="prealignment">Pre-alignment</option>
+                    <option value="alignment">Alignment</option>
+                    <option value="preprocessing">Pre-processing</option>
+                    <option value="variantcalling">Variant calling</option>
+                    <option value="postprocessing">Post-processing</option>
+                    <option value="annotation">Annotation</option>
+                    <option value="postannotation">Post-annotation</option>
+                  </select>
+                </label>
+                <div>
+                  <span class="field-label">Expected file type</span>
+                  <strong id="samplesheet-file-type">FASTQ</strong>
+                </div>
+              </div>
+
+              <div class="file-input-layout">
+                <div class="drop-grid">
+                  <div>
+                    <div id="samplesheet-data-dropzone" class="drop-zone" tabindex="0">
+                      Drop files for the selected step here
+                    </div>
+                    <div class="button-row under-drop">
+                      <button id="samplesheet-search-files" class="search-button" type="button">Search files</button>
+                      <input id="samplesheet-data-open" class="hidden-input" type="file" accept=".fastq,.fastq.gz,.fq,.fq.gz" multiple>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div id="samplesheet-samplesheet-dropzone" class="drop-zone" tabindex="0">
+                      Drop an existing sample sheet here
+                    </div>
+                    <div class="button-row under-drop">
+                      <button id="samplesheet-search-existing" class="search-button" type="button">Search samplesheet</button>
+                      <input id="samplesheet-open" class="hidden-input" type="file" accept=".ss,.samplesheet,.json">
+                    </div>
+                  </div>
+                </div>
+
+                <div class="loaded-files-panel">
+                  <h5>Loaded files</h5>
+                  <ul id="samplesheet-file-list" class="loaded-file-list">
+                    <li>No files loaded</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div id="samplesheet-warnings" class="warnings" aria-live="polite"></div>
+
+              <div class="table-heading">
+                <h4>Compiled preview</h4>
+              </div>
+              <div class="table-scroll sample-preview-scroll">
+                <table id="samplesheet-table">
+                  <thead id="samplesheet-head"></thead>
+                  <tbody id="samplesheet-body"></tbody>
+                </table>
+              </div>
+              <div class="button-row preview-actions">
+                <button id="samplesheet-preview-files" type="button">Refresh Preview</button>
+                <button id="samplesheet-add-row" type="button">Add Row</button>
+                <button id="samplesheet-remove-row" type="button">Remove Row</button>
+              </div>
+            </article>
+
+            <article>
+              <h4>2. Organize samples</h4>
+              <p class="muted">Map sample IDs to case/control/trio roles before saving.</p>
+              <label>Sample Organization
+                <select id="samplesheet-organization">
+                  <option value="only cases">Only cases</option>
+                  <option value="case-control">Case - Control</option>
+                  <option value="trio">Trios</option>
+                </select>
+              </label>
+              <div class="table-scroll sample-organization-scroll">
+                <table id="samplesheet-organization-table">
+                  <thead id="samplesheet-organization-head"></thead>
+                  <tbody id="samplesheet-organization-body"></tbody>
+                </table>
+              </div>
+            </article>
+
+            <article>
+              <h4>3. Output JSON</h4>
+              <pre id="samplesheet-json" class="json-preview">{}</pre>
+              <div class="button-row">
+                <button id="samplesheet-download" type="button">Save samplesheet</button>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="module" id="pipeline" aria-labelledby="pipeline-title">
+          <div class="module-header">
+            <div>
+              <h3 id="pipeline-title">Add or Edit Pipeline</h3>
+              <p>Browse existing pipeline definitions and prepare the web editor.</p>
+            </div>
+            <button type="button">New Pipeline</button>
+          </div>
+          <div class="split">
+            <article>
+              <h4>Pipelines</h4>
+              <ul class="file-list" id="pipelines"></ul>
+            </article>
+            <article>
+              <h4>Workflow</h4>
+              <div class="workflow-preview">
+                <span>Preprocessing</span>
+                <span>Alignment</span>
+                <span>Variant Calling</span>
+                <span>Annotation</span>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="module" id="tools" aria-labelledby="tools-title">
+          <div class="module-header">
+            <div>
+              <h3 id="tools-title">Tools Settings</h3>
+              <p>Review tool configuration files, references, databases, and execution settings.</p>
+            </div>
+            <button type="button">Add Tool</button>
+          </div>
+          <div class="split">
+            <article>
+              <h4>Configuration Files</h4>
+              <ul class="file-list" id="tool-configs"></ul>
+            </article>
+            <article>
+              <h4>Scripts</h4>
+              <ul class="file-list" id="scripts"></ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="module" id="panels" aria-labelledby="panels-title">
+          <div class="module-header">
+            <div>
+              <h3 id="panels-title">Add or Edit Gene Panel Info</h3>
+              <p>Collect panel targets, transcripts, CNV assets, and chemistry metadata.</p>
+            </div>
+            <button type="button">New Panel</button>
+          </div>
+          <div class="form-grid">
+            <label>Panel Name<input type="text" placeholder="e.g. TrusightCardio"></label>
+            <label>Target List<input type="text" placeholder="Select target .list"></label>
+            <label>Target BED<input type="text" placeholder="Select target .bed"></label>
+            <label>Transcript List<input type="text" placeholder="Select transcript list"></label>
+          </div>
+        </section>
+
+        <section class="module" id="analysis" aria-labelledby="analysis-title">
+          <div class="module-header">
+            <div>
+              <h3 id="analysis-title">Start Analysis</h3>
+              <p>Prepare run ID, samplesheet, panel, pipeline, tools config, and working directory.</p>
+            </div>
+            <button type="button">Add to Queue</button>
+          </div>
+          <div class="analysis-layout">
+            <article>
+              <h4>Run Setup</h4>
+              <div class="form-grid single">
+                <label>Run ID<input type="text" placeholder="YYYYMMDD_Run_PANEL"></label>
+                <label>Samplesheet<input type="text" placeholder="Select .ss or .samplesheet"></label>
+                <label>Working Directory<input type="text" placeholder="Select output directory"></label>
+              </div>
+            </article>
+            <article>
+              <h4>Queue</h4>
+              <ul class="queue-list" id="analysis-queue">
+                <li>No analysis queued</li>
+              </ul>
+              <button class="primary-action" type="button">Start Analysis</button>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/static/app.js?v=20260518-2"></script>
+  </body>
+</html>

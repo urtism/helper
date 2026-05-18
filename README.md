@@ -25,6 +25,7 @@ pip install -r requirements.txt
 - `configs/`: file di configurazione JSON e CFG
 - `scripts/`: script di utilità per VCF, features, sample sheet
 - `files/`: risorse di pannelli, target, trascritti e modelli
+- `helper_next/`: prototipo web locale per una futura interfaccia FastAPI
 - `legacy/root_gui/`: vecchie copie dei moduli GUI generati che prima erano nella root
 
 La vecchia cartella `Powercall/` era una copia legacy non importata dal codice attivo ed è stata rimossa dalla struttura del progetto.
@@ -32,6 +33,7 @@ La vecchia cartella `Powercall/` era una copia legacy non importata dal codice a
 ## Note di miglioramento
 
 - completare la migrazione da import assoluti a package import
+- sviluppare la nuova interfaccia in `helper_next/` senza bloccare la GUI PyQt
 - sostituire path assoluti con percorsi configurabili
 - aggiungere test automatici su parsing config, samplesheet e costruzione comandi
 - definire un entry point CLI reale e stabile

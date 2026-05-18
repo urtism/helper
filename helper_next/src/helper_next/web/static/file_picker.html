@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Helper Next - File Picker</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body class="picker-page">
+    <main class="picker-shell">
+      <header class="picker-header">
+        <div>
+          <p class="eyebrow">Helper Next</p>
+          <h1>Select files</h1>
+          <p id="picker-step-label">Compatible files for the selected step</p>
+        </div>
+        <button id="picker-close" class="ghost-button" type="button">Close</button>
+      </header>
+
+      <section class="picker-card">
+        <aside class="picker-sidebar">
+          <h2>Locations</h2>
+          <div id="file-picker-roots" class="picker-roots"></div>
+        </aside>
+
+        <div class="picker-main">
+          <div class="picker-main-header">
+            <div class="file-picker-toolbar">
+              <button id="file-picker-up" type="button">Up</button>
+              <input id="file-picker-path" type="text" aria-label="Current directory">
+              <button id="file-picker-go" type="button">Go</button>
+            </div>
+
+            <div class="file-picker-actions">
+              <button id="file-picker-select-all" type="button">Select all files</button>
+              <button id="file-picker-clear" type="button">Clear selection</button>
+            </div>
+          </div>
+
+          <div id="file-picker-warnings" class="warnings" aria-live="polite"></div>
+
+          <div class="file-picker-list page-file-picker-list" id="file-picker-list"></div>
+
+          <div class="modal-footer">
+            <span id="file-picker-count" class="muted">0 files selected</span>
+            <button id="file-picker-add" class="primary-action compact" type="button">Use Selected Files</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/static/sections/file_picker.js?v=20260518"></script>
+  </body>
+</html>

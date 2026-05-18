@@ -1,4 +1,28 @@
+import os
+import site
+import sys
+
+# Avoid loading PyQt/Qt from the user site while running inside Conda.
+# gatk43 otherwise prefers ~/.local PyQt5 over the Conda PyQt5 build.
+try:
+    user_site = site.getusersitepackages()
+except AttributeError:
+    user_site = None
+if user_site:
+    removed_user_site = user_site in sys.path
+    sys.path[:] = [path for path in sys.path if path != user_site]
+else:
+    removed_user_site = False
+
+# Avoid GTK/appmenu platform themes from mixed Conda/system libraries.
+# This prevents QFileDialog from crashing in Pango/GLib on gatk43.
+os.environ["QT_QPA_PLATFORMTHEME"] = "generic"
+os.environ["QT_STYLE_OVERRIDE"] = "Fusion"
+
 from PyQt5 import QtCore, QtGui, QtWidgets
+
+if removed_user_site:
+    sys.path.append(user_site)
 from HelperGUI import sheet_compiler as sc
 from HelperGUI import samplesheet_designer as ssd
 from HelperGUI import analysis_page as ap
