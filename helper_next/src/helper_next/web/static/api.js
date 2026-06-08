@@ -51,3 +51,24 @@ export async function buildSampleSheet(payload) {
     body: JSON.stringify(payload),
   });
 }
+
+export async function startFakeAnalysis(payload) {
+  return requestJson("/api/analysis/test-run", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function startRealAnalysis(payload) {
+  return requestJson("/api/analysis/real-run", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getAnalysisRunStatus(runDir) {
+  const params = new URLSearchParams({run_dir: runDir});
+  return requestJson(`/api/analysis/run-status?${params.toString()}`);
+}

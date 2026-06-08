@@ -274,7 +274,46 @@ article > * + * {
 
 .file-list li,
 .queue-list li {
+  overflow-wrap: anywhere;
   padding: 4px 0;
+}
+
+.analysis-console-panel {
+  margin-top: 18px;
+}
+
+.console-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.console-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+#analysis-console-state {
+  color: #526174;
+  font-size: 13px;
+}
+
+.analysis-console {
+  background: #111827;
+  border: 1px solid #253142;
+  border-radius: 8px;
+  color: #d7e0ea;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 12px 0 0;
+  max-height: 460px;
+  min-height: 260px;
+  overflow: auto;
+  padding: 14px;
+  white-space: pre-wrap;
 }
 
 table {
@@ -368,6 +407,34 @@ input {
   border-radius: 6px;
   min-height: 38px;
   padding: 8px 10px;
+}
+
+.checkbox-field {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.checkbox-field input {
+  min-height: 16px;
+  padding: 0;
+}
+
+.advanced-options {
+  border: 1px solid #d6dce4;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.advanced-options summary {
+  color: #34445a;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.advanced-options .form-grid {
+  margin-top: 12px;
 }
 
 select,
@@ -487,6 +554,17 @@ textarea {
 .primary-action.compact {
   margin-top: 0;
   width: auto;
+}
+
+.loaded-file-inline {
+  border: 1px solid #d6dce4;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.output-list {
+  border-top: 1px solid #e4e8ee;
+  padding-top: 10px;
 }
 
 .modal-footer,

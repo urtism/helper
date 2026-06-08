@@ -211,31 +211,81 @@
           <div class="module-header">
             <div>
               <h3 id="analysis-title">Start Analysis</h3>
-              <p>Prepare run ID, samplesheet, panel, pipeline, tools config, and working directory.</p>
+              <p>Prepare run ID, samplesheet, workflow, and working directory.</p>
             </div>
-            <button type="button">Add to Queue</button>
+            <button class="analysis-start-fake" type="button">Start Test</button>
           </div>
           <div class="analysis-layout">
             <article>
               <h4>Run Setup</h4>
               <div class="form-grid single">
-                <label>Run ID<input type="text" placeholder="YYYYMMDD_Run_PANEL"></label>
-                <label>Samplesheet<input type="text" placeholder="Select .ss or .samplesheet"></label>
-                <label>Working Directory<input type="text" placeholder="Select output directory"></label>
+                <label>Run ID<input id="analysis-run-id" type="text" placeholder="YYYYMMDD_Run_PANEL"></label>
+                <label>Samplesheet
+                  <input id="analysis-samplesheet-file" type="file" accept=".ss,.samplesheet,.json">
+                </label>
+                <div class="loaded-file-inline">
+                  <span class="field-label">Loaded samplesheet</span>
+                  <strong id="analysis-samplesheet-name">None</strong>
+                </div>
+                <label>Workflow
+                  <select id="analysis-workflow">
+                    <option value="fake_alignment">Fake alignment</option>
+                    <option value="real_alignment">Real Nextflow alignment + preprocessing</option>
+                  </select>
+                </label>
+                <label>Aligner
+                  <select id="analysis-aligner">
+                    <option value="BWA v.0.7.17">BWA v.0.7.17</option>
+                    <option value="BOWTIE2">BOWTIE2</option>
+                    <option value="NOVOALIGN">NOVOALIGN</option>
+                  </select>
+                </label>
+                <label>Working Directory<input id="analysis-workdir" type="text" placeholder="/tmp/helper_next_analysis"></label>
+                <details class="advanced-options">
+                  <summary>Advanced Options</summary>
+                  <div class="form-grid single">
+                    <label>Execution Profile
+                      <select id="analysis-execution-profile">
+                        <option value="local">Local</option>
+                        <option value="slurm">SLURM / HPC</option>
+                      </select>
+                    </label>
+                    <label>Queue / Partition<input id="analysis-queue" type="text" placeholder="Optional for SLURM"></label>
+                    <label class="checkbox-field">
+                      <input id="analysis-keep-intermediates" type="checkbox">
+                      Keep intermediate files for troubleshooting
+                    </label>
+                  </div>
+                </details>
               </div>
+              <p id="analysis-status" class="warnings" aria-live="polite"></p>
             </article>
             <article>
               <h4>Queue</h4>
               <ul class="queue-list" id="analysis-queue">
                 <li>No analysis queued</li>
               </ul>
-              <button class="primary-action" type="button">Start Analysis</button>
+              <h4>Outputs</h4>
+              <ul class="queue-list output-list" id="analysis-output-list">
+                <li>No outputs</li>
+              </ul>
+              <button class="analysis-start-fake primary-action" type="button">Start Test</button>
             </article>
           </div>
+          <article class="analysis-console-panel">
+            <div class="console-header">
+              <h4>Live Console</h4>
+              <div class="console-actions">
+                <span id="analysis-console-state">Idle</span>
+                <button id="analysis-console-refresh" type="button">Refresh</button>
+              </div>
+            </div>
+            <pre id="analysis-console" class="analysis-console">No run selected</pre>
+          </article>
         </section>
       </main>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260518-6"></script>
+    <script type="module" src="/static/app.js?v=20260518-11"></script>
   </body>
 </html>

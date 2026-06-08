@@ -43,3 +43,19 @@ uvicorn helper_next.api.app:create_app --factory --reload --port 8765
 2. Expose read-only project/config discovery in Helper Next.
 3. Add safe builders for samplesheets and pipeline commands.
 4. Add execution and log streaming after the command layer is tested.
+
+## Nextflow Bridge
+
+Helper Next can now generate a stable TSV manifest from the existing Helper
+samplesheet JSON:
+
+```bash
+helper-next nextflow-manifest \
+  --samplesheet run.samplesheet \
+  --pipeline ../configs/pipelines/Germline.pipeline \
+  --tools ../configs/tools_cfg/tools.cfg \
+  --out work/manifest.tsv \
+  --run-config work/run_config.json
+```
+
+See `../docs/NEXTFLOW_MIGRATION.md` for the initial Nextflow workflow.

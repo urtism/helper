@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from helper_next.api.analysis import router as analysis_router
 from helper_next.api.samplesheet import router as samplesheet_router
 from helper_next.core.project import get_project_paths, list_named_files
 
@@ -11,6 +12,7 @@ from helper_next.core.project import get_project_paths, list_named_files
 def create_app():
     app = FastAPI(title="Helper Next", version="0.1.0")
     app.include_router(samplesheet_router)
+    app.include_router(analysis_router)
 
     static_dir = Path(__file__).resolve().parents[1] / "web" / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

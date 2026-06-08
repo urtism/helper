@@ -1,4 +1,5 @@
-import {getProject} from "./api.js?v=20260518-6";
+import {getProject} from "./api.js?v=20260518-11";
+import {initAnalysis} from "./sections/analysis.js?v=20260518-11";
 import {initSampleSheet} from "./sections/samplesheet.js?v=20260518-6";
 
 const sectionTitles = {
@@ -26,6 +27,7 @@ document.querySelectorAll(".nav-item").forEach((button) => {
 });
 
 initSampleSheet();
+initAnalysis();
 
 document.querySelector("#refresh-project").addEventListener("click", loadProject);
 loadProject().catch((error) => {
