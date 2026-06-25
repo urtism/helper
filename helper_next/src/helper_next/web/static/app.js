@@ -1,5 +1,5 @@
-import {getProject} from "./api.js?v=20260518-11";
-import {initAnalysis} from "./sections/analysis.js?v=20260518-11";
+import {getProject} from "./api.js?v=20260625-3";
+import {initAnalysis} from "./sections/analysis.js?v=20260625-3";
 import {initSampleSheet} from "./sections/samplesheet.js?v=20260518-6";
 
 const sectionTitles = {

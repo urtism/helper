@@ -48,6 +48,7 @@ STEP_REQUIRED_FIELDS = {
     "variantcalling": ["tools", "threads", "ram", "filters"],
     "cnvcalling": ["tools", "threads", "ram"],
     "postprocessing": ["workflow", "threads", "ram"],
+    "annotation": ["workflow", "threads", "ram"],
     "variant_annotation": ["tool", "threads", "ram"],
     "cnv_annotation": ["tool", "threads", "ram"],
     "postannotation": ["workflow"],
@@ -59,10 +60,10 @@ ENTRY_STEP_REQUIRED_COLUMNS = {
     "preprocessing": ["bam"],
     "variantcalling": ["bam"],
     "cnvcalling": ["bam"],
-    "postprocessing": [],
+    "postprocessing": ["merged_vcf"],
     "variant_annotation": [],
     "cnv_annotation": [],
-    "annotation": [],
+    "annotation": ["merged_vcf"],
     "postannotation": [],
 }
 
@@ -117,7 +118,16 @@ def manifest_rows(samplesheet, entry_step=None):
                     "fastq_r2": payload.get("fastq_R2", ""),
                     "fastq_i2": payload.get("fastq_I2", ""),
                     "bam": payload.get("bam", ""),
-                    "merged_vcf": payload.get("merged_vcf", payload.get("vcf", "")),
+                    "merged_vcf": payload.get(
+                        "merged_vcf",
+                        payload.get(
+                            "vcf",
+                            payload.get(
+                                "gatk_vcf",
+                                payload.get("freebayes_vcf", payload.get("varscan_vcf", payload.get("somatic_vcf", ""))),
+                            ),
+                        ),
+                    ),
                     "variants_tsv": payload.get("variants_tsv", payload.get("tsv", "")),
                 }
             )
@@ -259,6 +269,32 @@ def _validate_tools_and_reference(pipeline_config, tools_config, workflow, error
                 errors.append("tools.{}: expected a JSON object".format(tool_name))
             elif tool_name and not tools_config[tool_name].get("path") and not tools_config[tool_name].get("container"):
                 errors.append("tools.{}: missing path or container".format(tool_name))
+        if step == "preprocessing":
+            _validate_preprocessing_databases(step_config, tools_config, errors)
+
+
+def _validate_preprocessing_databases(step_config, tools_config, errors):
+    workflow = step_config.get("workflow", [])
+    if "indel_realignment" in workflow:
+        indel_cfg = step_config.get("indel_realignment", {})
+        tool_name = indel_cfg.get("tool", "GATK v.3.7")
+        tool_cfg = indel_cfg.get(tool_name, {}) if isinstance(indel_cfg.get(tool_name, {}), dict) else {}
+        mills_key = tool_cfg.get("mills") or indel_cfg.get("mills") or "mills"
+        if mills_key and not _tool_key_exists(tools_config, mills_key):
+            errors.append("tools.{}: selected database is not configured".format(mills_key))
+    if "BQ_recalibration" in workflow:
+        bqsr_cfg = step_config.get("BQ_recalibration", {})
+        tool_name = bqsr_cfg.get("tool", "GATK v.3.7")
+        tool_cfg = bqsr_cfg.get(tool_name, {}) if isinstance(bqsr_cfg.get(tool_name, {}), dict) else {}
+        dbsnp_key = tool_cfg.get("dbsnp") or bqsr_cfg.get("dbsnp") or "dbsnp"
+        mills_key = tool_cfg.get("mills") or bqsr_cfg.get("mills") or "mills"
+        for database_key in (dbsnp_key, mills_key):
+            if database_key and not _tool_key_exists(tools_config, database_key):
+                errors.append("tools.{}: selected database is not configured".format(database_key))
+
+
+def _tool_key_exists(tools_config, key):
+    return key in tools_config or str(key).lower() in tools_config
 
 
 def _selected_tools_for_step(step_config):
@@ -312,13 +348,13 @@ def step_summary(pipeline_config, workflow):
     return summary
 
 
-def build_nextflow_run_config(samplesheet, pipeline_config, tools_config, entry_step=None, requested_workflow=None):
+def build_nextflow_run_config(samplesheet, pipeline_config, tools_config, entry_step=None, requested_workflow=None, panel_design=None):
     step = infer_entry_step(samplesheet, entry_step)
     workflow = enabled_workflow(pipeline_config, requested_workflow)
     reference_version = pipeline_config.get("reference_version", "")
     reference = tools_config.get(reference_version, {})
 
-    return {
+    config = {
         "entry_step": step,
         "sample_organization": samplesheet.get("sample_organization", "only cases"),
         "analysis": pipeline_config.get("analysis", ""),
@@ -327,6 +363,9 @@ def build_nextflow_run_config(samplesheet, pipeline_config, tools_config, entry_
         "workflow": workflow,
         "steps": step_summary(pipeline_config, workflow),
     }
+    if panel_design:
+        config["panel_design"] = panel_design
+    return config
 
 
 def write_run_config(config, path):

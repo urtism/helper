@@ -42,6 +42,7 @@ process ADD_READGROUPS {
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.readgroups.bam"), path("${sample_name}.preprocessing.partial.log"), emit: bams
 
     script:
+    def picard_cmd = picard_path.toString().endsWith('.jar') ? "java -Xmx${task.memory.toGiga()}g -jar ${picard_path}" : picard_path
     """
     set +e
     cp "${cumulative_log}" ${sample_name}.preprocessing.partial.log
@@ -50,10 +51,10 @@ process ADD_READGROUPS {
         echo "tool=${picard_path}"
         echo "input_bam=${input_bam}"
         echo "started=\$(date -Is)"
-        echo "command=java -Xmx${task.memory.toGiga()}g -jar ${picard_path} AddOrReplaceReadGroups I=${input_bam} O=${sample_name}.readgroups.bam RGID=${sample_name} RGLB=${sample_name} RGPL=ILLUMINA RGPU=${sample_name} RGSM=${sample_name} ${add_readgroups_args}"
+        echo "command=${picard_cmd} AddOrReplaceReadGroups I=${input_bam} O=${sample_name}.readgroups.bam RGID=${sample_name} RGLB=${sample_name} RGPL=ILLUMINA RGPU=${sample_name} RGSM=${sample_name} ${add_readgroups_args}"
         echo
     } >> ${sample_name}.preprocessing.partial.log
-    java -Xmx${task.memory.toGiga()}g -jar ${picard_path} AddOrReplaceReadGroups \
+    ${picard_cmd} AddOrReplaceReadGroups \
         I="${input_bam}" \
         O="${sample_name}.readgroups.bam" \
         RGID="${sample_name}" \
@@ -94,6 +95,7 @@ process MARK_PCR_DUP {
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.markdup.bam"), path("${sample_name}.preprocessing.partial.log"), emit: bams
 
     script:
+    def picard_cmd = picard_path.toString().endsWith('.jar') ? "java -Xmx${task.memory.toGiga()}g -jar ${picard_path}" : picard_path
     """
     set +e
     cp "${cumulative_log}" ${sample_name}.preprocessing.partial.log
@@ -102,10 +104,10 @@ process MARK_PCR_DUP {
         echo "tool=${picard_path}"
         echo "input_bam=${input_bam}"
         echo "started=\$(date -Is)"
-        echo "command=java -Xmx${task.memory.toGiga()}g -jar ${picard_path} MarkDuplicates I=${input_bam} O=${sample_name}.markdup.bam M=${sample_name}.markdup.metrics.txt ${markdup_args}"
+        echo "command=${picard_cmd} MarkDuplicates I=${input_bam} O=${sample_name}.markdup.bam M=${sample_name}.markdup.metrics.txt ${markdup_args}"
         echo
     } >> ${sample_name}.preprocessing.partial.log
-    java -Xmx${task.memory.toGiga()}g -jar ${picard_path} MarkDuplicates \
+    ${picard_cmd} MarkDuplicates \
         I="${input_bam}" \
         O="${sample_name}.markdup.bam" \
         M="${sample_name}.markdup.metrics.txt" \
@@ -118,6 +120,154 @@ process MARK_PCR_DUP {
         rm -f ${sample_name}.markdup.bam
         echo "failed=\${completed_at}" >> ${sample_name}.preprocessing.partial.log
         echo "exit_code=\${exit_code}" >> ${sample_name}.preprocessing.partial.log
+    fi
+    echo >> ${sample_name}.preprocessing.partial.log
+    exit 0
+    """
+}
+
+
+process INDEL_REALIGNMENT {
+    tag "${sample_name}"
+    cpus { preprocess_threads }
+    memory { preprocess_ram }
+
+    input:
+    tuple val(sample_id), val(role), val(sample_name), path(input_bam), path(cumulative_log)
+    val preprocess_threads
+    val preprocess_ram
+    val gatk3_path
+    val mills_path
+    val target_intervals
+    val indel_args
+    val reference_fasta
+
+    output:
+    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.indelrealigned.bam"), path("${sample_name}.preprocessing.partial.log"), emit: bams
+
+    script:
+    def java_cmd = gatk3_path.toString().endsWith('.jar') ? "java -Xmx${task.memory.toGiga()}g -jar ${gatk3_path}" : gatk3_path
+    def mills_arg = mills_path ? "-known ${mills_path}" : ''
+    def target_arg = target_intervals ? "-L ${target_intervals}" : ''
+    """
+    set +e
+    cp "${cumulative_log}" ${sample_name}.preprocessing.partial.log
+    {
+        echo "===== indel_realignment ====="
+        echo "tool=${gatk3_path}"
+        echo "input_bam=${input_bam}"
+        echo "reference=${reference_fasta}"
+        echo "mills=${mills_path}"
+        echo "target_intervals=${target_intervals}"
+        echo "started=\$(date -Is)"
+        echo "target_command=${java_cmd} -T RealignerTargetCreator -R ${reference_fasta} -I ${input_bam} -o ${sample_name}.IndelRealigner.intervals ${target_arg} ${mills_arg} ${indel_args}"
+        echo "realign_command=${java_cmd} -T IndelRealigner -R ${reference_fasta} -I ${input_bam} -targetIntervals ${sample_name}.IndelRealigner.intervals -o ${sample_name}.indelrealigned.bam ${mills_arg} ${indel_args}"
+        echo
+    } >> ${sample_name}.preprocessing.partial.log
+    ${java_cmd} -T RealignerTargetCreator \
+        -R "${reference_fasta}" \
+        -I "${input_bam}" \
+        -o "${sample_name}.IndelRealigner.intervals" \
+        ${target_arg} \
+        ${mills_arg} \
+        ${indel_args} >> ${sample_name}.preprocessing.partial.log 2>&1
+    target_exit=\$?
+    if [ "\${target_exit}" -eq 0 ]; then
+        ${java_cmd} -T IndelRealigner \
+            -R "${reference_fasta}" \
+            -I "${input_bam}" \
+            -targetIntervals "${sample_name}.IndelRealigner.intervals" \
+            -o "${sample_name}.indelrealigned.bam" \
+            ${mills_arg} \
+            ${indel_args} >> ${sample_name}.preprocessing.partial.log 2>&1
+        realign_exit=\$?
+    else
+        realign_exit=0
+    fi
+    completed_at=\$(date -Is)
+    if [ "\${target_exit}" -eq 0 ] && [ "\${realign_exit}" -eq 0 ]; then
+        echo "completed=\${completed_at}" >> ${sample_name}.preprocessing.partial.log
+    else
+        rm -f ${sample_name}.indelrealigned.bam
+        echo "failed=\${completed_at}" >> ${sample_name}.preprocessing.partial.log
+        echo "exit_code=\${target_exit}" >> ${sample_name}.preprocessing.partial.log
+        if [ "\${realign_exit}" -ne 0 ]; then echo "exit_code=\${realign_exit}" >> ${sample_name}.preprocessing.partial.log; fi
+    fi
+    echo >> ${sample_name}.preprocessing.partial.log
+    exit 0
+    """
+}
+
+
+process BQ_RECALIBRATION {
+    tag "${sample_name}"
+    cpus { preprocess_threads }
+    memory { preprocess_ram }
+
+    input:
+    tuple val(sample_id), val(role), val(sample_name), path(input_bam), path(cumulative_log)
+    val preprocess_threads
+    val preprocess_ram
+    val gatk3_path
+    val dbsnp_path
+    val mills_path
+    val target_intervals
+    val bqsr_args
+    val reference_fasta
+
+    output:
+    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.bqsr.bam"), path("${sample_name}.preprocessing.partial.log"), emit: bams
+
+    script:
+    def java_cmd = gatk3_path.toString().endsWith('.jar') ? "java -Xmx${task.memory.toGiga()}g -jar ${gatk3_path}" : gatk3_path
+    def dbsnp_arg = dbsnp_path ? "-knownSites ${dbsnp_path}" : ''
+    def mills_arg = mills_path ? "-knownSites ${mills_path}" : ''
+    def target_arg = target_intervals ? "-L ${target_intervals}" : ''
+    """
+    set +e
+    cp "${cumulative_log}" ${sample_name}.preprocessing.partial.log
+    {
+        echo "===== BQ_recalibration ====="
+        echo "tool=${gatk3_path}"
+        echo "input_bam=${input_bam}"
+        echo "reference=${reference_fasta}"
+        echo "dbsnp=${dbsnp_path}"
+        echo "mills=${mills_path}"
+        echo "target_intervals=${target_intervals}"
+        echo "started=\$(date -Is)"
+        echo "recal_command=${java_cmd} -T BaseRecalibrator -R ${reference_fasta} -I ${input_bam} -o ${sample_name}.BQSR.table ${target_arg} ${dbsnp_arg} ${mills_arg} ${bqsr_args}"
+        echo "printreads_command=${java_cmd} -T PrintReads -R ${reference_fasta} -I ${input_bam} -BQSR ${sample_name}.BQSR.table -o ${sample_name}.bqsr.bam ${target_arg} ${bqsr_args}"
+        echo
+    } >> ${sample_name}.preprocessing.partial.log
+    ${java_cmd} -T BaseRecalibrator \
+        -R "${reference_fasta}" \
+        -I "${input_bam}" \
+        -o "${sample_name}.BQSR.table" \
+        ${target_arg} \
+        ${dbsnp_arg} \
+        ${mills_arg} \
+        ${bqsr_args} >> ${sample_name}.preprocessing.partial.log 2>&1
+    recal_exit=\$?
+    if [ "\${recal_exit}" -eq 0 ]; then
+        ${java_cmd} -T PrintReads \
+            -R "${reference_fasta}" \
+            -I "${input_bam}" \
+            -BQSR "${sample_name}.BQSR.table" \
+            -o "${sample_name}.bqsr.bam" \
+            ${target_arg} \
+            ${bqsr_args} >> ${sample_name}.preprocessing.partial.log 2>&1
+        printreads_exit=\$?
+    else
+        printreads_exit=0
+    fi
+    completed_at=\$(date -Is)
+    if [ "\${recal_exit}" -eq 0 ] && [ "\${printreads_exit}" -eq 0 ]; then
+        echo "completed=\${completed_at}" >> ${sample_name}.preprocessing.partial.log
+    else
+        rm -f ${sample_name}.bqsr.bam
+        echo "failed=\${completed_at}" >> ${sample_name}.preprocessing.partial.log
+        echo "exit_code=\${recal_exit}" >> ${sample_name}.preprocessing.partial.log
+        if [ "\${printreads_exit}" -ne 0 ]; then echo "exit_code=\${printreads_exit}" >> ${sample_name}.preprocessing.partial.log; fi
     fi
     echo >> ${sample_name}.preprocessing.partial.log
     exit 0
@@ -217,26 +367,65 @@ process PREPROCESSING_STEP_LOG {
 }
 
 
+process PREPROCESSING_ASSERT_SUCCESS {
+    tag 'preprocessing-check'
+
+    input:
+    path sample_statuses
+    path step_log
+
+    output:
+    path "preprocessing.success", emit: ready
+
+    script:
+    """
+    failed_count=\$(awk -F '\\t' 'FNR > 1 && \$6 == "failed" { count++ } END { print count + 0 }' *.preprocessing.status.tsv 2>/dev/null)
+    if [ "\${failed_count}" -gt 0 ]; then
+        echo "Preprocessing failed for \${failed_count} sample(s). See ${step_log} and sample status files." >&2
+        exit 1
+    fi
+    touch preprocessing.success
+    """
+}
+
+
 workflow PREPROCESSING {
     take:
     bam_ch
     pipeline_config
     tools_config
+    reference_fasta
     infra_ready
 
     main:
     preprocessing_cfg = pipeline_config.preprocessing ?: [:]
+    resolved_cfg = preprocessing_cfg.resolved ?: [:]
     operations = preprocessing_cfg.workflow ?: ['add_readgroups', 'mark_pcr_dup']
     preprocess_threads = (preprocessing_cfg.threads ?: 1) as int
     preprocess_ram = preprocessing_cfg.ram ?: '1 GB'
 
     add_cfg = preprocessing_cfg.add_readgroups ?: [:]
     markdup_cfg = preprocessing_cfg.mark_pcr_dup ?: [:]
+    indel_cfg = preprocessing_cfg.indel_realignment ?: [:]
+    bqsr_cfg = preprocessing_cfg.BQ_recalibration ?: [:]
     tool_name = add_cfg.tool ?: markdup_cfg.tool ?: 'PICARD v.2.7.1'
-    picard_path = tools_config[tool_name]?.path ?: tool_name
-    samtools_path = tools_config.SAMTOOLS?.path ?: 'samtools'
+    picard_path = resolved_cfg.picard?.path ?: tools_config[tool_name]?.path ?: tool_name
+    samtools_path = resolved_cfg.samtools?.path ?: tools_config.SAMTOOLS?.path ?: 'samtools'
     add_args = (add_cfg[tool_name]?.args ?: add_cfg.args ?: []).join(' ')
     markdup_args = (markdup_cfg[tool_name]?.args ?: markdup_cfg.args ?: []).join(' ')
+    gatk3_tool_name = indel_cfg.tool ?: bqsr_cfg.tool ?: 'GATK v.3.7'
+    gatk3_path = resolved_cfg.gatk3?.path ?: tools_config[gatk3_tool_name]?.path ?: gatk3_tool_name
+    target_intervals = resolved_cfg.target_intervals ?: preprocessing_cfg.target_intervals ?: preprocessing_cfg.target_list ?: preprocessing_cfg.target_bed ?: ''
+    indel_tool_cfg = indel_cfg[gatk3_tool_name] ?: [:]
+    bqsr_tool_cfg = bqsr_cfg[gatk3_tool_name] ?: [:]
+    indel_args = (indel_tool_cfg.args ?: indel_cfg.args ?: []).join(' ')
+    bqsr_args = (bqsr_tool_cfg.args ?: bqsr_cfg.args ?: []).join(' ')
+    indel_mills_key = indel_tool_cfg.mills ?: indel_cfg.mills ?: bqsr_tool_cfg.mills ?: bqsr_cfg.mills ?: 'mills'
+    bqsr_mills_key = bqsr_tool_cfg.mills ?: bqsr_cfg.mills ?: indel_mills_key
+    bqsr_dbsnp_key = bqsr_tool_cfg.dbsnp ?: bqsr_cfg.dbsnp ?: 'dbsnp'
+    indel_mills_path = resolved_cfg.databases?.indel_mills?.path ?: tools_config[indel_mills_key]?.path ?: tools_config[indel_mills_key?.toString()?.toLowerCase()]?.path ?: ''
+    bqsr_mills_path = resolved_cfg.databases?.bqsr_mills?.path ?: tools_config[bqsr_mills_key]?.path ?: tools_config[bqsr_mills_key?.toString()?.toLowerCase()]?.path ?: ''
+    bqsr_dbsnp_path = resolved_cfg.databases?.bqsr_dbsnp?.path ?: tools_config[bqsr_dbsnp_key]?.path ?: tools_config[bqsr_dbsnp_key?.toString()?.toLowerCase()]?.path ?: ''
 
     ready_bams = bam_ch
         .combine(infra_ready)
@@ -255,11 +444,24 @@ workflow PREPROCESSING {
         current_bams = MARK_PCR_DUP.out.bams
     }
 
+    if (operations.contains('indel_realignment')) {
+        INDEL_REALIGNMENT(current_bams, preprocess_threads, preprocess_ram, gatk3_path, indel_mills_path, target_intervals, indel_args, reference_fasta)
+        current_bams = INDEL_REALIGNMENT.out.bams
+    }
+
+    if (operations.contains('BQ_recalibration')) {
+        BQ_RECALIBRATION(current_bams, preprocess_threads, preprocess_ram, gatk3_path, bqsr_dbsnp_path, bqsr_mills_path, target_intervals, bqsr_args, reference_fasta)
+        current_bams = BQ_RECALIBRATION.out.bams
+    }
+
     FINALIZE_PREPROCESSING(current_bams, preprocess_threads, preprocess_ram, samtools_path, operations)
-    PREPROCESSING_STEP_LOG(tool_name, FINALIZE_PREPROCESSING.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect())
+    status_files = FINALIZE_PREPROCESSING.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
+    PREPROCESSING_STEP_LOG(tool_name, status_files)
+    PREPROCESSING_ASSERT_SUCCESS(status_files, PREPROCESSING_STEP_LOG.out.log)
 
     emit:
     bams = FINALIZE_PREPROCESSING.out.bams
     statuses = FINALIZE_PREPROCESSING.out.statuses
     step_log = PREPROCESSING_STEP_LOG.out.log
+    ready = PREPROCESSING_ASSERT_SUCCESS.out.ready
 }

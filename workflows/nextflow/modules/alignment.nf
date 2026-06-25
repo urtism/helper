@@ -336,6 +336,28 @@ process ALIGNMENT_STEP_LOG {
 }
 
 
+process ALIGNMENT_ASSERT_SUCCESS {
+    tag 'alignment-check'
+
+    input:
+    path sample_statuses
+    path step_log
+
+    output:
+    path "alignment.success", emit: ready
+
+    script:
+    """
+    failed_count=\$(awk -F '\\t' 'FNR > 1 && \$6 == "failed" { count++ } END { print count + 0 }' *.alignment.status.tsv 2>/dev/null)
+    if [ "\${failed_count}" -gt 0 ]; then
+        echo "Alignment failed for \${failed_count} sample(s). See ${step_log} and sample status files." >&2
+        exit 1
+    fi
+    touch alignment.success
+    """
+}
+
+
 workflow ALIGNMENT {
     take:
     samples_ch
@@ -346,17 +368,18 @@ workflow ALIGNMENT {
 
     main:
     alignment_cfg = pipeline_config.alignment ?: [:]
+    resolved_cfg = alignment_cfg.resolved ?: [:]
     alignment_step_cfg = alignment_cfg.fastq_alignment ?: [:]
     tool_name = alignment_step_cfg.tool ?: 'BWA v.0.7.17'
     tool_cfg = tools_config[tool_name] ?: [:]
     align_threads = (alignment_cfg.threads ?: 1) as int
     align_ram = alignment_cfg.ram ?: '1 GB'
-    tool_path = tool_cfg.path ?: tool_name.toLowerCase()
+    tool_path = resolved_cfg.fastq_alignment?.path ?: tool_cfg.path ?: tool_name.toLowerCase()
     tool_upper = tool_name.toUpperCase()
     tool_specific_cfg = alignment_step_cfg[tool_name] ?: [:]
     algorithm = tool_specific_cfg.algorithm ?: 'mem'
-    extra_args = (tool_specific_cfg.args ?: []).join(' ')
-    samtools_path = tools_config.SAMTOOLS?.path ?: 'samtools'
+    extra_args = resolved_cfg.fastq_alignment?.resolved_args ?: (tool_specific_cfg.args ?: []).join(' ')
+    samtools_path = resolved_cfg.samtools?.path ?: tools_config.SAMTOOLS?.path ?: 'samtools'
 
     fastq_samples = samples_ch
         .filter { row -> row.fastq_r1 && row.fastq_r2 }
@@ -379,10 +402,13 @@ workflow ALIGNMENT {
         error "Unsupported aligner: ${tool_name}"
     }
 
-    ALIGNMENT_STEP_LOG(tool_name, aligned_statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect())
+    status_files = aligned_statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
+    ALIGNMENT_STEP_LOG(tool_name, status_files)
+    ALIGNMENT_ASSERT_SUCCESS(status_files, ALIGNMENT_STEP_LOG.out.log)
 
     emit:
     bams = aligned_bams
     statuses = aligned_statuses
     step_log = ALIGNMENT_STEP_LOG.out.log
+    ready = ALIGNMENT_ASSERT_SUCCESS.out.ready
 }

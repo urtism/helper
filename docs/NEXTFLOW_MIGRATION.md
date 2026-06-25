@@ -48,8 +48,9 @@ nextflow run workflows/nextflow/main.nf \
   -profile local
 ```
 
-The same real alignment slice can also be submitted from the **Analysis** tab by
-choosing `Real Nextflow alignment`. Helper writes a run directory with:
+The same real prealignment/alignment/preprocessing slice can also be submitted
+from the **Analysis** tab by choosing the real Nextflow workflow. Helper writes
+a run directory with:
 
 ```text
 input.samplesheet.json
@@ -66,13 +67,16 @@ results/
 
 Before analytical steps start, Nextflow creates the run infrastructure. Step
 directories are workflow-aware: only enabled macro-steps get output/log
-directories. For an `alignment -> preprocessing` run, the structure is:
+directories. For a `prealignment -> alignment -> preprocessing` run, the
+structure is:
 
 ```text
 results/
+  PREALIGNMENT/
   ALIGNMENT/
   PREPROCESSING/
   LOGS/
+    PREALIGNMENT/samples/
     ALIGNMENT/samples/
     PREPROCESSING/samples/
     run.infrastructure.log
@@ -109,14 +113,16 @@ browser polls Helper every few seconds and renders the current tail of:
 run matrix
 results/LOGS/workflow.plan.tsv
 nextflow.trace.tsv
+results/LOGS/PREALIGNMENT/prealignment.step.log
 results/LOGS/ALIGNMENT/alignment.step.log
+results/LOGS/PREPROCESSING/preprocessing.step.log
 nextflow.log
 ```
 
 The run matrix summarizes each step with total/running/completed/failed/planned
-job counts and lists every sample with its current state. For alignment, Helper
-builds this view from `manifest.tsv` and the per-sample
-`*.alignment.status.tsv` files. Samples without a final status are shown as
+job counts and lists every sample with its current state. For implemented
+sample-level steps, Helper builds this view from `manifest.tsv` and the
+per-sample `*.status.tsv` files. Samples without a final status are shown as
 `running` while the Nextflow process is alive.
 
 This gives a single evolving view of sample-level progress, workflow plan,
@@ -139,7 +145,92 @@ a run directory on a filesystem shared by the submit node and compute nodes. The
 live console continues to work as long as Helper can read the shared run
 directory while Nextflow writes logs, trace files, and results.
 
-The first implemented workflow slices are `alignment` and `preprocessing`.
+The first implemented workflow slices are `prealignment`, `alignment`, and
+`preprocessing`.
+
+## Stabilized Real Slice Demo
+
+The current stable real slice is:
+
+```text
+prealignment -> alignment -> preprocessing -> variantcalling
+```
+
+Each macro-step writes per-sample logs and status TSV files, then runs a
+step-level success check. This keeps diagnostics available for the UI while
+still stopping downstream execution when a sample fails.
+
+A self-contained orchestration demo is available from the repository root:
+
+```bash
+scripts/run_nextflow_demo.sh /tmp/helper_next_demo
+```
+
+The demo creates tiny FASTQ inputs, a demo reference, and local wrapper tools
+for FastQC, BWA, samtools, Picard, and GATK. Nextflow still executes the real
+Helper workflow graph and writes the same run artifacts as a production run:
+
+```text
+/tmp/helper_next_demo/
+  manifest.tsv
+  run_config.json
+  nextflow.trace.tsv
+  work/
+  results/
+    PREALIGNMENT/
+    ALIGNMENT/
+    PREPROCESSING/
+    VARIANTCALLING/
+    LOGS/
+```
+
+Use this demo to verify orchestration, logging, status collection, and UI
+monitoring on a machine with Nextflow installed before testing with real NGS
+tool installations.
+
+## Prealignment
+
+Prealignment currently supports the first FASTQ QC operation:
+
+```text
+FastQC
+```
+
+It is controlled by `prealignment.workflow`:
+
+```json
+"prealignment": {
+  "workflow": ["fastq_QC"],
+  "threads": "1",
+  "ram": "1g",
+  "fastq_QC": {
+    "tool": "FASTQC v.0.11.8",
+    "FASTQC v.0.11.8": {"args": []}
+  }
+}
+```
+
+Each manifest row with paired FASTQ inputs becomes an independent FastQC task.
+The prealignment step publishes FastQC reports and per-sample status files under:
+
+```text
+results/PREALIGNMENT/fastqc/
+results/LOGS/PREALIGNMENT/samples/<sample>.prealignment.log
+results/LOGS/PREALIGNMENT/samples/<sample>.prealignment.status.tsv
+results/LOGS/PREALIGNMENT/prealignment.step.log
+```
+
+When a real run starts from a `prealignment` samplesheet, Helper now launches:
+
+```text
+prealignment -> alignment -> preprocessing
+```
+
+Alignment waits for the prealignment step log, so FastQC finishes before the
+alignment tasks are submitted.
+
+## Alignment
+
 Alignment is driven by the `alignment.fastq_alignment.tool` value in the
 pipeline JSON and currently supports `BWA`, `BOWTIE2`, and `NOVOALIGN`. The
 selected tool must exist in the tools JSON and provide either `path` or
@@ -209,19 +300,24 @@ stays in the sample logs.
 ## Preprocessing
 
 Preprocessing is split into independent Nextflow processes, controlled by the
-`preprocessing.workflow` array. The first Picard-based slice supports:
+`preprocessing.workflow` array. The implemented slice supports:
 
 ```text
 AddOrReplaceReadGroups
 MarkDuplicates
-samtools index
+GATK3 RealignerTargetCreator + IndelRealigner
+GATK3 BaseRecalibrator + PrintReads
 ```
+
+The complete preprocessing domain model also includes `filter_bam` and
+`merge_UMI`; those modules are shown in the UI as pending until their Nextflow
+processes are implemented.
 
 The enabled operations come from JSON:
 
 ```json
 "preprocessing": {
-  "workflow": ["add_readgroups", "mark_pcr_dup"],
+  "workflow": ["add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration"],
   "threads": "2",
   "ram": "8g",
   "add_readgroups": {
@@ -231,6 +327,14 @@ The enabled operations come from JSON:
   "mark_pcr_dup": {
     "tool": "PICARD v.2.7.1",
     "PICARD v.2.7.1": {"args": []}
+  },
+  "indel_realignment": {
+    "tool": "GATK v.3.7",
+    "GATK v.3.7": {"args": [], "mills": "mills"}
+  },
+  "BQ_recalibration": {
+    "tool": "GATK v.3.7",
+    "GATK v.3.7": {"args": [], "dbsnp": "dbsnp", "mills": "mills"}
   }
 }
 ```
@@ -239,6 +343,10 @@ Only the operations listed in `preprocessing.workflow` are executed. For
 example, `["mark_pcr_dup"]` skips `AddOrReplaceReadGroups` entirely, while
 `["add_readgroups", "mark_pcr_dup"]` chains both operations before finalizing
 the preprocessed BAM.
+
+Finalization is mandatory and silent: the last BAM emitted by the selected
+preprocessing substeps is always copied to `<sample>.preprocessed.bam` and
+indexed with samtools. It is not exposed as a selectable workflow substep.
 
 When a run starts from FASTQ, preprocessing consumes the BAMs emitted by
 alignment. When a run starts from a BAM samplesheet, preprocessing consumes the
@@ -255,17 +363,97 @@ results/LOGS/PREPROCESSING/preprocessing.step.log
 ```
 
 The sample `preprocessing.log` is cumulative for the macro-step. It contains
-sections for the enabled sub-steps, such as `add_readgroups`, `mark_pcr_dup`,
-and `finalize`, but only one sample log is published for the preprocessing
-macro-step. The final `preprocessing.status.tsv` captures the overall sample
-status for the preprocessing step and feeds the live console run matrix.
+sections for the enabled sub-steps, such as `add_readgroups` and
+`mark_pcr_dup`, plus the implicit finalization block, but only one sample log is
+published for the preprocessing macro-step. The final
+`preprocessing.status.tsv` captures the overall sample status for the
+preprocessing step and feeds the live console run matrix.
 
-The live console run matrix reports both `alignment` and `preprocessing` when
-both steps are enabled.
+The live console run matrix reports `prealignment`, `alignment`,
+`preprocessing`, and `variantcalling` when those steps are enabled.
+
+## Variant Calling
+
+`Variant Calling` is the macro-step. Its domain substeps are:
+
+```text
+Short Variants
+CNV Calling
+SV Calling
+```
+
+The first implemented Nextflow slice is the `Short Variants` substep and
+currently supports:
+
+```text
+GATK v.4.1 HaplotypeCaller
+```
+
+This is intentionally narrow. If a pipeline JSON lists multiple variant callers,
+the current Nextflow slice selects the configured GATK tool and ignores the other
+callers until their modules are implemented.
+
+It is controlled by `variantcalling.tools`:
+
+```json
+"variantcalling": {
+  "tools": ["GATK v.4.3"],
+  "threads": "2",
+  "ram": "8g",
+  "filters": {},
+  "GATK v.4.3": {"args": []},
+  "samples_org": "single-sample"
+}
+```
+
+Each manifest row with a BAM input becomes an independent HaplotypeCaller task.
+When run after preprocessing, Nextflow passes the preprocessed BAM channel
+directly into variant calling. The task emits a per-sample gVCF:
+
+```text
+results/VARIANTCALLING/<sample>.GATK.g.vcf
+results/LOGS/VARIANTCALLING/samples/<sample>.variantcalling.log
+results/LOGS/VARIANTCALLING/samples/<sample>.variantcalling.status.tsv
+results/LOGS/VARIANTCALLING/variantcalling.step.log
+```
+
+The first variant calling slice does not yet implement cohort joint genotyping,
+trio logic, somatic Mutect2, or secondary callers such as FreeBayes.
+
+## Postprocessing
+
+The first implemented postprocessing slice supports:
+
+```text
+vcf_norm
+vcf_filter
+vcf_to_tsv
+```
+
+`vcf_to_tsv` is implemented directly in the Nextflow process as a compact core
+field export. `vcf_norm` uses `BCFTOOLS` when selected, and `vcf_filter` either
+uses a configured GATK `VariantFiltration` command or passes the current VCF
+through when no filter tool is configured.
+
+When run after variant calling, postprocessing consumes the VCF channel emitted
+by `GATK_HAPLOTYPECALLER`. It can also start from a postprocessing samplesheet
+with VCF inputs.
+
+Outputs are published under:
+
+```text
+results/POSTPROCESSING/<sample>.postprocessed.vcf
+results/POSTPROCESSING/<sample>.variants.tsv
+results/LOGS/POSTPROCESSING/samples/<sample>.postprocessing.log
+results/LOGS/POSTPROCESSING/samples/<sample>.postprocessing.status.tsv
+results/LOGS/POSTPROCESSING/postprocessing.step.log
+```
 
 ## Next Steps
 
-1. Add optional preprocessing modules: BAM filtering, indel realignment, and BQSR.
-2. Add variant calling with explicit barriers for single-sample, cohort, trio,
+1. Add optional prealignment modules: adapter trimming and FASTQ filtering.
+2. Add optional preprocessing modules: BAM filtering, indel realignment, and BQSR.
+3. Extend variant calling with explicit barriers for single-sample, cohort, trio,
    and somatic case-control designs.
-3. Add container fields to tools config and map them into Nextflow profiles.
+4. Add variant annotation and postannotation modules.
+5. Add container fields to tools config and map them into Nextflow profiles.

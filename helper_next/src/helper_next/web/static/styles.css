@@ -385,6 +385,169 @@ th {
   padding: 10px 12px;
 }
 
+.workflow-tree-scroll {
+  border: 1px solid #d6dce4;
+  border-radius: 8px;
+  height: clamp(280px, 52vh, 680px);
+  margin-top: 12px;
+  max-height: min(76vh, 820px);
+  min-height: 220px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  resize: vertical;
+  scrollbar-gutter: stable;
+}
+
+.workflow-tree-scroll::after {
+  background: linear-gradient(135deg, transparent 45%, #aeb8c5 45%, #aeb8c5 55%, transparent 55%);
+  bottom: 7px;
+  content: "";
+  height: 14px;
+  opacity: 0.7;
+  pointer-events: none;
+  position: sticky;
+  right: 7px;
+  width: 14px;
+  float: right;
+}
+
+.workflow-tree {
+  display: block;
+  padding: 8px;
+}
+
+.checkbox-tree-node + .checkbox-tree-node {
+  margin-top: 4px;
+}
+
+.checkbox-tree-node.unavailable {
+  opacity: 0.55;
+}
+
+.checkbox-tree-node.unavailable .checkbox-tree-row {
+  cursor: not-allowed;
+}
+
+.checkbox-tree-row.unavailable {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.checkbox-tree-row {
+  align-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+  min-height: 26px;
+  padding: 3px 6px;
+}
+
+.checkbox-tree-row:hover,
+.checkbox-tree-row:focus {
+  background: #f1f5f9;
+  outline: none;
+}
+
+.checkbox-tree-row.macro {
+  grid-template-columns: 18px 14px minmax(0, 1fr) auto;
+}
+
+.checkbox-tree-row.micro {
+  grid-template-columns: 18px 14px minmax(0, 1fr);
+  margin-left: 18px;
+  position: relative;
+}
+
+.checkbox-tree-children {
+  margin: 2px 0 4px 7px;
+  position: relative;
+}
+
+.checkbox-tree-children::before {
+  background: #cbd5df;
+  bottom: 14px;
+  content: "";
+  left: 9px;
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
+
+.checkbox-tree-branch {
+  height: 1px;
+  position: relative;
+}
+
+.checkbox-tree-branch::before {
+  background: #cbd5df;
+  content: "";
+  height: 1px;
+  left: -8px;
+  position: absolute;
+  top: 50%;
+  width: 18px;
+}
+
+.checkbox-tree-expand {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: #526174;
+  display: inline-flex;
+  font-size: 11px;
+  height: 16px;
+  justify-content: center;
+  min-height: 16px;
+  padding: 0;
+  width: 16px;
+}
+
+.checkbox-tree-check {
+  accent-color: #2f6f73;
+  height: 11px;
+  margin: 0;
+  min-height: 11px;
+  padding: 0;
+  width: 11px;
+}
+
+.checkbox-tree-label {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.checkbox-tree-label strong {
+  color: #253142;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.checkbox-tree-label small,
+.selected-workflow {
+  color: #667385;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.checkbox-tree-count {
+  background: #e7eef6;
+  border-radius: 999px;
+  color: #34445a;
+  font-size: 11px;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
+.selected-workflow {
+  border: 1px solid #d6dce4;
+  border-radius: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+}
+
 .form-grid {
   display: grid;
   gap: 14px;
@@ -455,6 +618,21 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.run-setup-actions {
+  margin-top: 16px;
+}
+
+.analysis-queue-block,
+.analysis-output-block {
+  border-top: 1px solid #e0e6ee;
+  padding-top: 16px;
+}
+
+.analysis-start-wide {
+  display: block;
+  margin-top: 18px;
 }
 
 .samplesheet-toolbar {

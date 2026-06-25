@@ -17,6 +17,7 @@ STEP_COLUMNS = {
     "alignment": ["sample_name", "fastq_R1", "fastq_R2", "fastq_I2"],
     "preprocessing": ["sample_name", "bam"],
     "variantcalling": ["sample_name", "bam"],
+    "cnvcalling": ["sample_name", "bam"],
     "postprocessing": ["sample_name", "gatk_vcf", "freebayes_vcf", "varscan_vcf", "somatic_vcf"],
     "annotation": ["sample_name", "merged_vcf", "variants_tsv"],
     "postannotation": ["sample_name", "merged_vcf", "variants_tsv"],
@@ -38,7 +39,7 @@ def columns_for_step(step):
 def suffixes_for_step(step):
     if step in ("prealignment", "alignment"):
         return FASTQ_SUFFIXES
-    if step in ("preprocessing", "variantcalling"):
+    if step in ("preprocessing", "variantcalling", "cnvcalling"):
         return ALIGNMENT_SUFFIXES
     if step == "postprocessing":
         return VCF_SUFFIXES
@@ -140,7 +141,7 @@ def is_step_compatible(step, file_type):
     if file_type == "fastq":
         return step in ("prealignment", "alignment")
     if file_type == "alignment":
-        return step in ("preprocessing", "variantcalling")
+        return step in ("preprocessing", "variantcalling", "cnvcalling")
     if file_type == "vcf":
         return step in ("postprocessing", "annotation", "postannotation")
     if file_type == "tsv":

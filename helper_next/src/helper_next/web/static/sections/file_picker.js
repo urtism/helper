@@ -12,6 +12,7 @@ const stepLabels = {
   alignment: "FASTQ files",
   preprocessing: "BAM, SAM, or CRAM files",
   variantcalling: "BAM, SAM, or CRAM files",
+  cnvcalling: "BAM, SAM, or CRAM files",
   postprocessing: "VCF files",
   annotation: "VCF and TSV files",
   postannotation: "VCF and TSV files",

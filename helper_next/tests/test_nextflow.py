@@ -135,6 +135,81 @@ def test_validate_nextflow_inputs_accepts_configured_alignment():
     assert validate_nextflow_inputs(samplesheet, pipeline, tools) is True
 
 
+def test_validate_nextflow_inputs_accepts_configured_prealignment():
+    samplesheet = {
+        "sample_list": ["S1"],
+        "sample_organization": "only cases",
+        "prealignment": {
+            "S1": {
+                "case": {
+                    "sample_name": "S1",
+                    "fastq_R1": "/data/S1_R1.fastq.gz",
+                    "fastq_R2": "/data/S1_R2.fastq.gz",
+                    "fastq_I2": "",
+                }
+            }
+        },
+    }
+    pipeline = {
+        "analysis": "Germline",
+        "reference_version": "hg19",
+        "workflow": ["prealignment", "alignment"],
+        "prealignment": {
+            "workflow": ["fastq_QC"],
+            "threads": "1",
+            "ram": "1g",
+            "fastq_QC": {"tool": "FASTQC v.0.11.8", "FASTQC v.0.11.8": {"args": []}},
+        },
+        "alignment": {
+            "workflow": ["fastq_alignment"],
+            "threads": "6",
+            "ram": "8g",
+            "fastq_alignment": {"tool": "BWA v.0.7.17"},
+        },
+    }
+    tools = {
+        "hg19": {"fasta": "/refs/hg19.fa"},
+        "FASTQC v.0.11.8": {"path": "fastqc"},
+        "BWA v.0.7.17": {"path": "bwa"},
+    }
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="prealignment") is True
+
+
+def test_validate_nextflow_inputs_accepts_gatk3_preprocessing_databases():
+    samplesheet = {
+        "sample_list": ["S1"],
+        "sample_organization": "only cases",
+        "preprocessing": {"S1": {"case": {"sample_name": "S1", "bam": "/data/S1.bam"}}},
+    }
+    pipeline = {
+        "analysis": "Germline",
+        "reference_version": "hg19",
+        "workflow": ["preprocessing"],
+        "preprocessing": {
+            "workflow": ["add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration"],
+            "threads": "2",
+            "ram": "8g",
+            "add_readgroups": {"tool": "PICARD v.2.7.1"},
+            "mark_pcr_dup": {"tool": "PICARD v.2.7.1"},
+            "indel_realignment": {"tool": "GATK v.3.7", "GATK v.3.7": {"args": [], "mills": "mills"}},
+            "BQ_recalibration": {
+                "tool": "GATK v.3.7",
+                "GATK v.3.7": {"args": [], "dbsnp": "dbsnp", "mills": "mills"},
+            },
+        },
+    }
+    tools = {
+        "hg19": {"fasta": "/refs/hg19.fa"},
+        "PICARD v.2.7.1": {"path": "/tools/picard.jar"},
+        "GATK v.3.7": {"path": "/tools/GenomeAnalysisTK.jar"},
+        "dbsnp": {"path": "/refs/dbsnp.vcf"},
+        "mills": {"path": "/refs/mills.vcf"},
+    }
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="preprocessing") is True
+
+
 @pytest.mark.parametrize(
     "tool_name,tool_path",
     [
@@ -232,6 +307,82 @@ def test_validate_nextflow_inputs_reports_missing_tool():
         validate_nextflow_inputs(samplesheet, pipeline, tools)
 
     assert "tools.GATK v.4.1: selected tool is not configured" in exc.value.errors
+
+
+def test_validate_nextflow_inputs_accepts_gatk_variantcalling_from_bam():
+    samplesheet = {
+        "sample_list": ["S1"],
+        "sample_organization": "only cases",
+        "variantcalling": {"S1": {"case": {"sample_name": "S1", "bam": "/data/S1.bam"}}},
+    }
+    pipeline = {
+        "analysis": "Germline",
+        "reference_version": "hg19",
+        "workflow": ["variantcalling"],
+        "variantcalling": {
+            "tools": ["GATK v.4.1"],
+            "threads": "2",
+            "ram": "8g",
+            "filters": {},
+            "GATK v.4.1": {"args": []},
+            "samples_org": "single-sample",
+        },
+    }
+    tools = {
+        "hg19": {"fasta": "/refs/hg19.fa"},
+        "GATK v.4.1": {"path": "gatk"},
+    }
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="variantcalling") is True
+
+
+def test_validate_nextflow_inputs_accepts_postprocessing_from_vcf():
+    samplesheet = {
+        "sample_list": ["S1"],
+        "sample_organization": "only cases",
+        "postprocessing": {"S1": {"case": {"sample_name": "S1", "gatk_vcf": "/data/S1.g.vcf"}}},
+    }
+    pipeline = {
+        "analysis": "Germline",
+        "reference_version": "hg19",
+        "workflow": ["postprocessing"],
+        "postprocessing": {
+            "workflow": ["vcf_to_tsv"],
+            "threads": "2",
+            "ram": "2g",
+            "vcf_to_tsv": {"tool": "", "args": {}},
+        },
+    }
+    tools = {"hg19": {"fasta": "/refs/hg19.fa"}}
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="postprocessing") is True
+    rows = manifest_rows(samplesheet, "postprocessing")
+    assert rows[0]["merged_vcf"] == "/data/S1.g.vcf"
+
+
+def test_validate_nextflow_inputs_accepts_annotation_from_vcf():
+    samplesheet = {
+        "sample_list": ["S1"],
+        "sample_organization": "only cases",
+        "annotation": {"S1": {"case": {"sample_name": "S1", "merged_vcf": "/data/S1.vcf"}}},
+    }
+    pipeline = {
+        "analysis": "Germline",
+        "reference_version": "hg19",
+        "workflow": ["annotation"],
+        "annotation": {
+            "workflow": ["vep_annotation", "ann_vcf_to_tsv"],
+            "threads": "2",
+            "ram": "4g",
+            "vep_annotation": {"tool": "VEP v.95", "VEP v.95": {"args": []}},
+            "ann_vcf_to_tsv": {"tool": "", "args": {}},
+        },
+    }
+    tools = {"hg19": {"fasta": "/refs/hg19.fa"}, "VEP v.95": {"path": "vep"}}
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="annotation") is True
+    rows = manifest_rows(samplesheet, "annotation")
+    assert rows[0]["merged_vcf"] == "/data/S1.vcf"
 
 
 def test_validate_nextflow_inputs_reports_missing_entry_files():

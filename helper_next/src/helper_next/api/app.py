@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from helper_next.api.analysis import router as analysis_router
 from helper_next.api.samplesheet import router as samplesheet_router
+from helper_next.core.panels import load_panel_registry
 from helper_next.core.project import get_project_paths, list_named_files
 
 
@@ -28,12 +29,34 @@ def create_app():
     @app.get("/api/project")
     def project():
         paths = get_project_paths()
+        panel_registry = load_panel_registry(paths.configs)
         return {
             "root": str(paths.root),
             "configs": str(paths.configs),
             "pipelines": list_named_files(paths.pipelines, (".pipeline",)),
             "tool_configs": list_named_files(paths.configs, (".json", ".cfg")),
+            "tool_config_files": list_tool_config_files(paths.configs),
+            "gene_panel_designs": panel_registry["list"],
+            "gene_panel_design_details": panel_registry,
             "scripts": list_named_files(paths.scripts, (".py",)),
         }
 
     return app
+
+
+def list_tool_config_files(configs_dir):
+    if not configs_dir.exists():
+        return []
+    return sorted(
+        str(item.relative_to(configs_dir))
+        for item in configs_dir.rglob("*")
+        if item.is_file() and item.name.lower().endswith((".json", ".cfg")) and "tool" in item.name.lower()
+    )
+
+
+def list_gene_panel_designs(configs_dir):
+    return load_panel_registry(configs_dir)["list"]
+
+
+def load_gene_panel_design_details(configs_dir):
+    return load_panel_registry(configs_dir)
