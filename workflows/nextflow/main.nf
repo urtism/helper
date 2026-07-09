@@ -135,7 +135,7 @@ workflow {
     }
 
     if (workflow_steps.contains('variantcalling')) {
-        VARIANTCALLING(variantcalling_input_bams, pipeline_config, tools_config, reference_fasta, variantcalling_ready)
+        VARIANTCALLING(variantcalling_input_bams, pipeline_config, tools_config, run_config, reference_fasta, variantcalling_ready)
         VARIANTCALLING.out.vcfs.view { item -> "variantcalled\t${item[0]}\t${item[1]}\t${item[2]}\t${item[3]}" }
         postprocessing_input_variants = VARIANTCALLING.out.vcfs
         postprocessing_ready = VARIANTCALLING.out.ready

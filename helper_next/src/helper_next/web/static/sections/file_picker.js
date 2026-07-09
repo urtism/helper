@@ -5,6 +5,9 @@ const pickerBroadcastChannel = "helper-next-file-picker";
 const params = new URLSearchParams(window.location.search);
 const step = params.get("step") || "prealignment";
 const pickerId = params.get("pickerId") || "";
+const mode = params.get("mode") || "files";
+const initialPath = params.get("path") || "";
+const directoryMode = mode === "directory";
 const selected = new Set();
 
 const stepLabels = {
@@ -16,6 +19,7 @@ const stepLabels = {
   postprocessing: "VCF files",
   annotation: "VCF and TSV files",
   postannotation: "VCF and TSV files",
+  directory: "Working directory",
 };
 
 let currentPath = "";
@@ -23,7 +27,7 @@ let parentPath = "";
 let currentDirectories = [];
 let currentFiles = [];
 
-document.querySelector("#picker-step-label").textContent = stepLabels[step] || "Compatible files";
+document.querySelector("#picker-step-label").textContent = directoryMode ? stepLabels.directory : stepLabels[step] || "Compatible files";
 document.querySelector("#picker-close").addEventListener("click", () => window.close());
 document.querySelector("#file-picker-add").addEventListener("click", () => useSelectedFiles().catch(showError));
 document.querySelector("#file-picker-select-all").addEventListener("click", selectAllCurrentFiles);
@@ -37,8 +41,15 @@ document.querySelector("#file-picker-go").addEventListener("click", () => {
 document.querySelector("#file-picker-path").addEventListener("keydown", (event) => {
   if (event.key === "Enter") loadDirectory(event.target.value).catch(showError);
 });
+if (directoryMode) {
+  document.title = "Helper Next - Directory Picker";
+  document.querySelector(".picker-header h1").textContent = "Select directory";
+  document.querySelector("#file-picker-add").textContent = "Use Current Directory";
+  document.querySelector("#file-picker-select-all").classList.add("hidden");
+  document.querySelector("#file-picker-clear").classList.add("hidden");
+}
 
-loadDirectory("").catch(showError);
+loadDirectory(initialPath).catch(showError);
 
 async function loadDirectory(path) {
   const data = await browseSampleSheetFiles(step, path);
@@ -132,10 +143,10 @@ function renderList(directories, files) {
   const list = document.querySelector("#file-picker-list");
   list.replaceChildren();
 
-  if (!directories.length && !files.length) {
+  if (!directories.length && (!files.length || directoryMode)) {
     const empty = document.createElement("div");
     empty.className = "file-picker-empty";
-    empty.textContent = "No compatible files found in this directory";
+    empty.textContent = directoryMode ? "No subdirectories found" : "No compatible files found in this directory";
     list.appendChild(empty);
     updateCount();
     return;
@@ -169,6 +180,11 @@ function renderList(directories, files) {
     row.appendChild(path);
     list.appendChild(row);
   });
+
+  if (directoryMode) {
+    updateCount();
+    return;
+  }
 
   files.forEach((file) => {
     const row = document.createElement("div");
@@ -239,7 +255,7 @@ function formatSize(size) {
 }
 
 async function useSelectedFiles() {
-  const files = Array.from(selected);
+  const files = directoryMode ? [currentPath] : Array.from(selected);
   if (!files.length) return;
   const message = {type: "helper-next-files-selected", files, createdAt: Date.now()};
   if (pickerId) {
@@ -254,7 +270,7 @@ async function useSelectedFiles() {
   if (window.opener) {
     window.opener.postMessage(message, window.location.origin);
   }
-  document.querySelector("#file-picker-warnings").textContent = `${files.length} file${files.length === 1 ? "" : "s"} sent to Sample Sheet`;
+  document.querySelector("#file-picker-warnings").textContent = directoryMode ? "Directory selected" : `${files.length} file${files.length === 1 ? "" : "s"} sent to Sample Sheet`;
   window.setTimeout(() => window.close(), 250);
 }
 
@@ -269,6 +285,10 @@ function clearSelection() {
 }
 
 function updateCount() {
+  if (directoryMode) {
+    document.querySelector("#file-picker-count").textContent = currentPath || "No directory selected";
+    return;
+  }
   const count = selected.size;
   document.querySelector("#file-picker-count").textContent = `${count} file${count === 1 ? "" : "s"} selected`;
 }

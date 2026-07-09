@@ -278,6 +278,26 @@ article > * + * {
   padding: 4px 0;
 }
 
+.queue-editable-item {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.queue-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.queue-actions button {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
 .analysis-console-panel {
   margin-top: 18px;
 }
@@ -572,6 +592,51 @@ input {
   padding: 8px 10px;
 }
 
+.input-action-row {
+  align-items: stretch;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.workdir-field {
+  display: grid;
+  gap: 6px;
+}
+
+.workdir-picker-control {
+  align-items: stretch;
+  background: #ffffff;
+  border: 1px solid #c7d0dc;
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 38px;
+  overflow: hidden;
+}
+
+.workdir-picker-control button {
+  background: #f3f6fa;
+  border: 0;
+  border-right: 1px solid #c7d0dc;
+  border-radius: 0;
+  color: #1f252d;
+  font: inherit;
+  min-height: 0;
+  padding: 8px 10px;
+}
+
+.workdir-picker-control input {
+  border: 0;
+  border-radius: 0;
+  font: inherit;
+  min-width: 0;
+}
+
+.workdir-picker-control:focus-within {
+  border-color: #5aa9a6;
+}
+
 .checkbox-field {
   align-items: center;
   display: flex;
@@ -633,6 +698,27 @@ textarea {
 .analysis-start-wide {
   display: block;
   margin-top: 18px;
+}
+
+.analysis-run-controls {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 18px;
+}
+
+.analysis-run-controls .analysis-start-wide {
+  margin-top: 0;
+}
+
+.danger-action {
+  background: #fff5f5;
+  border-color: #c85d5d;
+  color: #8f2424;
+}
+
+.danger-action:hover {
+  border-color: #9f2f2f;
 }
 
 .samplesheet-toolbar {
@@ -963,6 +1049,7 @@ textarea {
   .split,
   .analysis-layout,
   .form-grid,
+  .input-action-row,
   .samplesheet-toolbar,
   .file-input-layout,
   .drop-grid {

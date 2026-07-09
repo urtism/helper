@@ -3,6 +3,8 @@ from helper_next.core.tool_wrappers.wrappers import (
     BcftoolsNormWrapper,
     Bowtie2AlignmentWrapper,
     BwaAlignmentWrapper,
+    DeepVariantWrapper,
+    FreeBayesWrapper,
     Gatk3BqsrWrapper,
     Gatk3IndelRealignmentWrapper,
     Gatk4HaplotypeCallerWrapper,
@@ -35,6 +37,10 @@ def wrapper_for(operation_name, tool_name):
         return Gatk3BqsrWrapper
     if operation in ("caller", "variant_calling") and tool_upper.startswith("GATK"):
         return Gatk4HaplotypeCallerWrapper
+    if operation in ("caller", "variant_calling") and tool_upper.startswith("DEEPVARIANT"):
+        return DeepVariantWrapper
+    if operation in ("caller", "variant_calling") and tool_upper.startswith("FREEBAYES"):
+        return FreeBayesWrapper
     if operation == "vcf_norm" and tool_upper.startswith("BCFTOOLS"):
         return BcftoolsNormWrapper
     if operation == "vcf_filter" and tool_upper.startswith("GATK"):

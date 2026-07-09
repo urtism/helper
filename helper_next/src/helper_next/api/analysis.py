@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import signal
 import shutil
 import subprocess
 import csv
@@ -29,8 +31,10 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 class FakeRunRequest(BaseModel):
     run_id: str
     samplesheet_content: str
+    mode: str = ""
     aligner: str = "BWA v.0.7.17"
     workdir: str = "/tmp/helper_next_analysis"
+    pipeline_path: str = ""
     gene_panel_design: str = ""
     tools_path: str = ""
     set_workdir_default: bool = False
@@ -43,6 +47,10 @@ class FakeRunRequest(BaseModel):
     requested_annotation_workflow: List[str] = []
 
 
+class StopRunRequest(BaseModel):
+    run_dir: str
+
+
 SUPPORTED_ALIGNERS = ["BWA v.0.7.17", "BOWTIE2", "NOVOALIGN"]
 SUPPORTED_EXECUTION_PROFILES = ["local", "slurm"]
 TAIL_BYTES = 24000
@@ -50,6 +58,12 @@ JAVA_CANDIDATES = [
     Path("/usr/lib/jvm/java-21-openjdk-amd64"),
     Path("/usr/lib/jvm/openjdk-21"),
     Path("/usr/lib/jvm/java-17-openjdk-amd64"),
+]
+GATK_JAVA_CANDIDATES = [
+    Path("/usr/lib/jvm/java-8-openjdk-amd64"),
+    Path("/usr/lib/jvm/java-1.8.0-openjdk-amd64"),
+    Path("/usr/lib/jvm/java-11-openjdk-amd64"),
+    Path("/usr/lib/jvm/java-1.11.0-openjdk-amd64"),
 ]
 
 
@@ -113,6 +127,20 @@ def test_run(payload: FakeRunRequest):
     }
 
 
+@router.post("/validate-run")
+def validate_run(payload: FakeRunRequest):
+    validation = validate_analysis_payload(payload)
+    return {
+        "status": "ok",
+        "run_id": validation["run_id"],
+        "entry_step": validation["entry_step"],
+        "workflow": validation["workflow"],
+        "checked_files": validation["checked_files"],
+        "workdir": validation["workdir"],
+        "message": "Analysis setup is valid",
+    }
+
+
 @router.post("/real-run")
 def real_run(payload: FakeRunRequest):
     run_id = clean_run_id(payload.run_id)
@@ -140,20 +168,22 @@ def real_run(payload: FakeRunRequest):
     requested_preprocessing_workflow = clean_requested_preprocessing_workflow(payload.requested_preprocessing_workflow)
     requested_postprocessing_workflow = clean_requested_postprocessing_workflow(payload.requested_postprocessing_workflow)
     requested_annotation_workflow = clean_requested_annotation_workflow(payload.requested_annotation_workflow)
-    pipeline_config = real_alignment_pipeline(
+    requested_workflow = clean_requested_workflow(payload.requested_workflow, entry_step)
+    pipeline_config = resolve_pipeline_config(
+        payload.pipeline_path,
+        paths.pipelines,
         payload.aligner,
-        include_prealignment=entry_step == "prealignment",
-        include_alignment=entry_step in ("prealignment", "alignment"),
-        include_variantcalling=entry_step == "variantcalling" or "variantcalling" in requested_steps,
-        include_postprocessing=entry_step == "postprocessing" or "postprocessing" in requested_steps,
-        include_annotation=entry_step == "annotation" or "annotation" in requested_steps,
-        preprocessing_workflow=requested_preprocessing_workflow,
-        postprocessing_workflow=requested_postprocessing_workflow,
-        annotation_workflow=requested_annotation_workflow,
+        entry_step,
+        requested_steps,
+        requested_workflow,
+        requested_preprocessing_workflow,
+        requested_postprocessing_workflow,
+        requested_annotation_workflow,
+        tools_config,
     )
     pipeline_config = resolve_pipeline_tools(pipeline_config, tools_config, panel_design)
-    requested_workflow = clean_requested_workflow(payload.requested_workflow, entry_step)
     validate_workflow_availability(entry_step, requested_workflow)
+    nextflow_profile = container_aware_execution_profile(execution_profile, pipeline_config)
 
     try:
         validate_nextflow_inputs(samplesheet, pipeline_config, tools_config, entry_step=entry_step, requested_workflow=requested_workflow)
@@ -164,6 +194,7 @@ def real_run(payload: FakeRunRequest):
     run_dir = Path(payload.workdir).expanduser() / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     nextflow_work_dir = run_dir / "work"
+    resume_run = nextflow_work_dir.exists() and any(nextflow_work_dir.iterdir())
     nextflow_work_dir.mkdir(parents=True, exist_ok=True)
 
     samplesheet_path = run_dir / "input.samplesheet.json"
@@ -174,6 +205,10 @@ def real_run(payload: FakeRunRequest):
     nextflow_trace = run_dir / "nextflow.trace.tsv"
     command_path = run_dir / "nextflow.command.txt"
     pid_path = run_dir / "nextflow.pid"
+    previous_session_ids = nextflow_session_ids(nextflow_log)
+    existing_pid = read_pid(pid_path)
+    if existing_pid and is_pid_running(existing_pid):
+        raise HTTPException(status_code=409, detail="Run is already running with PID {}".format(existing_pid))
 
     write_json(samplesheet, samplesheet_path)
     write_json(pipeline_config, pipeline_path)
@@ -213,14 +248,20 @@ def real_run(payload: FakeRunRequest):
         "--keep_intermediates",
         "true" if payload.keep_intermediates else "false",
         "-profile",
-        execution_profile,
+        nextflow_profile,
     ]
+    if resume_run:
+        cmd.append("-resume")
     if payload.queue.strip():
         cmd.extend(["--queue", payload.queue.strip()])
 
     env = nextflow_environment()
+    launch_dir = nextflow_launch_dir(run_dir, command_path, paths.root, previous_session_ids)
+    if resume_run:
+        remove_stale_nextflow_locks(launch_dir, previous_session_ids)
     command_path.write_text(
-        "JAVA_HOME={}\nJAVA_CMD={}\n{}\n".format(
+        "CWD={}\nJAVA_HOME={}\nJAVA_CMD={}\n{}\n".format(
+            launch_dir,
             env.get("JAVA_HOME", ""),
             env.get("JAVA_CMD", ""),
             " ".join(cmd),
@@ -229,7 +270,7 @@ def real_run(payload: FakeRunRequest):
     with nextflow_log.open("w") as log_handle:
         process = subprocess.Popen(
             cmd,
-            cwd=str(paths.root),
+            cwd=str(launch_dir),
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             env=env,
@@ -245,13 +286,17 @@ def real_run(payload: FakeRunRequest):
         "gene_panel_design": payload.gene_panel_design.strip(),
         "panel_design": panel_design,
         "tools_path": str(tools_path),
+        "pipeline_path": payload.pipeline_path,
         "set_workdir_default": payload.set_workdir_default,
         "keep_intermediates": payload.keep_intermediates,
         "execution_profile": execution_profile,
+        "nextflow_profile": nextflow_profile,
         "queue": payload.queue.strip(),
+        "resume": resume_run,
         "pid": process.pid,
         "run_dir": str(run_dir),
         "work_dir": str(nextflow_work_dir),
+        "launch_dir": str(launch_dir),
         "manifest": str(manifest_path),
         "run_config": str(run_config_path),
         "nextflow_log": str(nextflow_log),
@@ -262,6 +307,14 @@ def real_run(payload: FakeRunRequest):
         "command": " ".join(cmd),
         "message": "Real Nextflow workflow submitted",
     }
+
+
+@router.get("/pipeline-config")
+def pipeline_config(path: str):
+    paths = get_project_paths()
+    pipeline_path = resolve_pipeline_path(path, paths.pipelines)
+    config = normalize_pipeline_for_nextflow(load_json(pipeline_path))
+    return {"path": str(pipeline_path), "name": pipeline_path.name, "config": config}
 
 
 @router.get("/run-status")
@@ -328,6 +381,41 @@ def run_status(run_dir: str):
     }
 
 
+@router.post("/stop-run")
+def stop_run(payload: StopRunRequest):
+    run_path = Path(payload.run_dir).expanduser()
+    if not run_path.exists() or not run_path.is_dir():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    pid_path = run_path / "nextflow.pid"
+    pid = read_pid(pid_path)
+    if not pid:
+        raise HTTPException(status_code=400, detail="Run PID not found")
+    if not is_pid_running(pid):
+        return {"status": "not_running", "pid": pid, "run_dir": str(run_path), "message": "Analysis is not running"}
+
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return {"status": "not_running", "pid": pid, "run_dir": str(run_path), "message": "Analysis is not running"}
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied while stopping analysis")
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return {"status": "not_running", "pid": pid, "run_dir": str(run_path), "message": "Analysis is not running"}
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied while stopping analysis")
+
+    stop_marker = run_path / "analysis.stop.requested"
+    try:
+        stop_marker.write_text("pid={}\nrequested=SIGTERM\n".format(pid))
+    except OSError:
+        pass
+    return {"status": "stopping", "pid": pid, "run_dir": str(run_path), "message": "Stop requested"}
+
+
 def clean_run_id(run_id):
     value = "".join(char if char.isalnum() or char in ("-", "_", ".") else "_" for char in run_id.strip())
     return value or "helper_test_run"
@@ -338,6 +426,225 @@ def clean_execution_profile(profile):
     if value not in SUPPORTED_EXECUTION_PROFILES:
         raise HTTPException(status_code=400, detail="Unsupported execution profile: {}".format(profile))
     return value
+
+
+def nextflow_launch_dir(run_dir, command_path, project_root, session_ids):
+    recorded = recorded_nextflow_launch_dir(command_path)
+    if recorded:
+        return recorded
+    if session_ids and any(nextflow_lock_path(project_root, session_id).exists() for session_id in session_ids):
+        return project_root
+    return run_dir
+
+
+def recorded_nextflow_launch_dir(command_path):
+    if not command_path.is_file():
+        return None
+    try:
+        for line in command_path.read_text(errors="replace").splitlines():
+            if line.startswith("CWD="):
+                value = line.removeprefix("CWD=").strip()
+                if value:
+                    return Path(value).expanduser()
+    except OSError:
+        return None
+    return None
+
+
+def nextflow_session_ids(log_path):
+    if not log_path.is_file():
+        return []
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return []
+    patterns = [
+        r"Session UUID:\s*([0-9a-fA-F-]{36})",
+        r"session with ID\s+([0-9a-fA-F-]{36})",
+        r"\.nextflow/cache/([0-9a-fA-F-]{36})/db/LOCK",
+    ]
+    session_ids = []
+    seen = set()
+    for pattern in patterns:
+        for match in re.findall(pattern, text):
+            session_id = match.lower()
+            if session_id not in seen:
+                seen.add(session_id)
+                session_ids.append(session_id)
+    return session_ids
+
+
+def remove_stale_nextflow_locks(launch_dir, session_ids):
+    for session_id in session_ids:
+        lock_path = nextflow_lock_path(launch_dir, session_id)
+        try:
+            if lock_path.is_file():
+                lock_path.unlink()
+        except OSError:
+            pass
+
+
+def nextflow_lock_path(launch_dir, session_id):
+    return Path(launch_dir) / ".nextflow" / "cache" / session_id / "db" / "LOCK"
+
+
+def validate_analysis_payload(payload):
+    errors = []
+    mode = (payload.mode or "real_alignment").strip()
+    run_id = clean_run_id(payload.run_id)
+    if not payload.run_id.strip():
+        errors.append("Run ID is required")
+    if not payload.samplesheet_content.strip():
+        errors.append("Samplesheet content is required")
+    if not payload.gene_panel_design.strip():
+        errors.append("Gene panel/design is required")
+    if not payload.pipeline_path.strip():
+        errors.append("Pipeline config is required")
+
+    execution_profile = ""
+    try:
+        execution_profile = clean_execution_profile(payload.execution_profile)
+    except HTTPException as exc:
+        append_detail(errors, exc.detail)
+
+    loaded = None
+    samplesheet = None
+    entry_step = ""
+    if payload.samplesheet_content.strip():
+        try:
+            loaded = load_samplesheet_text(payload.samplesheet_content)
+            samplesheet = loaded["samplesheet"]
+            entry_step = loaded["step"]
+        except Exception as exc:
+            errors.append("Samplesheet is not valid: {}".format(exc))
+
+    if samplesheet is not None:
+        try:
+            validate_samplesheet_file_access(samplesheet, entry_step)
+        except ValidationError as exc:
+            errors.extend(exc.errors)
+
+    try:
+        validate_workdir_path(payload.workdir)
+    except HTTPException as exc:
+        append_detail(errors, exc.detail)
+
+    workflow = ""
+    checked_files = 0
+    if samplesheet is not None:
+        try:
+            checked_files = len(sample_file_paths(samplesheet, entry_step))
+            if mode == "fake_alignment":
+                if entry_step not in ("prealignment", "alignment"):
+                    errors.append("Fake alignment requires a FASTQ samplesheet")
+                pipeline_config = fake_alignment_pipeline(payload.aligner)
+                tools_config = fake_tools_config(payload.aligner)
+                workflow = "alignment"
+            else:
+                if shutil.which("nextflow") is None:
+                    errors.append("Nextflow is not installed or not available in PATH")
+                if entry_step not in ("prealignment", "alignment", "preprocessing", "variantcalling", "postprocessing", "annotation"):
+                    errors.append("Real Nextflow run requires a FASTQ, BAM, or VCF samplesheet")
+                paths = get_project_paths()
+                tools_path = resolve_tools_path(payload.tools_path, paths.configs)
+                tools_config = load_json(tools_path)
+                panel_design = resolve_panel_design(payload.gene_panel_design, paths.configs)
+                requested_steps = [step for step in payload.requested_workflow if step]
+                requested_preprocessing_workflow = clean_requested_preprocessing_workflow(payload.requested_preprocessing_workflow)
+                requested_postprocessing_workflow = clean_requested_postprocessing_workflow(payload.requested_postprocessing_workflow)
+                requested_annotation_workflow = clean_requested_annotation_workflow(payload.requested_annotation_workflow)
+                workflow = clean_requested_workflow(payload.requested_workflow, entry_step)
+                pipeline_config = resolve_pipeline_config(
+                    payload.pipeline_path,
+                    paths.pipelines,
+                    payload.aligner,
+                    entry_step,
+                    requested_steps,
+                    workflow,
+                    requested_preprocessing_workflow,
+                    requested_postprocessing_workflow,
+                    requested_annotation_workflow,
+                    tools_config,
+                )
+                pipeline_config = resolve_pipeline_tools(pipeline_config, tools_config, panel_design)
+                validate_workflow_availability(entry_step, workflow)
+                container_aware_execution_profile(execution_profile, pipeline_config)
+            validate_nextflow_inputs(samplesheet, pipeline_config, tools_config, entry_step=entry_step, requested_workflow=workflow)
+        except ValidationError as exc:
+            errors.extend(exc.errors)
+        except HTTPException as exc:
+            append_detail(errors, exc.detail)
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if errors:
+        raise HTTPException(status_code=400, detail=errors)
+
+    return {
+        "run_id": run_id,
+        "entry_step": entry_step,
+        "workflow": workflow,
+        "checked_files": checked_files,
+        "workdir": str(Path(payload.workdir).expanduser()),
+    }
+
+
+def append_detail(errors, detail):
+    if isinstance(detail, list):
+        errors.extend(str(item) for item in detail)
+    else:
+        errors.append(str(detail))
+
+
+def validate_samplesheet_file_access(samplesheet, entry_step):
+    errors = []
+    for path in sample_file_paths(samplesheet, entry_step):
+        candidate = Path(path).expanduser()
+        if not candidate.exists():
+            errors.append("samplesheet file not found: {}".format(path))
+        elif not candidate.is_file():
+            errors.append("samplesheet path is not a file: {}".format(path))
+        elif not os.access(str(candidate), os.R_OK):
+            errors.append("samplesheet file is not readable: {}".format(path))
+    if errors:
+        raise ValidationError(errors)
+
+
+def sample_file_paths(samplesheet, entry_step):
+    rows = manifest_rows(samplesheet, entry_step)
+    file_columns = [
+        "fastq_r1",
+        "fastq_r2",
+        "fastq_i2",
+        "bam",
+        "merged_vcf",
+        "variants_tsv",
+    ]
+    paths = []
+    seen = set()
+    for row in rows:
+        for column in file_columns:
+            value = str(row.get(column) or "").strip()
+            if value and value not in seen:
+                seen.add(value)
+                paths.append(value)
+    return paths
+
+
+def validate_workdir_path(workdir):
+    selected = (workdir or "").strip()
+    if not selected:
+        raise HTTPException(status_code=400, detail="Working directory is required")
+    candidate = Path(selected).expanduser()
+    target = candidate if candidate.exists() else candidate.parent
+    if candidate.exists() and not candidate.is_dir():
+        raise HTTPException(status_code=400, detail="Working directory is not a directory: {}".format(selected))
+    if not target.exists():
+        raise HTTPException(status_code=400, detail="Working directory parent does not exist: {}".format(target))
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="Working directory parent is not a directory: {}".format(target))
+    if not os.access(str(target), os.W_OK | os.X_OK):
+        raise HTTPException(status_code=400, detail="Working directory is not writable: {}".format(target))
 
 
 def resolve_tools_path(selected_path, configs_dir):
@@ -359,6 +666,67 @@ def resolve_tools_path(selected_path, configs_dir):
     if not candidate.is_file():
         raise HTTPException(status_code=400, detail="Tools file not found: {}".format(selected))
     return candidate
+
+
+def resolve_pipeline_path(selected_path, pipelines_dir):
+    selected = (selected_path or "").strip()
+    if not selected:
+        raise HTTPException(status_code=400, detail="Pipeline file is required")
+
+    candidate = Path(selected).expanduser()
+    if not candidate.is_absolute():
+        candidate = pipelines_dir / selected
+    candidate = candidate.resolve()
+    pipelines_root = pipelines_dir.resolve()
+
+    try:
+        candidate.relative_to(pipelines_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Pipeline file must be inside {}".format(pipelines_root))
+    if not candidate.is_file():
+        raise HTTPException(status_code=400, detail="Pipeline file not found: {}".format(selected))
+    return candidate
+
+
+def container_aware_execution_profile(execution_profile, pipeline_config):
+    engines = workflow_container_engines(pipeline_config)
+    profiles = [part.strip() for part in execution_profile.split(",") if part.strip()]
+    if "docker" in engines and "docker" not in profiles:
+        profiles.append("docker")
+    if ("apptainer" in engines or "singularity" in engines) and "apptainer" not in profiles:
+        profiles.append("apptainer")
+    return ",".join(profiles)
+
+
+def workflow_container_engines(pipeline_config):
+    engines = set()
+    resolved_tools = pipeline_config.get("resolved_tools", {})
+    if not isinstance(resolved_tools, dict):
+        return engines
+    for step_tools in resolved_tools.values():
+        if not isinstance(step_tools, dict):
+            continue
+        collect_container_engines(step_tools, engines)
+    return engines
+
+
+def collect_container_engines(value, engines):
+    if isinstance(value, dict):
+        container = value.get("container")
+        if isinstance(container, dict):
+            engine = str(container.get("engine") or "").strip().lower()
+            image = str(container.get("image") or "").strip()
+            if engine:
+                engines.add(engine)
+            elif image:
+                engines.add("docker")
+        elif isinstance(container, str) and container.strip():
+            engines.add("docker")
+        for nested in value.values():
+            collect_container_engines(nested, engines)
+    elif isinstance(value, list):
+        for item in value:
+            collect_container_engines(item, engines)
 
 
 def resolve_panel_design(selected_design, configs_dir):
@@ -404,6 +772,218 @@ def clean_requested_annotation_workflow(requested_workflow):
     allowed = ["vep_annotation", "ann_vcf_to_tsv"]
     selected = [step for step in requested_workflow if step in allowed]
     return selected or ["vep_annotation", "ann_vcf_to_tsv"]
+
+
+def resolve_pipeline_config(
+    selected_pipeline,
+    pipelines_dir,
+    aligner,
+    entry_step,
+    requested_steps,
+    requested_workflow,
+    preprocessing_workflow,
+    postprocessing_workflow,
+    annotation_workflow,
+    tools_config=None,
+):
+    if selected_pipeline:
+        pipeline = normalize_pipeline_for_nextflow(load_json(resolve_pipeline_path(selected_pipeline, pipelines_dir)))
+    else:
+        selected = [step.strip() for step in requested_workflow.split(",") if step.strip()]
+        pipeline = real_alignment_pipeline(
+            aligner,
+            include_prealignment=entry_step == "prealignment" or "prealignment" in selected,
+            include_alignment=entry_step in ("prealignment", "alignment") or "alignment" in selected,
+            include_variantcalling=entry_step == "variantcalling" or "variantcalling" in requested_steps,
+            include_postprocessing=entry_step == "postprocessing" or "postprocessing" in requested_steps,
+            include_annotation=entry_step == "annotation" or "annotation" in requested_steps,
+            preprocessing_workflow=preprocessing_workflow,
+            postprocessing_workflow=postprocessing_workflow,
+            annotation_workflow=annotation_workflow,
+        )
+
+    selected_steps = [step.strip() for step in requested_workflow.split(",") if step.strip()]
+    pipeline["workflow"] = [step for step in selected_steps if step in supported_nextflow_steps()]
+    reconcile_variantcalling_tools_with_tools_config(pipeline, tools_config or {})
+    reconcile_preprocessing_databases_with_tools_config(pipeline, tools_config or {})
+    if "variantcalling" in pipeline["workflow"] and not pipeline.get("variantcalling", {}).get("tools"):
+        pipeline["workflow"] = [step for step in pipeline["workflow"] if step != "variantcalling"]
+    if "preprocessing" in pipeline.get("workflow", []) and isinstance(pipeline.get("preprocessing"), dict):
+        pipeline["preprocessing"]["workflow"] = preprocessing_workflow
+    if "postprocessing" in pipeline.get("workflow", []) and isinstance(pipeline.get("postprocessing"), dict):
+        pipeline["postprocessing"]["workflow"] = postprocessing_workflow
+    if "annotation" in pipeline.get("workflow", []) and isinstance(pipeline.get("annotation"), dict):
+        pipeline["annotation"]["workflow"] = annotation_workflow
+    return pipeline
+
+
+def reconcile_variantcalling_tools_with_tools_config(pipeline, tools_config):
+    variantcalling = pipeline.get("variantcalling")
+    if not isinstance(variantcalling, dict):
+        return
+    tools = variantcalling.get("tools", [])
+    if not isinstance(tools, list):
+        tools = []
+    configured = [tool for tool in tools if tool in tools_config]
+    if configured:
+        variantcalling["tools"] = configured[:1]
+        return
+    configured_callers = [
+        tool
+        for tool in tools_config
+        if str(tool).upper().startswith("GATK V.4")
+        or str(tool).upper().startswith("DEEPVARIANT")
+        or str(tool).upper().startswith("FREEBAYES")
+    ]
+    if configured_callers and "variantcalling" in pipeline.get("workflow", []):
+        fallback = sorted(configured_callers)[0]
+        variantcalling["tools"] = [fallback]
+        variantcalling.setdefault(fallback, {"args": []})
+
+
+def reconcile_preprocessing_databases_with_tools_config(pipeline, tools_config):
+    preprocessing = pipeline.get("preprocessing")
+    if not isinstance(preprocessing, dict):
+        return
+    aliases = {
+        "DBSNP v.138": ["DBSNP v.138", "dbsnp", "DBSNP"],
+        "MILLS": ["MILLS", "mills"],
+    }
+    for operation, fields in {
+        "indel_realignment": ["mills"],
+        "BQ_recalibration": ["dbsnp", "mills"],
+    }.items():
+        operation_cfg = preprocessing.get(operation)
+        if not isinstance(operation_cfg, dict):
+            continue
+        tool_name = operation_cfg.get("tool", "")
+        tool_cfg = operation_cfg.get(tool_name, {}) if isinstance(operation_cfg.get(tool_name, {}), dict) else {}
+        for field in fields:
+            value = tool_cfg.get(field) or operation_cfg.get(field)
+            replacement = first_configured_alias(value, aliases, tools_config)
+            if not replacement:
+                continue
+            if value and value != replacement:
+                if isinstance(tool_cfg, dict) and field in tool_cfg:
+                    tool_cfg[field] = replacement
+                elif field in operation_cfg:
+                    operation_cfg[field] = replacement
+            elif not value:
+                if isinstance(tool_cfg, dict):
+                    tool_cfg[field] = replacement
+                else:
+                    operation_cfg[field] = replacement
+
+
+def first_configured_alias(value, aliases, tools_config):
+    candidates = aliases.get(value, [value]) if value else []
+    for candidate in candidates:
+        if candidate in tools_config:
+            return candidate
+    lower_candidates = [str(candidate).lower() for candidate in candidates]
+    for candidate in lower_candidates:
+        if candidate in tools_config:
+            return candidate
+    return ""
+
+
+def normalize_pipeline_for_nextflow(pipeline):
+    normalized = json.loads(json.dumps(pipeline)) if isinstance(pipeline, dict) else {}
+    workflow = normalized.get("workflow", [])
+    if not isinstance(workflow, list):
+        workflow = []
+
+    mapped = []
+    for step in workflow:
+        mapped_step = "annotation" if step == "variant_annotation" else step
+        if mapped_step in supported_nextflow_steps() and mapped_step not in mapped:
+            mapped.append(mapped_step)
+    normalized["workflow"] = mapped
+
+    if "annotation" not in normalized and isinstance(normalized.get("variant_annotation"), dict):
+        variant_annotation = normalized["variant_annotation"]
+        tool_name = variant_annotation.get("tool") or "VEP v.95"
+        tool_specific = variant_annotation.get(tool_name, {}) if isinstance(variant_annotation.get(tool_name, {}), dict) else {}
+        normalized["annotation"] = {
+            "workflow": ["vep_annotation", "ann_vcf_to_tsv"],
+            "threads": variant_annotation.get("threads", "2"),
+            "ram": variant_annotation.get("ram", "8g"),
+            "vep_annotation": {
+                "tool": tool_name,
+                tool_name: tool_specific,
+            },
+            "ann_vcf_to_tsv": {"tool": "", "args": {"tags_file": "", "format_tags": "", "info_tags": ""}},
+        }
+    normalize_supported_variantcalling(normalized)
+    normalize_supported_workflows(normalized)
+    normalize_step_defaults(normalized)
+    return normalized
+
+
+def normalize_supported_variantcalling(pipeline):
+    variantcalling = pipeline.get("variantcalling")
+    if not isinstance(variantcalling, dict):
+        return
+    tools = variantcalling.get("tools", [])
+    if not isinstance(tools, list):
+        tools = []
+    gatk_tools = [tool for tool in tools if str(tool).upper().startswith("GATK")]
+    deepvariant_tools = [tool for tool in tools if str(tool).upper().startswith("DEEPVARIANT")]
+    freebayes_tools = [tool for tool in tools if str(tool).upper().startswith("FREEBAYES")]
+    supported_tools = gatk_tools or deepvariant_tools or freebayes_tools
+    if supported_tools:
+        selected = supported_tools[0]
+        variantcalling["tools"] = [selected]
+        if not variantcalling.get("ram"):
+            variantcalling["ram"] = "8g"
+        if not variantcalling.get("threads"):
+            variantcalling["threads"] = "2"
+        variantcalling.setdefault("filters", {})
+        return
+    variantcalling["tools"] = []
+    if "variantcalling" in pipeline.get("workflow", []):
+        pipeline["workflow"] = [step for step in pipeline["workflow"] if step != "variantcalling"]
+
+
+def normalize_supported_workflows(pipeline):
+    supported_operations = {
+        "prealignment": {"fastq_QC"},
+        "alignment": {"fastq_alignment", "sam_to_bam", "sortSam", "sort_bam", "index_bam", "bam_QC"},
+        "preprocessing": {"add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration"},
+        "postprocessing": {"vcf_norm", "vcf_filter", "vcf_to_tsv"},
+        "annotation": {"vep_annotation", "ann_vcf_to_tsv"},
+    }
+    for step, allowed in supported_operations.items():
+        step_config = pipeline.get(step)
+        if not isinstance(step_config, dict):
+            continue
+        workflow = step_config.get("workflow", [])
+        if isinstance(workflow, list):
+            step_config["workflow"] = [operation for operation in workflow if operation in allowed]
+            if step == "prealignment" and not step_config["workflow"] and isinstance(step_config.get("fastq_QC"), dict):
+                step_config["workflow"] = ["fastq_QC"]
+
+
+def normalize_step_defaults(pipeline):
+    defaults = {
+        "prealignment": {"workflow": ["fastq_QC"], "threads": "1", "ram": "1g"},
+        "alignment": {"workflow": ["fastq_alignment"], "threads": "2", "ram": "1g"},
+        "preprocessing": {"workflow": ["add_readgroups", "mark_pcr_dup"], "threads": "2", "ram": "8g"},
+        "variantcalling": {"threads": "2", "ram": "8g", "filters": {}},
+        "postprocessing": {"workflow": ["vcf_to_tsv"], "threads": "2", "ram": "2g"},
+        "annotation": {"workflow": ["vep_annotation", "ann_vcf_to_tsv"], "threads": "2", "ram": "8g"},
+    }
+    for step in pipeline.get("workflow", []):
+        step_config = pipeline.get(step)
+        if not isinstance(step_config, dict):
+            continue
+        for field, value in defaults.get(step, {}).items():
+            if step_config.get(field) in (None, "", []):
+                step_config[field] = json.loads(json.dumps(value))
+
+
+def supported_nextflow_steps():
+    return ["prealignment", "alignment", "preprocessing", "variantcalling", "postprocessing", "annotation"]
 
 
 def validate_workflow_availability(entry_step, requested_workflow):
@@ -487,11 +1067,22 @@ def nextflow_environment():
     else:
         env.pop("JAVA_HOME", None)
         env.pop("JAVA_CMD", None)
+    gatk_java_home = compatible_gatk_java_home()
+    if gatk_java_home:
+        env["GATK_JAVA_HOME"] = str(gatk_java_home)
+        env["GATK_JAVA_CMD"] = str(gatk_java_home / "bin" / "java")
     return env
 
 
 def compatible_java_home():
     for path in JAVA_CANDIDATES:
+        if (path / "bin" / "java").exists():
+            return path
+    return None
+
+
+def compatible_gatk_java_home():
+    for path in GATK_JAVA_CANDIDATES:
         if (path / "bin" / "java").exists():
             return path
     return None
@@ -762,7 +1353,7 @@ def real_alignment_pipeline(
         pipeline["annotation"] = {
             "workflow": annotation_workflow,
             "threads": "2",
-            "ram": "4g",
+            "ram": "8g",
             "vep_annotation": {
                 "tool": "VEP v.95",
                 "VEP v.95": {

@@ -1,13 +1,29 @@
 async function requestJson(path, options = {}) {
   const response = await fetch(path, options);
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+    let detail = "";
+    try {
+      const payload = await response.json();
+      if (Array.isArray(payload.detail)) {
+        detail = payload.detail.join("\n");
+      } else if (payload.detail) {
+        detail = String(payload.detail);
+      }
+    } catch {
+      detail = await response.text();
+    }
+    throw new Error(detail || `Request failed: ${response.status} ${response.statusText}`);
   }
   return response.json();
 }
 
 export async function getProject() {
   return requestJson("/api/project");
+}
+
+export async function getAnalysisPipeline(path) {
+  const params = new URLSearchParams({path});
+  return requestJson(`/api/analysis/pipeline-config?${params.toString()}`);
 }
 
 export async function previewSampleSheetFiles(payload) {
@@ -68,7 +84,23 @@ export async function startRealAnalysis(payload) {
   });
 }
 
+export async function validateAnalysisRun(payload) {
+  return requestJson("/api/analysis/validate-run", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function getAnalysisRunStatus(runDir) {
   const params = new URLSearchParams({run_dir: runDir});
   return requestJson(`/api/analysis/run-status?${params.toString()}`);
+}
+
+export async function stopAnalysisRun(runDir) {
+  return requestJson("/api/analysis/stop-run", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({run_dir: runDir}),
+  });
 }

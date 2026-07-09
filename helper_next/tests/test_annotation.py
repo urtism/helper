@@ -30,3 +30,19 @@ def test_build_vep_args_merges_legacy_pipeline_and_tools_config():
 
 def test_shell_join_quotes_plugin_arguments():
     assert shell_join(["--plugin", "GeneSplicer,/path with space/human"]) == "--plugin 'GeneSplicer,/path with space/human'"
+
+
+def test_build_vep_args_filters_removed_esp_frequency_flag():
+    args = build_vep_args(
+        {
+            "args": ["--cache"],
+            "af": ["--af", "--af_esp", "--af_gnomad"],
+            "assembly": "GRCh37",
+            "species": "homo_sapiens",
+        },
+        {},
+    )
+
+    assert "--af_esp" not in args
+    assert "--af" in args
+    assert "--af_gnomad" in args

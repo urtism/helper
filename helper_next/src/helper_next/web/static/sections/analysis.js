@@ -1,6 +1,6 @@
-import {getAnalysisRunStatus, startFakeAnalysis, startRealAnalysis, getProject} from "../api.js?v=20260625-1";
+import {getAnalysisRunStatus, getAnalysisPipeline, startFakeAnalysis, startRealAnalysis, validateAnalysisRun, stopAnalysisRun, getProject, getPickerSelection} from "../api.js?v=20260629-8";
 
-const workflowTree = [
+const baseWorkflowTree = [
   {
     id: "prealignment",
     label: "Prealignment",
@@ -74,11 +74,18 @@ const workflowTree = [
   },
 ];
 
+let workflowTree = cloneWorkflowTree(baseWorkflowTree);
+
 const analysisState = {
   samplesheetContent: "",
   samplesheetName: "",
   pollTimer: null,
   activeRunDir: "",
+  activeRunPayload: null,
+  workdirPickerPoll: null,
+  activeWorkdirPickerId: "",
+  pipelineConfig: null,
+  pipelineName: "",
   queueItems: [],
   workflowExpanded: new Set(workflowTree.map((node) => node.id)),
   workflowChecked: new Set(
@@ -112,14 +119,17 @@ export function initAnalysis() {
   }
 
   bindChange("#analysis-samplesheet-file", loadSamplesheetFile);
+  bindChange("#analysis-pipeline-file", loadPipelineFile);
   bindChange("#analysis-set-workdir-default", updateDefaultWorkdir);
   bindChange("#analysis-workdir", updateDefaultWorkdir);
+  bindClick("#analysis-workdir-browse", openWorkdirPickerPage);
   bindClickAll(".analysis-start-fake", startFakeRun);
   bindClick("#analysis-add-to-queue", addCurrentRunToQueue);
+  bindClick("#analysis-stop-run", stopCurrentRunAndContinue);
   bindClick("#analysis-console-refresh", refreshConsole);
   loadRunSetupOptions();
   renderWorkflowTree();
-  renderAnalysisQueue([{status: "idle", message: "No analysis queued"}]);
+  renderQueueList();
   renderSelectedWorkflow();
 }
 
@@ -153,7 +163,6 @@ async function loadSamplesheetFile(event) {
   analysisState.inputTypes = inferSamplesheetInputTypes(analysisState.samplesheetContent);
   document.querySelector("#analysis-samplesheet-name").textContent = file.name;
   updateWorkflowAvailability();
-  renderQueueState([{status: "loaded", message: file.name}]);
   renderConsoleText("Samplesheet loaded: " + file.name);
 }
 
@@ -172,36 +181,9 @@ async function startFakeRun() {
   }
   updateDefaultWorkdir();
 
-  const payload = {
-    run_id: valueOf("#analysis-run-id"),
-    workdir: valueOf("#analysis-workdir"),
-    gene_panel_design: valueOf("#analysis-gene-panel-design"),
-    tools_path: valueOf("#analysis-tools-file"),
-    set_workdir_default: checkedOf("#analysis-set-workdir-default"),
-    keep_intermediates: checkedOf("#analysis-keep-intermediates"),
-    execution_profile: valueOf("#analysis-execution-profile") || "local",
-    queue: valueOf("#analysis-slurm-queue"),
-    requested_workflow: selectedWorkflowSteps(),
-    requested_preprocessing_workflow: selectedPreprocessingSubsteps(),
-    requested_postprocessing_workflow: selectedPostprocessingSubsteps(),
-    requested_annotation_workflow: selectedAnnotationSubsteps(),
-    samplesheet_content: analysisState.samplesheetContent,
-  };
+  const payload = analysisPayload();
 
-  const workflow = valueOf("#analysis-workflow");
-  renderQueueState([{status: "running", message: `${payload.run_id} (${workflow}: ${payload.requested_workflow.join(", ")})`}]);
-  setConsoleState("Submitting");
-  renderConsoleText(`Submitting ${payload.run_id} (${workflow})...`);
-  try {
-    const result = workflow === "real_alignment" ? await startRealAnalysis(payload) : await startFakeAnalysis(payload);
-    renderResult(result);
-    startConsolePolling(result.run_dir, result.status === "submitted");
-  } catch (error) {
-    status.textContent = error.message;
-    renderQueueState([{status: "error", message: error.message}]);
-    setConsoleState("Error");
-    renderConsoleText(error.message);
-  }
+  await startAnalysisPayload(payload);
 }
 
 function valueOf(selector) {
@@ -223,13 +205,43 @@ async function loadRunSetupOptions() {
       "Select a saved design",
     );
     populateSelect(
+      "#analysis-pipeline-file",
+      project.pipelines || [],
+      "Generated default pipeline",
+    );
+    populateSelect(
       "#analysis-tools-file",
       project.tool_config_files || project.tool_configs || [],
       "Default tools_cfg/tools.cfg",
     );
   } catch (error) {
     populateSelect("#analysis-gene-panel-design", [], "No saved designs found");
+    populateSelect("#analysis-pipeline-file", [], "Generated default pipeline");
     populateSelect("#analysis-tools-file", [], "Default tools_cfg/tools.cfg");
+  }
+}
+
+async function loadPipelineFile() {
+  const selected = valueOf("#analysis-pipeline-file");
+  if (!selected) {
+    analysisState.pipelineConfig = null;
+    analysisState.pipelineName = "";
+    workflowTree = cloneWorkflowTree(baseWorkflowTree);
+    resetDefaultWorkflowSelection();
+    updateWorkflowAvailability();
+    renderConsoleText("Pipeline: generated default pipeline");
+    return;
+  }
+  try {
+    const result = await getAnalysisPipeline(selected);
+    analysisState.pipelineConfig = result.config || null;
+    analysisState.pipelineName = result.name || selected;
+    applyPipelineToWorkflowTree(analysisState.pipelineConfig);
+    updateWorkflowAvailability();
+    renderConsoleText(`Pipeline loaded: ${analysisState.pipelineName}`);
+  } catch (error) {
+    document.querySelector("#analysis-status").textContent = error.message;
+    renderConsoleText(error.message);
   }
 }
 
@@ -260,6 +272,166 @@ function updateDefaultWorkdir() {
   } else if (!checkbox.checked) {
     window.localStorage.removeItem(defaultWorkdirStorageKey);
   }
+}
+
+function openWorkdirPickerPage() {
+  const pickerId = `workdir-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  analysisState.activeWorkdirPickerId = pickerId;
+  startWorkdirPickerPolling(pickerId);
+  const params = new URLSearchParams({
+    mode: "directory",
+    step: "prealignment",
+    pickerId,
+  });
+  const current = valueOf("#analysis-workdir");
+  if (current) params.set("path", current);
+  window.open(`/static/file_picker.html?${params.toString()}`, "helper-next-directory-picker");
+}
+
+function startWorkdirPickerPolling(pickerId) {
+  if (analysisState.workdirPickerPoll) {
+    window.clearInterval(analysisState.workdirPickerPoll);
+  }
+  analysisState.workdirPickerPoll = window.setInterval(() => {
+    pollWorkdirPickerSelection(pickerId).catch(showAnalysisError);
+  }, 700);
+}
+
+async function pollWorkdirPickerSelection(pickerId) {
+  if (!pickerId || pickerId !== analysisState.activeWorkdirPickerId) return;
+  const data = await getPickerSelection(pickerId);
+  const directory = data.files && data.files[0];
+  if (!directory) return;
+  window.clearInterval(analysisState.workdirPickerPoll);
+  analysisState.workdirPickerPoll = null;
+  analysisState.activeWorkdirPickerId = "";
+  setWorkdir(directory);
+}
+
+function setWorkdir(directory) {
+  const workdir = document.querySelector("#analysis-workdir");
+  if (!workdir) return;
+  workdir.value = directory;
+  workdir.dispatchEvent(new Event("change", {bubbles: true}));
+  renderConsoleText(`Work directory selected: ${directory}`);
+}
+
+async function startAnalysisPayload(payload) {
+  const status = document.querySelector("#analysis-status");
+  const workflow = payload.mode || "fake_alignment";
+  analysisState.activeRunPayload = payload;
+  renderQueueList();
+  setConsoleState("Submitting");
+  renderConsoleText(`Submitting ${payload.run_id} (${workflow})...`);
+  try {
+    const result = workflow === "real_alignment" ? await startRealAnalysis(payload) : await startFakeAnalysis(payload);
+    renderResult(result);
+    startConsolePolling(result.run_dir, result.status === "submitted");
+  } catch (error) {
+    status.textContent = error.message;
+    renderQueueList();
+    setConsoleState("Error");
+    renderConsoleText(error.message);
+  }
+}
+
+async function stopCurrentRunAndContinue() {
+  const status = document.querySelector("#analysis-status");
+  if (!analysisState.activeRunDir) {
+    status.textContent = "No running analysis selected";
+    return;
+  }
+  if (!window.confirm("Stop the current analysis and start the next queued analysis?")) {
+    return;
+  }
+  try {
+    const result = await stopAnalysisRun(analysisState.activeRunDir);
+    stopConsolePolling();
+    setConsoleState("Stopping");
+    renderConsoleText(`${result.message}\nrun_dir=${result.run_dir}\npid=${result.pid || ""}`);
+    analysisState.activeRunDir = "";
+    analysisState.activeRunPayload = null;
+    const next = analysisState.queueItems.shift();
+    if (!next) {
+      renderQueueList();
+      status.textContent = "Analysis stop requested";
+      return;
+    }
+    renderQueueList();
+    status.textContent = `Analysis stop requested. Starting next queued analysis: ${next.message}`;
+    await startAnalysisPayload(next.payload);
+  } catch (error) {
+    status.textContent = error.message;
+    renderConsoleText(error.message);
+  }
+}
+
+function showAnalysisError(error) {
+  const status = document.querySelector("#analysis-status");
+  if (status) status.textContent = error.message;
+}
+
+function cloneWorkflowTree(tree) {
+  return tree.map((node) => ({...node, children: node.children.map((child) => ({...child}))}));
+}
+
+function resetDefaultWorkflowSelection() {
+  analysisState.workflowChecked = new Set(
+    workflowTree
+      .filter((node) => !node.disabled)
+      .flatMap((node) => [
+        node.id,
+        ...node.children
+          .filter((child) => !child.disabled && child.defaultChecked !== false)
+          .map((child) => child.id),
+      ]),
+  );
+  analysisState.workflowExpanded = new Set(workflowTree.map((node) => node.id));
+}
+
+function applyPipelineToWorkflowTree(config) {
+  workflowTree = cloneWorkflowTree(baseWorkflowTree);
+  analysisState.workflowChecked = new Set();
+  analysisState.workflowExpanded = new Set(workflowTree.map((node) => node.id));
+  const workflow = Array.isArray(config?.workflow) ? config.workflow : [];
+
+  workflowTree.forEach((node) => {
+    const stepConfig = config?.[node.id] || {};
+    if (workflow.includes(node.id)) {
+      analysisState.workflowChecked.add(node.id);
+    }
+    const configuredSubsteps = Array.isArray(stepConfig.workflow) ? stepConfig.workflow : [];
+    node.children.forEach((child) => {
+      if (configuredSubsteps.includes(child.id) && !child.disabled) {
+        analysisState.workflowChecked.add(child.id);
+      }
+      const childConfig = stepConfig[child.id] || {};
+      if (childConfig.tool) {
+        child.detail = `${child.detail}. Tool: ${childConfig.tool}`;
+      }
+    });
+    if (node.id === "variantcalling" && Array.isArray(stepConfig.tools) && stepConfig.tools.length) {
+      node.children = [
+        {
+          id: "short_variants",
+          label: "Short Variants",
+          detail: `SNV and small InDel calling. Tools: ${stepConfig.tools.join(", ")}`,
+        },
+        {id: "cnv_calling", label: "CNV Calling", detail: "Copy-number variant calling module pending", disabled: true},
+        {id: "sv_calling", label: "SV Calling", detail: "Structural variant calling module pending", disabled: true},
+      ];
+      if (workflow.includes(node.id)) {
+        analysisState.workflowChecked.add("short_variants");
+      }
+    }
+    if (node.id === "annotation") {
+      const vepTool = stepConfig.vep_annotation?.tool;
+      if (vepTool) {
+        const vep = node.children.find((child) => child.id === "vep_annotation");
+        if (vep) vep.detail = `Annotate variants with Ensembl VEP. Tool: ${vepTool}`;
+      }
+    }
+  });
 }
 
 function selectedWorkflowSteps() {
@@ -499,45 +671,115 @@ function renderSelectedWorkflow() {
   }
 }
 
-function addCurrentRunToQueue() {
+function analysisPayload() {
+  return {
+    run_id: valueOf("#analysis-run-id"),
+    mode: valueOf("#analysis-workflow"),
+    workdir: valueOf("#analysis-workdir"),
+    gene_panel_design: valueOf("#analysis-gene-panel-design"),
+    tools_path: valueOf("#analysis-tools-file"),
+    pipeline_path: valueOf("#analysis-pipeline-file"),
+    set_workdir_default: checkedOf("#analysis-set-workdir-default"),
+    keep_intermediates: checkedOf("#analysis-keep-intermediates"),
+    execution_profile: valueOf("#analysis-execution-profile") || "local",
+    queue: valueOf("#analysis-slurm-queue"),
+    requested_workflow: selectedWorkflowSteps(),
+    requested_preprocessing_workflow: selectedPreprocessingSubsteps(),
+    requested_postprocessing_workflow: selectedPostprocessingSubsteps(),
+    requested_annotation_workflow: selectedAnnotationSubsteps(),
+    samplesheet_content: analysisState.samplesheetContent,
+  };
+}
+
+async function addCurrentRunToQueue() {
   const status = document.querySelector("#analysis-status");
   const selected = selectedWorkflowSteps();
+  status.textContent = "";
+  if (!analysisState.samplesheetContent) {
+    status.textContent = "Load a samplesheet first";
+    return;
+  }
   if (!selected.length) {
     status.textContent = "Select at least one workflow step";
     return;
   }
   updateDefaultWorkdir();
+  const payload = analysisPayload();
+  renderQueueList();
+  status.textContent = `Validating ${payload.run_id || "unnamed run"}...`;
+  let validation;
+  try {
+    validation = await validateAnalysisRun(payload);
+  } catch (error) {
+    renderQueueList();
+    status.textContent = error.message;
+    renderConsoleText(error.message);
+    return;
+  }
+  if (queueHasDuplicate(payload)) {
+    renderQueueList();
+    status.textContent = "This analysis is already in queue";
+    return;
+  }
   const item = {
     status: "queued",
-    message: `${valueOf("#analysis-run-id") || "unnamed run"} (${selected.join(", ")})`,
+    message: `${validation.run_id || payload.run_id || "unnamed run"} (${selected.join(", ")})`,
+    editable: true,
+    payload,
   };
   analysisState.queueItems.push(item);
-  renderQueueState(analysisState.queueItems);
-  status.textContent = "Run added to queue";
+  renderQueueList();
+  status.textContent = `Run added to queue. Checked ${validation.checked_files} input file${validation.checked_files === 1 ? "" : "s"}.`;
+}
+
+function queueHasDuplicate(payload) {
+  const signature = queueSignature(payload);
+  return analysisState.queueItems.some((item) => item.editable && queueSignature(item.payload) === signature);
+}
+
+function queueSignature(payload) {
+  const relevant = {
+    run_id: payload.run_id,
+    mode: payload.mode,
+    workdir: payload.workdir,
+    gene_panel_design: payload.gene_panel_design,
+    tools_path: payload.tools_path,
+    pipeline_path: payload.pipeline_path,
+    keep_intermediates: payload.keep_intermediates,
+    execution_profile: payload.execution_profile,
+    queue: payload.queue,
+    requested_workflow: payload.requested_workflow,
+    requested_preprocessing_workflow: payload.requested_preprocessing_workflow,
+    requested_postprocessing_workflow: payload.requested_postprocessing_workflow,
+    requested_annotation_workflow: payload.requested_annotation_workflow,
+    samplesheet_content: payload.samplesheet_content,
+  };
+  return JSON.stringify(relevant);
 }
 
 function renderResult(result) {
   document.querySelector("#analysis-status").textContent = result.message;
-  const queueItems = [
+  const runDetails = [
     {status: result.status, message: result.run_id},
     {status: "manifest", message: result.manifest},
     {status: "run config", message: result.run_config},
   ];
-  if (result.pid) queueItems.push({status: "pid", message: String(result.pid)});
-  if (result.execution_profile) queueItems.push({status: "profile", message: result.execution_profile});
-  if (result.queue) queueItems.push({status: "queue", message: result.queue});
-  if (result.gene_panel_design) queueItems.push({status: "design", message: result.gene_panel_design});
-  if (result.tools_path) queueItems.push({status: "tools", message: result.tools_path});
-  queueItems.push({status: "intermediates", message: result.keep_intermediates ? "kept" : "discarded"});
-  if (result.work_dir) queueItems.push({status: "work dir", message: result.work_dir});
-  if (result.nextflow_log) queueItems.push({status: "nextflow log", message: result.nextflow_log});
-  if (result.nextflow_trace) queueItems.push({status: "nextflow trace", message: result.nextflow_trace});
-  if (result.workflow_plan) queueItems.push({status: "workflow plan", message: result.workflow_plan});
-  if (result.pid_file) queueItems.push({status: "pid file", message: result.pid_file});
-  if (result.command_file) queueItems.push({status: "command file", message: result.command_file});
-  if (result.command) queueItems.push({status: "command", message: result.command});
-  if (result.logs && result.logs.step) queueItems.push({status: "step log", message: result.logs.step});
-  renderQueueState(queueItems);
+  if (result.pid) runDetails.push({status: "pid", message: String(result.pid)});
+  if (result.execution_profile) runDetails.push({status: "profile", message: result.execution_profile});
+  if (result.queue) runDetails.push({status: "queue", message: result.queue});
+  if (result.gene_panel_design) runDetails.push({status: "design", message: result.gene_panel_design});
+  if (result.tools_path) runDetails.push({status: "tools", message: result.tools_path});
+  runDetails.push({status: "intermediates", message: result.keep_intermediates ? "kept" : "discarded"});
+  if (result.work_dir) runDetails.push({status: "work dir", message: result.work_dir});
+  if (result.nextflow_log) runDetails.push({status: "nextflow log", message: result.nextflow_log});
+  if (result.nextflow_trace) runDetails.push({status: "nextflow trace", message: result.nextflow_trace});
+  if (result.workflow_plan) runDetails.push({status: "workflow plan", message: result.workflow_plan});
+  if (result.pid_file) runDetails.push({status: "pid file", message: result.pid_file});
+  if (result.command_file) runDetails.push({status: "command file", message: result.command_file});
+  if (result.command) runDetails.push({status: "command", message: result.command});
+  if (result.logs && result.logs.step) runDetails.push({status: "step log", message: result.logs.step});
+  renderQueueList();
+  renderConsoleText(runDetails.map((item) => `${item.status}: ${item.message}`).join("\n"));
   renderOutputList(result.outputs || [], result.logs ? result.logs.samples || [] : []);
 }
 
@@ -617,20 +859,61 @@ function renderConsoleText(text) {
 function renderAnalysisQueue(items) {
   const queue = document.querySelector("#analysis-queue-list");
   queue.replaceChildren();
-  items.forEach((item) => {
+  items.forEach((item, index) => {
     const li = document.createElement("li");
+    if (item.editable) li.className = "queue-editable-item";
     const status = document.createElement("strong");
     status.textContent = item.status;
     const message = document.createElement("span");
     message.textContent = ` ${item.message}`;
     li.appendChild(status);
     li.appendChild(message);
+    if (item.editable) {
+      li.appendChild(queueActions(index));
+    }
     queue.appendChild(li);
   });
 }
 
 function renderQueueState(items) {
   renderAnalysisQueue(items);
+}
+
+function renderQueueList() {
+  renderQueueState(analysisState.queueItems.length ? analysisState.queueItems : [{status: "idle", message: "No analysis queued"}]);
+}
+
+function queueActions(index) {
+  const actions = document.createElement("span");
+  actions.className = "queue-actions";
+  actions.append(
+    queueActionButton("Up", () => moveQueueItem(index, -1), index === 0),
+    queueActionButton("Down", () => moveQueueItem(index, 1), index === analysisState.queueItems.length - 1),
+    queueActionButton("Remove", () => removeQueueItem(index), false),
+  );
+  return actions;
+}
+
+function queueActionButton(label, callback, disabled) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.disabled = disabled;
+  button.addEventListener("click", callback);
+  return button;
+}
+
+function moveQueueItem(index, direction) {
+  const target = index + direction;
+  if (target < 0 || target >= analysisState.queueItems.length) return;
+  const [item] = analysisState.queueItems.splice(index, 1);
+  analysisState.queueItems.splice(target, 0, item);
+  renderQueueList();
+}
+
+function removeQueueItem(index) {
+  analysisState.queueItems.splice(index, 1);
+  renderQueueList();
 }
 
 function renderOutputList(outputs, logs) {

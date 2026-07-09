@@ -5,6 +5,8 @@ process ANNOTATE_VARIANTS {
     tag "${sample_name}"
     cpus { ann_threads }
     memory { ann_ram }
+    container { vep_container ?: null }
+    containerOptions { vep_container ? '--memory-swap=-1' : '' }
     publishDir "${params.outdir}/ANNOTATION", mode: 'copy', pattern: '*.annotated.vcf'
     publishDir "${params.outdir}/ANNOTATION", mode: 'copy', pattern: '*.annotated.tsv'
     publishDir "${params.outdir}/LOGS/ANNOTATION/samples", mode: 'copy', pattern: '*.annotation.log'
@@ -16,7 +18,10 @@ process ANNOTATE_VARIANTS {
     val ann_ram
     val operations
     val vep_path
+    val vep_container
+    val vep_cache_dir
     val vep_args
+    val reference_fasta
     val target_bed
     val gene_list
     val transcripts_list
@@ -28,6 +33,8 @@ process ANNOTATE_VARIANTS {
     script:
     def do_vep = operations.contains('vep_annotation') && vep_path
     def do_tsv = operations.contains('ann_vcf_to_tsv')
+    def vep_cache_args = vep_cache_dir ? "--dir_cache ${vep_cache_dir} --dir_plugins ${vep_cache_dir}/Plugins" : ''
+    def fasta_arg = reference_fasta ? "--fasta ${reference_fasta}" : ''
     """
     set +e
     {
@@ -38,6 +45,10 @@ process ANNOTATE_VARIANTS {
         echo "threads=${task.cpus}"
         echo "operations=${operations.join(',')}"
         echo "input_vcf=${input_vcf}"
+        echo "tool=${vep_path}"
+        echo "container=${vep_container}"
+        echo "cache_dir=${vep_cache_dir}"
+        echo "reference=${reference_fasta}"
         echo "target_bed=${target_bed}"
         echo "gene_list=${gene_list}"
         echo "transcripts_list=${transcripts_list}"
@@ -50,9 +61,13 @@ process ANNOTATE_VARIANTS {
 
     if [ "${do_vep}" = "true" ]; then
         echo "===== vep_annotation =====" >> ${sample_name}.annotation.log
-        echo "command=${vep_path} --input_file \${current_vcf} --output_file ${sample_name}.annotated.vcf --vcf --force_overwrite --fork ${task.cpus} ${vep_args}" >> ${sample_name}.annotation.log
-        ${vep_path} --input_file "\${current_vcf}" --output_file "${sample_name}.annotated.vcf" --vcf --force_overwrite --fork ${task.cpus} ${vep_args} >> ${sample_name}.annotation.log 2>&1
+        echo "command=${vep_path} ${vep_cache_args} --quiet --input_file \${current_vcf} --output_file ${sample_name}.annotated.vcf --warning_file ${sample_name}.vep.warnings.log ${fasta_arg} --vcf --force_overwrite --fork ${task.cpus} ${vep_args}" >> ${sample_name}.annotation.log
+        ${vep_path} ${vep_cache_args} --quiet --input_file "\${current_vcf}" --output_file "${sample_name}.annotated.vcf" --warning_file "${sample_name}.vep.warnings.log" ${fasta_arg} --vcf --force_overwrite --fork ${task.cpus} ${vep_args} >> ${sample_name}.annotation.log 2>&1
         exit_code=\$?
+        if [ -s "${sample_name}.vep.warnings.log" ]; then
+            echo "===== vep_warnings =====" >> ${sample_name}.annotation.log
+            cat "${sample_name}.vep.warnings.log" >> ${sample_name}.annotation.log
+        fi
         if [ "\${exit_code}" -eq 0 ]; then current_vcf="${sample_name}.annotated.vcf"; fi
     else
         echo "No VEP annotation requested; copying input VCF" >> ${sample_name}.annotation.log
@@ -81,7 +96,7 @@ process ANNOTATE_VARIANTS {
     fi
     printf "step\\ttool\\tsample_id\\trole\\tsample_name\\tstatus\\texit_code\\tstarted\\tcompleted\\n" > ${sample_name}.annotation.status.tsv
     printf "annotation\\tVARIANT_ANNOTATION\\t${sample_id}\\t${role}\\t${sample_name}\\t\${status}\\t\${exit_code}\\t\${started_at}\\t\${completed_at}\\n" >> ${sample_name}.annotation.status.tsv
-    exit 0
+    exit \${exit_code}
     """
 }
 
@@ -153,7 +168,10 @@ workflow ANNOTATION {
     ann_ram = ann_cfg.ram ?: '2 GB'
     vep_cfg = ann_cfg.vep_annotation ?: [:]
     vep_tool_name = vep_cfg.tool ?: 'VEP v.95'
-    vep_path = resolved_cfg.vep_annotation?.path ?: tools_config[vep_tool_name]?.path ?: ''
+    vep_runtime_cfg = tools_config[vep_tool_name] ?: [:]
+    vep_container = (vep_runtime_cfg.container instanceof Map ? vep_runtime_cfg.container.image : vep_runtime_cfg.container) ?: resolved_cfg.vep_annotation?.container?.image ?: ''
+    vep_path = vep_container ? (vep_runtime_cfg.path ?: resolved_cfg.vep_annotation?.path ?: 'vep') : (resolved_cfg.vep_annotation?.path ?: vep_runtime_cfg.path ?: '')
+    vep_cache_dir = vep_runtime_cfg.cache_dir ?: resolved_cfg.vep_annotation?.cache_dir ?: ''
     vep_tool_cfg = vep_cfg[vep_tool_name] ?: [:]
     vep_args = vep_tool_cfg.resolved_args ?: ((vep_tool_cfg.args instanceof List ? vep_tool_cfg.args : vep_cfg.args ?: []).join(' '))
     panel_design = run_config.panel_design ?: [:]
@@ -166,7 +184,9 @@ workflow ANNOTATION {
         .combine(infra_ready)
         .map { sample_id, role, sample_name, vcf, ready -> tuple(sample_id, role, sample_name, vcf) }
 
-    ANNOTATE_VARIANTS(ready_variants, ann_threads, ann_ram, operations, vep_path, vep_args, target_bed, gene_list, transcripts_list)
+    reference_fasta = run_config.reference_fasta ?: tools_config[pipeline_config.reference_version ?: run_config.reference_version]?.fasta ?: ''
+
+    ANNOTATE_VARIANTS(ready_variants, ann_threads, ann_ram, operations, vep_path, vep_container, vep_cache_dir, vep_args, reference_fasta, target_bed, gene_list, transcripts_list)
     status_files = ANNOTATE_VARIANTS.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
     ANNOTATION_STEP_LOG(status_files)
     ANNOTATION_ASSERT_SUCCESS(status_files, ANNOTATION_STEP_LOG.out.log)

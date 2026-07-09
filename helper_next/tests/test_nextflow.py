@@ -336,6 +336,76 @@ def test_validate_nextflow_inputs_accepts_gatk_variantcalling_from_bam():
     assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="variantcalling") is True
 
 
+def test_validate_nextflow_inputs_accepts_case_control_variantcalling_from_bam():
+    samplesheet = {
+        "sample_list": ["PAIR1"],
+        "sample_organization": "case-control",
+        "variantcalling": {
+            "PAIR1": {
+                "case": {"sample_name": "TUMOR", "bam": "/data/tumor.bam"},
+                "control": {"sample_name": "NORMAL", "bam": "/data/normal.bam"},
+            }
+        },
+    }
+    pipeline = {
+        "analysis": "Germline",
+        "reference_version": "hg19",
+        "workflow": ["variantcalling"],
+        "variantcalling": {
+            "tools": ["GATK v.4.1"],
+            "threads": "2",
+            "ram": "8g",
+            "filters": {},
+            "GATK v.4.1": {"args": []},
+            "samples_org": "single-sample",
+        },
+    }
+    tools = {"hg19": {"fasta": "/refs/hg19.fa"}, "GATK v.4.1": {"path": "gatk"}}
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="variantcalling") is True
+    rows = manifest_rows(samplesheet, "variantcalling")
+    assert [(row["sample_id"], row["role"], row["sample_name"]) for row in rows] == [
+        ("PAIR1", "case", "TUMOR"),
+        ("PAIR1", "control", "NORMAL"),
+    ]
+
+
+def test_validate_nextflow_inputs_accepts_trio_variantcalling_from_bam():
+    samplesheet = {
+        "sample_list": ["FAM1"],
+        "sample_organization": "trio",
+        "variantcalling": {
+            "FAM1": {
+                "case": {"sample_name": "CHILD", "bam": "/data/child.bam"},
+                "parent1": {"sample_name": "MOTHER", "bam": "/data/mother.bam"},
+                "parent2": {"sample_name": "FATHER", "bam": "/data/father.bam"},
+            }
+        },
+    }
+    pipeline = {
+        "analysis": "Germline",
+        "reference_version": "hg19",
+        "workflow": ["variantcalling"],
+        "variantcalling": {
+            "tools": ["GATK v.4.1"],
+            "threads": "2",
+            "ram": "8g",
+            "filters": {},
+            "GATK v.4.1": {"args": []},
+            "samples_org": "cohort",
+        },
+    }
+    tools = {"hg19": {"fasta": "/refs/hg19.fa"}, "GATK v.4.1": {"path": "gatk"}}
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="variantcalling") is True
+    rows = manifest_rows(samplesheet, "variantcalling")
+    assert [(row["sample_id"], row["role"], row["sample_name"]) for row in rows] == [
+        ("FAM1", "case", "CHILD"),
+        ("FAM1", "parent1", "MOTHER"),
+        ("FAM1", "parent2", "FATHER"),
+    ]
+
+
 def test_validate_nextflow_inputs_accepts_postprocessing_from_vcf():
     samplesheet = {
         "sample_list": ["S1"],

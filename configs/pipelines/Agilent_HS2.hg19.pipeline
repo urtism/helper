@@ -141,7 +141,8 @@
     "variantcalling": {
         "tools": [
             "FREEBAYES v.1.1",
-            "GATK v.4.3"
+            "GATK v.4.3",
+            "DeepVariant v.1.10.0"
         ],
         "threads": "6",
         "ram": "",
@@ -160,6 +161,10 @@
         "samples_org": "cohort",
         "GATK v.4.5": {
             "args": []
+        },
+        "DeepVariant v.1.10.0": {
+            "args": [],
+            "model_type": "WES"
         }
     },
     "cnvcalling": {
@@ -228,7 +233,7 @@
     "variant_annotation": {
         "tool": "VEP v.113",
         "threads": "2",
-        "ram": "1g",
+        "ram": "12g",
         "VEP v.113": {
             "args": {
                 "args": [
@@ -320,7 +325,7 @@
     "cnv_annotation": {
         "tool": "VEP v.95",
         "threads": "2",
-        "ram": "1g",
+        "ram": "8g",
         "VEP v.95": {
             "args": []
         }

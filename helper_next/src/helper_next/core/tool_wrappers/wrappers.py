@@ -270,6 +270,86 @@ class Gatk4HaplotypeCallerWrapper(ToolWrapper):
         return [ToolOutput("gvcf", "{sample_name}.g.vcf")]
 
 
+class DeepVariantWrapper(ToolWrapper):
+    default_operation = "caller"
+
+    def command_args(self, operation):
+        target = self.operation_config.get("target_intervals") or self.panel_assets().get("target_bed")
+        model_type = self.operation_config.get("model_type", "WES")
+        args = [
+            "--model_type={}".format(model_type),
+            "--ref",
+            self.reference_fasta(),
+            "--reads",
+            "{bam}",
+            "--output_vcf",
+            "{sample_name}.DeepVariant.vcf",
+            "--output_gvcf",
+            "{sample_name}.DeepVariant.g.vcf",
+        ]
+        if target:
+            args.extend(["--regions", str(target)])
+        args.extend(config_args(self.operation_config))
+        return args
+
+    def inputs(self, operation):
+        return [
+            ToolInput("bam", "{bam}"),
+            ToolInput("reference_fasta", self.reference_fasta()),
+            ToolInput("target_intervals", str(self.operation_config.get("target_intervals") or self.panel_assets().get("target_bed", "")), optional=True),
+        ]
+
+    def outputs(self, operation):
+        return [
+            ToolOutput("vcf", "{sample_name}.DeepVariant.vcf"),
+            ToolOutput("gvcf", "{sample_name}.DeepVariant.g.vcf"),
+        ]
+
+
+class FreeBayesWrapper(ToolWrapper):
+    default_operation = "caller"
+
+    def command_args(self, operation):
+        target = self.operation_config.get("target_intervals") or self.panel_assets().get("target_bed")
+        args = [
+            "-f",
+            self.reference_fasta(),
+            "-v",
+            "{sample_name}.Freebayes.vcf",
+            "--pooled-discrete",
+            "--pooled-continuous",
+            "--genotype-qualities",
+            "--report-genotype-likelihood-max",
+            "--allele-balance-priors-off",
+            "-b",
+            "{bam}",
+        ]
+        filters = self.operation_config.get("filters", {})
+        if isinstance(filters, dict):
+            if filters.get("min_base_quality_score"):
+                args.extend(["--min-base-quality", str(filters["min_base_quality_score"])])
+            if filters.get("min_alt_coverage"):
+                args.extend(["--min-alternate-count", str(filters["min_alt_coverage"])])
+            if filters.get("min_alt_freq"):
+                args.extend(["--min-alternate-fraction", str(filters["min_alt_freq"])])
+            if filters.get("min_mapping_quality_score"):
+                args.extend(["--min-mapping-quality", str(filters["min_mapping_quality_score"])])
+        if target:
+            args.extend(["-t", str(target)])
+        args.extend(config_args(self.operation_config))
+        return args
+
+    def inputs(self, operation):
+        return [
+            ToolInput("bam", "{bam}"),
+            ToolInput("reference_fasta", self.reference_fasta()),
+            ToolInput("target_intervals", str(self.operation_config.get("target_intervals") or self.panel_assets().get("target_bed", "")), optional=True),
+        ]
+
+    def outputs(self, operation):
+        return [ToolOutput("vcf", "{sample_name}.Freebayes.vcf")]
+
+
 class BcftoolsNormWrapper(ToolWrapper):
     default_operation = "vcf_norm"
 

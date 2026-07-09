@@ -4,7 +4,19 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from helper_next.api.analysis import FakeRunRequest, real_run, resolve_tools_path, run_status, test_run as run_fake_analysis
+from helper_next.api.analysis import (
+    FakeRunRequest,
+    nextflow_environment,
+    normalize_pipeline_for_nextflow,
+    real_run,
+    resolve_pipeline_config,
+    resolve_tools_path,
+    run_status,
+    StopRunRequest,
+    stop_run,
+    test_run as run_fake_analysis,
+    validate_run,
+)
 from helper_next.core.project import ProjectPaths
 
 
@@ -85,6 +97,277 @@ def test_real_analysis_reports_missing_nextflow(monkeypatch, tmp_path):
 
     assert exc.value.status_code == 400
     assert "Nextflow is not installed" in exc.value.detail
+
+
+def test_stop_analysis_sends_sigterm_to_process_group(monkeypatch, tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "nextflow.pid").write_text("12345\n")
+    killed = []
+
+    monkeypatch.setattr("helper_next.api.analysis.is_pid_running", lambda pid: True)
+    monkeypatch.setattr("helper_next.api.analysis.os.killpg", lambda pid, sig: killed.append((pid, sig)))
+
+    result = stop_run(StopRunRequest(run_dir=str(run_dir)))
+
+    assert result["status"] == "stopping"
+    assert result["pid"] == 12345
+    assert killed == [(12345, 15)]
+    assert (run_dir / "analysis.stop.requested").exists()
+
+
+def test_validate_analysis_rejects_missing_samplesheet_file(tmp_path):
+    samplesheet = """
+    {
+      "sample_list": ["S1"],
+      "sample_organization": "only cases",
+      "prealignment": {
+        "S1": {
+          "case": {
+            "sample_name": "S1",
+            "fastq_R1": "/missing/S1_R1.fastq.gz",
+            "fastq_R2": "/missing/S1_R2.fastq.gz",
+            "fastq_I2": ""
+          }
+        }
+      }
+    }
+    """
+
+    with pytest.raises(HTTPException) as exc:
+        validate_run(
+            FakeRunRequest(
+                run_id="queued",
+                mode="fake_alignment",
+                samplesheet_content=samplesheet,
+                workdir=str(tmp_path),
+                gene_panel_design="panel",
+                pipeline_path="pipeline",
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert "samplesheet file not found: /missing/S1_R1.fastq.gz" in exc.value.detail
+
+
+def test_validate_analysis_accepts_reachable_samplesheet_files(tmp_path):
+    r1 = tmp_path / "S1_R1.fastq.gz"
+    r2 = tmp_path / "S1_R2.fastq.gz"
+    r1.write_text("")
+    r2.write_text("")
+    samplesheet = """
+    {{
+      "sample_list": ["S1"],
+      "sample_organization": "only cases",
+      "prealignment": {{
+        "S1": {{
+          "case": {{
+            "sample_name": "S1",
+            "fastq_R1": "{r1}",
+            "fastq_R2": "{r2}",
+            "fastq_I2": ""
+          }}
+        }}
+      }}
+    }}
+    """.format(r1=r1, r2=r2)
+
+    result = validate_run(
+        FakeRunRequest(
+            run_id="queued",
+            mode="fake_alignment",
+            samplesheet_content=samplesheet,
+            workdir=str(tmp_path),
+            gene_panel_design="panel",
+            pipeline_path="pipeline",
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["checked_files"] == 2
+    assert result["entry_step"] == "prealignment"
+
+
+def test_validate_analysis_requires_panel_and_pipeline(tmp_path):
+    with pytest.raises(HTTPException) as exc:
+        validate_run(
+            FakeRunRequest(
+                run_id="queued",
+                mode="fake_alignment",
+                samplesheet_content="S1\t/missing/S1_R1.fastq.gz\t/missing/S1_R2.fastq.gz\n",
+                workdir=str(tmp_path),
+            )
+        )
+
+    assert "Gene panel/design is required" in exc.value.detail
+    assert "Pipeline config is required" in exc.value.detail
+
+
+def test_nextflow_environment_exports_separate_gatk_java(monkeypatch, tmp_path):
+    nextflow_java = tmp_path / "java-21"
+    gatk_java = tmp_path / "java-8"
+    (nextflow_java / "bin").mkdir(parents=True)
+    (gatk_java / "bin").mkdir(parents=True)
+    (nextflow_java / "bin" / "java").write_text("")
+    (gatk_java / "bin" / "java").write_text("")
+    monkeypatch.setattr("helper_next.api.analysis.compatible_java_home", lambda: nextflow_java)
+    monkeypatch.setattr("helper_next.api.analysis.compatible_gatk_java_home", lambda: gatk_java)
+
+    env = nextflow_environment()
+
+    assert env["JAVA_HOME"] == str(nextflow_java)
+    assert env["GATK_JAVA_HOME"] == str(gatk_java)
+    assert env["GATK_JAVA_CMD"] == str(gatk_java / "bin" / "java")
+
+
+def test_normalize_pipeline_maps_legacy_variant_annotation_to_annotation():
+    pipeline = {
+        "workflow": ["prealignment", "variant_annotation", "cnvcalling"],
+        "variant_annotation": {
+            "tool": "VEP v.95",
+            "threads": "3",
+            "ram": "5g",
+            "VEP v.95": {"args": {"args": ["--cache"]}},
+        },
+    }
+
+    normalized = normalize_pipeline_for_nextflow(pipeline)
+
+    assert normalized["workflow"] == ["prealignment", "annotation"]
+    assert normalized["annotation"]["workflow"] == ["vep_annotation", "ann_vcf_to_tsv"]
+    assert normalized["annotation"]["vep_annotation"]["tool"] == "VEP v.95"
+    assert normalized["annotation"]["vep_annotation"]["VEP v.95"]["args"]["args"] == ["--cache"]
+
+
+def test_normalize_pipeline_keeps_only_supported_gatk_variantcaller():
+    pipeline = {
+        "workflow": ["variantcalling"],
+        "variantcalling": {
+            "tools": ["FREEBAYES v.1.1", "GATK v.4.3", "VARSCAN2"],
+            "threads": "2",
+            "ram": "4g",
+            "filters": {},
+            "GATK v.4.3": {"args": []},
+        },
+    }
+
+    normalized = normalize_pipeline_for_nextflow(pipeline)
+
+    assert normalized["workflow"] == ["variantcalling"]
+    assert normalized["variantcalling"]["tools"] == ["GATK v.4.3"]
+
+
+def test_normalize_pipeline_keeps_supported_deepvariant_caller():
+    pipeline = {
+        "workflow": ["variantcalling"],
+        "variantcalling": {
+            "tools": ["FREEBAYES v.1.1", "DeepVariant v.1.10.0"],
+            "threads": "4",
+            "ram": "16g",
+            "filters": {},
+            "DeepVariant v.1.10.0": {"args": ["--vcf_stats_report=true"], "model_type": "WES"},
+        },
+    }
+
+    normalized = normalize_pipeline_for_nextflow(pipeline)
+
+    assert normalized["workflow"] == ["variantcalling"]
+    assert normalized["variantcalling"]["tools"] == ["DeepVariant v.1.10.0"]
+
+
+def test_normalize_pipeline_keeps_supported_freebayes_caller():
+    pipeline = {
+        "workflow": ["variantcalling"],
+        "variantcalling": {
+            "tools": ["FREEBAYES v.1.1"],
+            "threads": "4",
+            "ram": "8g",
+            "filters": {},
+            "FREEBAYES v.1.1": {"args": ["--use-best-n-alleles", "4"]},
+        },
+    }
+
+    normalized = normalize_pipeline_for_nextflow(pipeline)
+
+    assert normalized["workflow"] == ["variantcalling"]
+    assert normalized["variantcalling"]["tools"] == ["FREEBAYES v.1.1"]
+
+
+def test_normalize_pipeline_drops_variantcalling_when_no_supported_caller():
+    pipeline = {
+        "workflow": ["variantcalling", "postprocessing"],
+        "variantcalling": {"tools": ["VARSCAN2"], "threads": "2", "ram": "4g", "filters": {}},
+        "postprocessing": {"workflow": ["vcf_to_tsv"], "threads": "1", "ram": "1g"},
+    }
+
+    normalized = normalize_pipeline_for_nextflow(pipeline)
+
+    assert normalized["workflow"] == ["postprocessing"]
+    assert normalized["variantcalling"]["tools"] == []
+
+
+def test_normalize_legacy_pipeline_fills_supported_step_defaults():
+    pipeline = {
+        "workflow": ["prealignment", "variantcalling"],
+        "prealignment": {
+            "workflow": ["trim_adapters"],
+            "threads": "1",
+            "ram": "1g",
+            "fastq_QC": {"tool": "FASTQC v.0.11.8", "FASTQC v.0.11.8": {"args": []}},
+        },
+        "variantcalling": {
+            "tools": ["GATK v.4.3"],
+            "threads": "2",
+            "ram": "",
+            "filters": {},
+            "GATK v.4.3": {"args": []},
+        },
+    }
+
+    normalized = normalize_pipeline_for_nextflow(pipeline)
+
+    assert normalized["prealignment"]["workflow"] == ["fastq_QC"]
+    assert normalized["variantcalling"]["ram"] == "8g"
+
+
+def test_resolve_pipeline_config_reconciles_legacy_database_names(tmp_path):
+    pipelines = tmp_path / "pipelines"
+    pipelines.mkdir()
+    pipeline_path = pipelines / "legacy.pipeline"
+    pipeline_path.write_text(
+        json.dumps(
+            {
+                "workflow": ["preprocessing"],
+                "reference_version": "hg19",
+                "preprocessing": {
+                    "workflow": ["BQ_recalibration"],
+                    "threads": "2",
+                    "ram": "4g",
+                    "BQ_recalibration": {
+                        "tool": "GATK v.3.7",
+                        "GATK v.3.7": {"args": [], "dbsnp": "DBSNP v.138", "mills": "MILLS"},
+                    },
+                },
+            }
+        )
+    )
+
+    resolved = resolve_pipeline_config(
+        "legacy.pipeline",
+        pipelines,
+        "BWA v.0.7.17",
+        "preprocessing",
+        ["preprocessing"],
+        "preprocessing",
+        ["BQ_recalibration"],
+        [],
+        [],
+        {"dbsnp": {"path": "dbsnp.vcf"}, "mills": {"path": "mills.vcf"}},
+    )
+
+    tool_cfg = resolved["preprocessing"]["BQ_recalibration"]["GATK v.3.7"]
+    assert tool_cfg["dbsnp"] == "dbsnp"
+    assert tool_cfg["mills"] == "mills"
 
 
 def test_run_status_stays_running_when_samples_are_unfinished(monkeypatch, tmp_path):
@@ -364,7 +647,183 @@ def test_real_analysis_default_prealignment_run_uses_full_stable_slice(monkeypat
     assert run_config["workflow"] == ["prealignment", "alignment", "preprocessing"]
     assert pipeline_config["workflow"] == ["prealignment", "alignment", "preprocessing"]
     assert "--keep_intermediates false" in result["command"]
+    assert "-resume" not in result["command"].split()
     assert popen_calls[0]["args"][0][0] == "/usr/bin/nextflow"
+    assert popen_calls[0]["kwargs"]["cwd"] == str(tmp_path / "default_slice")
+
+
+def test_real_analysis_resumes_existing_run_workdir(monkeypatch, tmp_path):
+    samplesheet = """
+    {
+      "sample_list": ["S1"],
+      "sample_organization": "only cases",
+      "preprocessing": {
+        "S1": {
+          "case": {
+            "sample_name": "S1",
+            "bam": "/data/S1.bam"
+          }
+        }
+      }
+    }
+    """
+
+    class FakeProcess:
+        pid = 12345
+
+    run_dir = tmp_path / "resume_me"
+    cached_task = run_dir / "work" / "aa" / "cached-task"
+    cached_task.mkdir(parents=True)
+    (cached_task / ".exitcode").write_text("0\n")
+
+    popen_calls = []
+
+    monkeypatch.setattr("helper_next.api.analysis.shutil.which", lambda name: "/usr/bin/nextflow")
+    monkeypatch.setattr(
+        "helper_next.api.analysis.load_json",
+        lambda path: {
+            "hg19": {"fasta": "/refs/hg19.fa"},
+            "BWA v.0.7.17": {"path": "bwa"},
+            "PICARD v.2.7.1": {"path": "/tools/picard.jar"},
+            "SAMTOOLS": {"path": "samtools"},
+        },
+    )
+
+    def fake_popen(*args, **kwargs):
+        popen_calls.append({"args": args, "kwargs": kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr("helper_next.api.analysis.subprocess.Popen", fake_popen)
+
+    result = real_run(
+        FakeRunRequest(
+            run_id="resume_me",
+            samplesheet_content=samplesheet,
+            workdir=str(tmp_path),
+        )
+    )
+
+    assert result["resume"] is True
+    assert "-resume" in result["command"].split()
+    assert "-resume" in popen_calls[0]["args"][0]
+    assert popen_calls[0]["kwargs"]["cwd"] == str(run_dir)
+    assert "CWD={}".format(run_dir) in Path(result["command_file"]).read_text()
+    assert "-resume" in Path(result["command_file"]).read_text().split()
+
+
+def test_real_analysis_rejects_run_when_existing_pid_is_running(monkeypatch, tmp_path):
+    samplesheet = """
+    {
+      "sample_list": ["S1"],
+      "sample_organization": "only cases",
+      "preprocessing": {
+        "S1": {
+          "case": {
+            "sample_name": "S1",
+            "bam": "/data/S1.bam"
+          }
+        }
+      }
+    }
+    """
+
+    run_dir = tmp_path / "already_running"
+    run_dir.mkdir()
+    (run_dir / "nextflow.pid").write_text("12345\n")
+
+    monkeypatch.setattr("helper_next.api.analysis.shutil.which", lambda name: "/usr/bin/nextflow")
+    monkeypatch.setattr("helper_next.api.analysis.is_pid_running", lambda pid: pid == 12345)
+    monkeypatch.setattr(
+        "helper_next.api.analysis.load_json",
+        lambda path: {
+            "hg19": {"fasta": "/refs/hg19.fa"},
+            "BWA v.0.7.17": {"path": "bwa"},
+            "PICARD v.2.7.1": {"path": "/tools/picard.jar"},
+            "SAMTOOLS": {"path": "samtools"},
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        real_run(
+            FakeRunRequest(
+                run_id="already_running",
+                samplesheet_content=samplesheet,
+                workdir=str(tmp_path),
+            )
+        )
+
+    assert exc.value.status_code == 409
+    assert "already running" in exc.value.detail
+
+
+def test_real_analysis_reuses_previous_repo_cache_and_clears_stale_lock(monkeypatch, tmp_path):
+    samplesheet = """
+    {
+      "sample_list": ["S1"],
+      "sample_organization": "only cases",
+      "preprocessing": {
+        "S1": {
+          "case": {
+            "sample_name": "S1",
+            "bam": "/data/S1.bam"
+          }
+        }
+      }
+    }
+    """
+
+    class FakeProcess:
+        pid = 12345
+
+    root = tmp_path / "repo"
+    configs = root / "configs"
+    pipelines = configs / "pipelines"
+    configs.mkdir(parents=True)
+    pipelines.mkdir(parents=True)
+    run_dir = tmp_path / "resume_from_old_cache"
+    cached_task = run_dir / "work" / "aa" / "cached-task"
+    cached_task.mkdir(parents=True)
+    (cached_task / ".exitcode").write_text("0\n")
+    session_id = "0313fc95-27f3-4d5c-89ad-6f4230b641c5"
+    (run_dir / "nextflow.log").write_text("Session UUID: {}\n".format(session_id))
+    lock_path = root / ".nextflow" / "cache" / session_id / "db" / "LOCK"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text("")
+    popen_calls = []
+
+    monkeypatch.setattr("helper_next.api.analysis.shutil.which", lambda name: "/usr/bin/nextflow")
+    monkeypatch.setattr(
+        "helper_next.api.analysis.get_project_paths",
+        lambda: ProjectPaths(root=root, configs=configs, pipelines=pipelines, files=root / "files", scripts=root / "scripts"),
+    )
+    monkeypatch.setattr(
+        "helper_next.api.analysis.load_json",
+        lambda path: {
+            "hg19": {"fasta": "/refs/hg19.fa"},
+            "BWA v.0.7.17": {"path": "bwa"},
+            "PICARD v.2.7.1": {"path": "/tools/picard.jar"},
+            "SAMTOOLS": {"path": "samtools"},
+        },
+    )
+
+    def fake_popen(*args, **kwargs):
+        popen_calls.append({"args": args, "kwargs": kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr("helper_next.api.analysis.subprocess.Popen", fake_popen)
+
+    result = real_run(
+        FakeRunRequest(
+            run_id="resume_from_old_cache",
+            samplesheet_content=samplesheet,
+            workdir=str(tmp_path),
+        )
+    )
+
+    assert result["resume"] is True
+    assert result["launch_dir"] == str(root)
+    assert popen_calls[0]["kwargs"]["cwd"] == str(root)
+    assert not lock_path.exists()
 
 
 def test_real_analysis_passes_selected_preprocessing_substeps(monkeypatch, tmp_path):
@@ -424,6 +883,57 @@ def test_real_analysis_passes_selected_preprocessing_substeps(monkeypatch, tmp_p
     assert run_config["steps"][0]["operations"] == pipeline_config["preprocessing"]["workflow"]
 
 
+def test_real_analysis_enables_docker_profile_for_containerized_gatk3(monkeypatch, tmp_path):
+    samplesheet = """
+    {
+      "sample_list": ["S1"],
+      "sample_organization": "only cases",
+      "preprocessing": {
+        "S1": {
+          "case": {
+            "sample_name": "S1",
+            "bam": "/data/S1.bam"
+          }
+        }
+      }
+    }
+    """
+
+    class FakeProcess:
+        pid = 12345
+
+    monkeypatch.setattr("helper_next.api.analysis.shutil.which", lambda name: "/usr/bin/nextflow")
+    monkeypatch.setattr(
+        "helper_next.api.analysis.load_json",
+        lambda path: {
+            "hg19": {"fasta": "/refs/hg19.fa"},
+            "BWA v.0.7.17": {"path": "bwa"},
+            "PICARD v.2.7.1": {"path": "/tools/picard.jar"},
+            "GATK v.3.7": {
+                "path": "/usr/GenomeAnalysisTK.jar",
+                "container": {"engine": "docker", "image": "broadinstitute/gatk3:3.8-1"},
+            },
+            "SAMTOOLS": {"path": "samtools"},
+            "dbsnp": {"path": "/refs/dbsnp.vcf"},
+            "mills": {"path": "/refs/mills.vcf"},
+        },
+    )
+    monkeypatch.setattr("helper_next.api.analysis.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+
+    result = real_run(
+        FakeRunRequest(
+            run_id="preprocessing_gatk3_container",
+            samplesheet_content=samplesheet,
+            workdir=str(tmp_path),
+            requested_preprocessing_workflow=["indel_realignment"],
+        )
+    )
+
+    assert result["execution_profile"] == "local"
+    assert result["nextflow_profile"] == "local,docker"
+    assert "-profile local,docker" in result["command"]
+
+
 def test_real_analysis_can_submit_variantcalling_from_bam(monkeypatch, tmp_path):
     samplesheet = """
     {
@@ -480,6 +990,82 @@ def test_real_analysis_can_submit_variantcalling_from_bam(monkeypatch, tmp_path)
     assert run_config["workflow"] == ["variantcalling"]
     assert pipeline_config["variantcalling"]["tools"] == ["GATK v.4.1"]
     assert popen_calls[0]["args"][0][0] == "/usr/bin/nextflow"
+
+
+def test_real_analysis_uses_selected_pipeline_file(monkeypatch, tmp_path):
+    samplesheet = """
+    {
+      "sample_list": ["S1"],
+      "sample_organization": "only cases",
+      "variantcalling": {
+        "S1": {
+          "case": {
+            "sample_name": "S1",
+            "bam": "/data/S1.bam"
+          }
+        }
+      }
+    }
+    """
+    root = tmp_path / "repo"
+    configs = root / "configs"
+    pipelines = configs / "pipelines"
+    tools_dir = configs / "tools_cfg"
+    pipelines.mkdir(parents=True)
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "tools.cfg").write_text(
+        json.dumps(
+            {
+                "hg19": {"fasta": "/refs/hg19.fa"},
+                "GATK v.4.1": {"path": "/custom/gatk"},
+            }
+        )
+    )
+    (pipelines / "custom.pipeline").write_text(
+        json.dumps(
+            {
+                "analysis": "Custom",
+                "reference_version": "hg19",
+                "workflow": ["variantcalling"],
+                "variantcalling": {
+                    "tools": ["GATK v.4.1"],
+                    "threads": "7",
+                    "ram": "9g",
+                    "filters": {},
+                    "GATK v.4.1": {"args": ["--sample-ploidy", "2"]},
+                },
+            }
+        )
+    )
+
+    class FakeProcess:
+        pid = 12345
+
+    monkeypatch.setattr("helper_next.api.analysis.shutil.which", lambda name: "/usr/bin/nextflow")
+    monkeypatch.setattr(
+        "helper_next.api.analysis.get_project_paths",
+        lambda: ProjectPaths(root=root, configs=configs, pipelines=pipelines, files=root / "files", scripts=root / "scripts"),
+    )
+    monkeypatch.setattr("helper_next.api.analysis.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+
+    result = real_run(
+        FakeRunRequest(
+            run_id="selected_pipeline",
+            samplesheet_content=samplesheet,
+            workdir=str(tmp_path),
+            pipeline_path="custom.pipeline",
+            requested_workflow=["variantcalling"],
+        )
+    )
+
+    with open(Path(result["run_dir"]) / "alignment.pipeline.json") as handle:
+        pipeline_config = json.load(handle)
+
+    assert result["pipeline_path"] == "custom.pipeline"
+    assert pipeline_config["analysis"] == "Custom"
+    assert pipeline_config["variantcalling"]["threads"] == "7"
+    assert pipeline_config["variantcalling"]["resolved"]["caller"]["path"] == "/custom/gatk"
+    assert pipeline_config["variantcalling"]["resolved"]["caller"]["resolved_args"] == "--sample-ploidy 2"
 
 
 def test_real_analysis_can_submit_postprocessing_from_vcf(monkeypatch, tmp_path):
@@ -591,6 +1177,63 @@ def test_real_analysis_can_submit_annotation_from_vcf(monkeypatch, tmp_path):
     assert "--assembly GRCh37 --species homo_sapiens" in resolved_args
     assert "--plugin GeneSplicer,/tools/genesplicer" in resolved_args
     assert "--plugin dbNSFP,/db/dbNSFP.gz" in resolved_args
+
+
+def test_real_analysis_enables_docker_profile_for_containerized_vep(monkeypatch, tmp_path):
+    samplesheet = """
+    {
+      "sample_list": ["S1"],
+      "sample_organization": "only cases",
+      "annotation": {
+        "S1": {
+          "case": {
+            "sample_name": "S1",
+            "merged_vcf": "/data/S1.vcf"
+          }
+        }
+      }
+    }
+    """
+
+    class FakeProcess:
+        pid = 12345
+
+    monkeypatch.setattr("helper_next.api.analysis.shutil.which", lambda name: "/usr/bin/nextflow")
+    monkeypatch.setattr(
+        "helper_next.api.analysis.load_json",
+        lambda path: {
+            "hg19": {"fasta": "/refs/hg19.fa"},
+            "BWA v.0.7.17": {"path": "bwa"},
+            "PICARD v.2.7.1": {"path": "/tools/picard.jar"},
+            "SAMTOOLS": {"path": "samtools"},
+            "VEP v.95": {
+                "path": "vep",
+                "cache_dir": "/home/jarvis/.vep",
+                "container": {"engine": "docker", "image": "ensemblorg/ensembl-vep:latest"},
+            },
+            "GeneSplicer": {"path": "/GeneSplicer/GeneSplicer/sources/genesplicer"},
+            "MaxEntScan": {"path": "/MaxEntScan/fordownload"},
+            "SpliceRegion": {"path": ""},
+            "dbNSFP": {"path": "/dbSNFP/dbNSFP4.0/dbNSFP4.0a_hg19.gz"},
+        },
+    )
+    monkeypatch.setattr("helper_next.api.analysis.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+
+    result = real_run(
+        FakeRunRequest(
+            run_id="annotation_container",
+            samplesheet_content=samplesheet,
+            workdir=str(tmp_path),
+            requested_annotation_workflow=["vep_annotation"],
+        )
+    )
+
+    with open(Path(result["run_dir"]) / "alignment.pipeline.json") as handle:
+        pipeline_config = json.load(handle)
+
+    assert result["nextflow_profile"] == "local,docker"
+    assert "-profile local,docker" in result["command"]
+    assert pipeline_config["resolved_tools"]["annotation"]["vep_annotation"]["container"]["image"] == "ensemblorg/ensembl-vep:latest"
 
 
 def test_real_analysis_rejects_prealignment_to_preprocessing_without_alignment(monkeypatch, tmp_path):

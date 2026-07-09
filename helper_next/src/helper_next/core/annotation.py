@@ -24,7 +24,7 @@ def normalize_vep_annotation_config(annotation_config, tools_config):
 
 def build_vep_args(legacy_args, tools_config):
     if isinstance(legacy_args, list):
-        return [str(item) for item in legacy_args if str(item)]
+        return filter_supported_vep_args([str(item) for item in legacy_args if str(item)])
     if not isinstance(legacy_args, dict):
         return []
 
@@ -41,7 +41,21 @@ def build_vep_args(legacy_args, tools_config):
         args.extend(["--species", species])
 
     args.extend(plugin_args(legacy_args.get("plugins", {}), tools_config))
-    return [str(item) for item in args if str(item)]
+    return filter_supported_vep_args([str(item) for item in args if str(item)])
+
+
+def filter_supported_vep_args(args):
+    unsupported_flags = {"--af_esp"}
+    filtered = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in unsupported_flags:
+            continue
+        filtered.append(arg)
+    return filtered
 
 
 def plugin_args(plugins, tools_config):

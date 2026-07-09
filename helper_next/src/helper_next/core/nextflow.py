@@ -232,7 +232,7 @@ def _validate_step_operations(step, step_config, errors):
         if operation_config and not isinstance(operation_config, dict):
             errors.append("pipeline.{}.{}: expected a JSON object".format(step, operation))
             continue
-        if operation in ("vcf_to_tsv", "ann_vcf_to_tsv"):
+        if operation in ("vcf_filter", "vcf_to_tsv", "ann_vcf_to_tsv"):
             continue
         if operation_config and "tool" in operation_config and not operation_config.get("tool"):
             errors.append("pipeline.{}.{}: missing selected tool".format(step, operation))
@@ -294,7 +294,12 @@ def _validate_preprocessing_databases(step_config, tools_config, errors):
 
 
 def _tool_key_exists(tools_config, key):
-    return key in tools_config or str(key).lower() in tools_config
+    aliases = {
+        "DBSNP v.138": ["DBSNP v.138", "dbsnp", "DBSNP"],
+        "MILLS": ["MILLS", "mills"],
+    }
+    candidates = aliases.get(key, [key])
+    return any(candidate in tools_config or str(candidate).lower() in tools_config for candidate in candidates)
 
 
 def _selected_tools_for_step(step_config):

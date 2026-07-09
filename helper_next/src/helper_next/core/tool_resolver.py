@@ -129,14 +129,21 @@ def resolve_preprocessing(step_config, tools_config, panel_design, reference_inf
 
 
 def resolve_variantcalling(step_config, tools_config, panel_design=None, reference_info=None):
-    tool_name = next((tool for tool in step_config.get("tools", []) if str(tool).upper().startswith("GATK")), "GATK v.4.3")
+    tool_name = next((tool for tool in step_config.get("tools", []) if supported_variantcaller(tool)), "GATK v.4.3")
     operation_cfg = with_step_resources(step_config.get(tool_name, {}), step_config)
+    if isinstance(step_config.get("filters"), dict) and "filters" not in operation_cfg:
+        operation_cfg["filters"] = step_config["filters"]
     panel_assets = panel_design.get("assets", {}) if isinstance(panel_design, dict) else {}
     if panel_assets.get("target_bed") and "target_intervals" not in operation_cfg:
         operation_cfg["target_intervals"] = panel_assets["target_bed"]
     return {
         "caller": operation("caller", tool_name, tool_entry(tools_config, tool_name), operation_cfg, panel_design, reference_info, tools_config),
     }
+
+
+def supported_variantcaller(tool_name):
+    value = str(tool_name).upper()
+    return value.startswith("GATK") or value.startswith("DEEPVARIANT") or value.startswith("FREEBAYES")
 
 
 def resolve_postprocessing(step_config, tools_config, panel_design=None, reference_info=None):
