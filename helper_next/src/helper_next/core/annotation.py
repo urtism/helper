@@ -15,14 +15,17 @@ def normalize_vep_annotation_config(annotation_config, tools_config):
         return annotation_config
 
     legacy_args = tool_cfg.get("args", vep_cfg.get("args", []))
-    resolved = build_vep_args(legacy_args, tools_config)
+    runtime_tool = tools_config.get(tool_name, {})
+    runtime_tool = runtime_tool if isinstance(runtime_tool, dict) else {}
+    containerized = bool(runtime_tool.get("container") or runtime_tool.get("image"))
+    resolved = build_vep_args(legacy_args, tools_config, containerized=containerized)
     tool_cfg["resolved_args"] = shell_join(resolved)
     vep_cfg[tool_name] = tool_cfg
     annotation_config["vep_annotation"] = vep_cfg
     return annotation_config
 
 
-def build_vep_args(legacy_args, tools_config):
+def build_vep_args(legacy_args, tools_config, containerized=False):
     if isinstance(legacy_args, list):
         return filter_supported_vep_args([str(item) for item in legacy_args if str(item)])
     if not isinstance(legacy_args, dict):
@@ -40,7 +43,7 @@ def build_vep_args(legacy_args, tools_config):
     if species:
         args.extend(["--species", species])
 
-    args.extend(plugin_args(legacy_args.get("plugins", {}), tools_config))
+    args.extend(plugin_args(legacy_args.get("plugins", {}), tools_config, containerized=containerized))
     return filter_supported_vep_args([str(item) for item in args if str(item)])
 
 
@@ -58,7 +61,7 @@ def filter_supported_vep_args(args):
     return filtered
 
 
-def plugin_args(plugins, tools_config):
+def plugin_args(plugins, tools_config, containerized=False):
     if not isinstance(plugins, dict):
         return []
 
@@ -71,8 +74,14 @@ def plugin_args(plugins, tools_config):
         if not isinstance(tool_cfg, dict):
             tool_cfg = {}
 
+        path = tool_cfg.get("container_path") if containerized else tool_cfg.get("local_path")
+        path = path or tool_cfg.get("path", "")
+        files = plugin_cfg.get("files", "")
+        if not files:
+            files = tool_cfg.get("container_files") if containerized else tool_cfg.get("local_files")
+            files = files or tool_cfg.get("files", "")
         parts = [plugin]
-        for value in (tool_cfg.get("path", ""), plugin_cfg.get("files", ""), plugin_cfg.get("fields", "")):
+        for value in (path, files, plugin_cfg.get("fields", "")):
             if value:
                 parts.append(str(value))
         args.extend(["--plugin", ",".join(parts)])

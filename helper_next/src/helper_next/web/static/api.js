@@ -21,6 +21,71 @@ export async function getProject() {
   return requestJson("/api/project");
 }
 
+export async function getPipelines() {
+  return requestJson("/api/pipelines");
+}
+
+export async function getPipeline(name) {
+  return requestJson(`/api/pipelines/${encodeURIComponent(name)}`);
+}
+
+export async function newPipelineDraft(template = null) {
+  return requestJson("/api/pipelines/new/draft", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({template}),
+  });
+}
+
+export async function validatePipeline(config) {
+  return requestJson("/api/pipelines/validate/draft", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({config}),
+  });
+}
+
+export async function savePipeline(name, config, overwrite) {
+  return requestJson("/api/pipelines", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({name, config, overwrite}),
+  });
+}
+
+export async function deletePipeline(name) {
+  return requestJson(`/api/pipelines/${encodeURIComponent(name)}`, {method: "DELETE"});
+}
+
+export async function getTools(filename = "tools_cfg/tools.cfg") {
+  const params = new URLSearchParams({filename});
+  return requestJson(`/api/tools?${params.toString()}`);
+}
+
+export async function validateTools(config) {
+  return requestJson("/api/tools/validate/draft", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({config}),
+  });
+}
+
+export async function saveTools(filename, config, revision) {
+  return requestJson("/api/tools", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({filename, config, revision}),
+  });
+}
+
+export async function testTool(resourceType, name, config) {
+  return requestJson("/api/tools/test", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({resource_type: resourceType, name, config}),
+  });
+}
+
 export async function getAnalysisPipeline(path) {
   const params = new URLSearchParams({path});
   return requestJson(`/api/analysis/pipeline-config?${params.toString()}`);
@@ -62,14 +127,6 @@ export async function loadSampleSheet(payload) {
 
 export async function buildSampleSheet(payload) {
   return requestJson("/api/samplesheet/build", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function startFakeAnalysis(payload) {
-  return requestJson("/api/analysis/test-run", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(payload),

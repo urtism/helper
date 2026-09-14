@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Helper Next</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260629-8">
+    <link rel="stylesheet" href="/static/styles.css?v=20260910-4">
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar" aria-label="Helper sections">
+      <aside id="primary-sidebar" class="sidebar" aria-label="Helper sections">
         <div class="brand">
           <span class="brand-mark">H</span>
           <div>
@@ -23,6 +23,7 @@
           <button class="nav-item" type="button" data-section="tools">Tools</button>
           <button class="nav-item" type="button" data-section="panels">Gene Panels</button>
           <button class="nav-item" type="button" data-section="analysis">Analysis</button>
+          <button class="nav-item" type="button" data-section="analysis-history">Analysis History</button>
         </nav>
 
         <div class="repo-status">
@@ -33,21 +34,17 @@
 
       <main class="workspace">
         <header class="topbar">
-          <div>
-            <p class="eyebrow">Helper v1.0 replacement prototype</p>
-            <h2 id="section-title">Compile Sample Sheet</h2>
-          </div>
-          <button id="refresh-project" class="ghost-button" type="button">Refresh</button>
-        </header>
-
-        <section class="module active" id="samplesheet" aria-labelledby="samplesheet-title">
-          <div class="module-header">
+          <div class="topbar-heading">
+            <button id="sidebar-toggle" class="sidebar-toggle ghost-button" type="button" aria-controls="primary-sidebar" aria-expanded="true" aria-label="Hide navigation" title="Hide navigation">
+              <span aria-hidden="true">☰</span>
+            </button>
             <div>
-              <h3 id="samplesheet-title">Compile Sample Sheet</h3>
-              <p>Create or inspect sample sheets from FASTQ, BAM, VCF, or existing `.ss` files.</p>
+              <h2 id="section-title">Compile Sample Sheet</h2>
             </div>
           </div>
+        </header>
 
+        <section class="module active" id="samplesheet" aria-labelledby="section-title">
           <div id="samplesheet-editor" class="samplesheet-editor">
             <article>
               <h4>1. Step and files</h4>
@@ -120,77 +117,198 @@
 
             <article>
               <h4>2. Organize samples</h4>
-              <p class="muted">Map sample IDs to case/control/trio roles before saving.</p>
-              <label>Sample Organization
-                <select id="samplesheet-organization">
-                  <option value="only cases">Only cases</option>
-                  <option value="case-control">Case - Control</option>
-                  <option value="trio">Trios</option>
-                </select>
-              </label>
+              <p class="muted">Choose an analysis and group for each sample, then use Configure to complete its details.</p>
               <div class="table-scroll sample-organization-scroll">
                 <table id="samplesheet-organization-table">
                   <thead id="samplesheet-organization-head"></thead>
                   <tbody id="samplesheet-organization-body"></tbody>
                 </table>
               </div>
+              <p id="samplesheet-organization-status" class="muted" aria-live="polite"></p>
             </article>
 
-            <article>
-              <h4>3. Output JSON</h4>
-              <pre id="samplesheet-json" class="json-preview">{}</pre>
-              <div class="button-row">
-                <button id="samplesheet-download" type="button">Save samplesheet</button>
+            <details class="collapsible-panel">
+              <summary>3. Output JSON</summary>
+              <div class="collapsible-content">
+                <pre id="samplesheet-json" class="json-preview">{}</pre>
               </div>
-            </article>
+            </details>
+            <button id="samplesheet-download" class="primary-action samplesheet-save-action" type="button">Save samplesheet</button>
           </div>
+
+          <div id="samplesheet-analysis-drawer-backdrop" class="analysis-drawer-backdrop" hidden></div>
+          <aside id="samplesheet-analysis-drawer" class="analysis-drawer" aria-hidden="true" aria-labelledby="samplesheet-analysis-drawer-title" hidden>
+            <div class="analysis-drawer-header">
+              <div>
+                <p id="samplesheet-analysis-drawer-kind" class="eyebrow"></p>
+                <h4 id="samplesheet-analysis-drawer-title">Configure analysis</h4>
+              </div>
+              <button id="samplesheet-analysis-drawer-close" class="ghost-button" type="button" aria-label="Close analysis configuration">Close</button>
+            </div>
+            <div id="samplesheet-analysis-drawer-body" class="analysis-drawer-body"></div>
+            <div class="analysis-drawer-footer">
+              <p id="samplesheet-analysis-drawer-status" class="muted"></p>
+              <button id="samplesheet-analysis-drawer-done" type="button">Done</button>
+            </div>
+          </aside>
         </section>
 
         <section class="module" id="pipeline" aria-labelledby="pipeline-title">
           <div class="module-header">
             <div>
               <h3 id="pipeline-title">Add or Edit Pipeline</h3>
-              <p>Browse existing pipeline definitions and prepare the web editor.</p>
+              <p>Create and configure the ordered analysis workflow.</p>
             </div>
-            <button type="button">New Pipeline</button>
+            <div class="button-row">
+              <span id="pipeline-dirty-state" class="save-state">No pipeline loaded</span>
+              <button id="pipeline-new" type="button">New</button>
+              <button id="pipeline-duplicate" type="button">Duplicate</button>
+              <button id="pipeline-delete" class="danger-action" type="button">Delete</button>
+              <button id="pipeline-save" class="primary-action" type="button">Save</button>
+            </div>
           </div>
-          <div class="split">
+          <article class="pipeline-overview">
+            <div class="form-grid pipeline-metadata">
+              <label>Pipeline
+                <select id="pipeline-select"><option value="">Loading pipelines...</option></select>
+              </label>
+              <label>File name<input id="pipeline-name" type="text" autocomplete="off" placeholder="pipeline_name"></label>
+              <label>Analysis
+                <select id="pipeline-analysis"></select>
+              </label>
+              <label>Design
+                <select id="pipeline-design"></select>
+              </label>
+              <label>Reference genome
+                <select id="pipeline-reference"></select>
+              </label>
+            </div>
+          </article>
+          <div id="pipeline-editor" class="pipeline-editor" hidden>
             <article>
-              <h4>Pipelines</h4>
-              <ul class="file-list" id="pipelines"></ul>
-            </article>
-            <article>
-              <h4>Workflow</h4>
-              <div class="workflow-preview">
-                <span>Prealignment</span>
-                <span>Alignment</span>
-                <span>Preprocessing</span>
-                <span>Variant Calling</span>
-                <span>Postprocessing</span>
-                <span>Annotation</span>
+              <div class="pipeline-panel-heading">
+                <div>
+                  <h4>Workflow</h4>
+                  <p class="muted">Enable phases and operations in execution order.</p>
+                </div>
               </div>
+              <div id="pipeline-workflow-tree" class="pipeline-workflow-tree"></div>
+            </article>
+            <article>
+              <div id="pipeline-settings" class="pipeline-settings">
+                <h4>Step configuration</h4>
+                <p class="muted">Select Configure next to a phase or operation.</p>
+              </div>
+              <details class="pipeline-summary-panel" open>
+                <summary>Pipeline summary</summary>
+                <div id="pipeline-summary" class="pipeline-summary"></div>
+              </details>
+              <details class="advanced-options">
+                <summary>JSON preview</summary>
+                <pre id="pipeline-json" class="json-preview"></pre>
+              </details>
             </article>
           </div>
+          <div id="pipeline-status" class="pipeline-status" aria-live="polite"></div>
         </section>
 
         <section class="module" id="tools" aria-labelledby="tools-title">
           <div class="module-header">
             <div>
               <h3 id="tools-title">Tools Settings</h3>
-              <p>Review tool configuration files, references, databases, and execution settings.</p>
+              <p>Manage executable tools, databases, references, and their pipeline capabilities.</p>
             </div>
-            <button type="button">Add Tool</button>
+            <div class="tools-header-actions">
+              <span class="save-state" id="tools-save-state">No configuration loaded</span>
+              <button type="button" id="tools-discard" disabled>Discard</button>
+              <button type="button" class="primary-action" id="tools-save" disabled>Save configuration</button>
+            </div>
           </div>
-          <div class="split">
-            <article>
-              <h4>Configuration Files</h4>
-              <ul class="file-list" id="tool-configs"></ul>
+          <article class="tools-toolbar">
+            <label>Configuration
+              <select id="tools-config-file"><option value="">Loading configurations...</option></select>
+            </label>
+            <label>Search
+              <input id="tools-search" type="search" placeholder="Name, version, capability">
+            </label>
+            <label>Status
+              <select id="tools-status-filter">
+                <option value="">All states</option>
+                <option value="ready">Ready</option>
+                <option value="incomplete">Incomplete</option>
+                <option value="used">Used by pipelines</option>
+                <option value="unused">Unused</option>
+              </select>
+            </label>
+          </article>
+          <div class="tools-layout">
+            <article class="tools-catalog-panel">
+              <div class="tools-type-tabs" role="tablist" aria-label="Resource type">
+                <button type="button" class="active" data-tools-type="tool">Tools</button>
+                <button type="button" data-tools-type="database">Databases</button>
+                <button type="button" data-tools-type="reference">References</button>
+              </div>
+              <div class="tools-list-heading">
+                <h4 id="tools-list-title">Tools</h4>
+                <button type="button" id="tools-add">Add</button>
+              </div>
+              <ul class="tools-resource-list" id="tools-resource-list"></ul>
             </article>
-            <article>
-              <h4>Scripts</h4>
-              <ul class="file-list" id="scripts"></ul>
+            <article class="tools-editor-panel">
+              <div class="tools-editor-empty" id="tools-editor-empty">Select a resource or add a new one.</div>
+              <form id="tools-editor" hidden>
+                <div class="tools-editor-heading">
+                  <div>
+                    <h4 id="tools-editor-title">Resource</h4>
+                    <span class="resource-status" id="tools-resource-status"></span>
+                  </div>
+                  <button type="button" id="tools-delete">Delete</button>
+                </div>
+                <div class="form-grid tools-form-grid">
+                  <label>Name<input id="tools-field-name" required></label>
+                  <label>Version<input id="tools-field-version"></label>
+                  <label class="tools-local-field">Executable / path<input id="tools-field-path"></label>
+                  <label class="tools-reference-field" hidden>FASTA<input id="tools-field-fasta"></label>
+                  <label class="tools-reference-field" hidden>Sequence dictionary<input id="tools-field-dict"></label>
+                  <label class="tools-container-field">Execution mode
+                    <select id="tools-field-mode">
+                      <option value="local">Local executable</option>
+                      <option value="docker">Docker</option>
+                      <option value="apptainer">Apptainer</option>
+                      <option value="singularity">Singularity</option>
+                    </select>
+                  </label>
+                  <label class="tools-container-field">Container image<input id="tools-field-image" placeholder="repository/image:tag"></label>
+                </div>
+                <fieldset id="tools-capabilities">
+                  <legend>Pipeline capabilities</legend>
+                  <div class="tools-capability-grid" id="tools-capability-grid"></div>
+                </fieldset>
+                <label class="tools-advanced-field">Advanced metadata (JSON object)
+                  <textarea id="tools-field-advanced" rows="7" spellcheck="false">{}</textarea>
+                </label>
+                <div class="tools-editor-actions">
+                  <button type="button" id="tools-test">Test configuration</button>
+                  <button type="submit">Apply to draft</button>
+                </div>
+                <div class="tools-test-result" id="tools-test-result" aria-live="polite"></div>
+                <div class="tools-dependencies" id="tools-dependencies"></div>
+              </form>
+            </article>
+            <article class="tools-audit-panel">
+              <div class="tools-list-heading">
+                <h4>Configuration audit</h4>
+                <button type="button" id="tools-audit">Run audit</button>
+              </div>
+              <div id="tools-audit-summary">Load a configuration to run the audit.</div>
+              <ul class="tools-audit-list" id="tools-audit-list"></ul>
+              <details>
+                <summary>Available scripts</summary>
+                <ul class="file-list" id="scripts"></ul>
+              </details>
             </article>
           </div>
+          <div class="pipeline-status" id="tools-status" aria-live="polite"></div>
         </section>
 
         <section class="module" id="panels" aria-labelledby="panels-title">
@@ -209,13 +327,7 @@
           </div>
         </section>
 
-        <section class="module" id="analysis" aria-labelledby="analysis-title">
-          <div class="module-header">
-            <div>
-              <h3 id="analysis-title">Start Analysis</h3>
-              <p>Prepare run ID, samplesheet, workflow, and working directory.</p>
-            </div>
-          </div>
+        <section class="module" id="analysis" aria-labelledby="section-title">
           <div class="analysis-layout">
             <article>
               <h4>Run Setup</h4>
@@ -233,15 +345,9 @@
                     <option value="">Loading saved designs...</option>
                   </select>
                 </label>
-                <label>Pipeline Config
+                <label>Pipeline
                   <select id="analysis-pipeline-file">
                     <option value="">Loading pipeline files...</option>
-                  </select>
-                </label>
-                <label>Workflow
-                  <select id="analysis-workflow">
-                    <option value="fake_alignment">Fake alignment</option>
-                    <option value="real_alignment">Real Nextflow workflow</option>
                   </select>
                 </label>
                 <label class="workdir-field">Working Directory
@@ -279,46 +385,64 @@
               <div class="button-row run-setup-actions">
                 <button id="analysis-add-to-queue" type="button">Add to queue</button>
               </div>
-              <div class="analysis-queue-block">
-                <h4>Queue</h4>
+              <details class="analysis-queue-block collapsible-subpanel">
+                <summary>Queue</summary>
                 <ul class="queue-list" id="analysis-queue-list">
                   <li>No analysis queued</li>
                 </ul>
-              </div>
-              <div class="analysis-output-block">
-                <h4>Outputs</h4>
+              </details>
+              <details class="analysis-output-block collapsible-subpanel">
+                <summary>Outputs</summary>
                 <ul class="queue-list output-list" id="analysis-output-list">
                   <li>No outputs</li>
                 </ul>
-              </div>
+              </details>
               <p id="analysis-status" class="warnings" aria-live="polite"></p>
             </article>
             <article>
-              <h4>Workflow Steps</h4>
+              <h4>Pipeline Steps</h4>
               <div class="workflow-tree-scroll">
-                <div class="workflow-tree" id="analysis-workflow-tree" role="tree" aria-label="Selectable workflow steps"></div>
+                <div class="workflow-tree" id="analysis-workflow-tree" role="tree" aria-label="Selectable pipeline steps"></div>
               </div>
               <div class="selected-workflow" id="analysis-selected-workflow"></div>
             </article>
           </div>
           <div class="analysis-run-controls">
-            <button class="analysis-start-fake primary-action analysis-start-wide" type="button">Start Analysis</button>
+            <button class="analysis-start-run primary-action analysis-start-wide" type="button">Start Analysis</button>
             <button id="analysis-stop-run" class="danger-action analysis-stop-wide" type="button">Stop Analysis</button>
           </div>
-          <article class="analysis-console-panel">
-            <div class="console-header">
-              <h4>Live Console</h4>
-              <div class="console-actions">
-                <span id="analysis-console-state">Idle</span>
-                <button id="analysis-console-refresh" type="button">Refresh</button>
+          <details class="analysis-console-panel collapsible-panel">
+            <summary>
+              <span>Live Console</span>
+              <span id="analysis-console-state">Idle</span>
+            </summary>
+            <div class="collapsible-content">
+              <div class="console-header">
+                <div class="console-actions">
+                  <button id="analysis-console-refresh" type="button">Refresh</button>
+                </div>
               </div>
+              <pre id="analysis-console" class="analysis-console">No run selected</pre>
             </div>
-            <pre id="analysis-console" class="analysis-console">No run selected</pre>
-          </article>
+          </details>
+        </section>
+        <section class="module" id="analysis-history" aria-labelledby="section-title">
+          <div class="collapsible-panel">
+            <h3>Analysis History</h3>
+            <p class="muted">Run metadata is saved independently of working directories. Analyses launched before this archive was introduced are not included.</p>
+            <div class="history-actions">
+              <input id="history-search" type="search" placeholder="Search runs, samples, panels, pipelines…" aria-label="Search analysis history">
+              <button id="history-refresh" type="button">Refresh</button>
+            </div>
+            <p id="history-status" class="warnings" aria-live="polite"></p>
+            <div id="history-list"></div>
+            <p id="history-location" class="muted"></p>
+          </div>
+          <div id="history-detail" class="collapsible-panel" hidden></div>
         </section>
       </main>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260629-8"></script>
+    <script type="module" src="/static/app.js?v=20260911-3"></script>
   </body>
 </html>

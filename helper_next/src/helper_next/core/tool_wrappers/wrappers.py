@@ -2,6 +2,90 @@ from helper_next.core.annotation import build_vep_args
 from helper_next.core.tool_wrappers.base import ToolInput, ToolOutput, ToolWrapper, config_args
 
 
+class CutadaptTrimmingWrapper(ToolWrapper):
+    default_operation = "trim_adapters"
+
+    def command_args(self, operation):
+        extra_args = config_args(self.operation_config)
+        adapter_flags = (
+            "-a",
+            "-A",
+            "-g",
+            "-G",
+            "-b",
+            "-B",
+            "--adapter",
+            "--front",
+            "--anywhere",
+        )
+        long_adapter_flags = ("--adapter=", "--front=", "--anywhere=")
+        has_custom_adapters = any(
+            arg in adapter_flags or arg.startswith(long_adapter_flags) for arg in extra_args
+        )
+        args = []
+        if not has_custom_adapters:
+            adapter1 = self.operation_config.get("adapter1")
+            adapter2 = self.operation_config.get("adapter2")
+            if adapter1:
+                args.extend(["-a", str(adapter1)])
+            if adapter2:
+                args.extend(["-A", str(adapter2)])
+        args.extend(extra_args)
+        return args + [
+            "-o",
+            "{sample_name}.R1.trim.fastq.gz",
+            "-p",
+            "{sample_name}.R2.trim.fastq.gz",
+            "{fastq_r1}",
+            "{fastq_r2}",
+        ]
+
+    def inputs(self, operation):
+        return [ToolInput("fastq_r1", "{fastq_r1}"), ToolInput("fastq_r2", "{fastq_r2}")]
+
+    def outputs(self, operation):
+        return [
+            ToolOutput("fastq_r1", "{sample_name}.R1.trim.fastq.gz"),
+            ToolOutput("fastq_r2", "{sample_name}.R2.trim.fastq.gz"),
+        ]
+
+
+class SurecallTrimmingWrapper(ToolWrapper):
+    default_operation = "trim_adapters"
+
+    def executable(self, tool_name):
+        return "java"
+
+    def command_args(self, operation):
+        args = []
+        ram = self.tool_config.get("ram", self.operation_config.get("ram"))
+        if ram:
+            args.append("-Xmx{}".format(ram))
+        args.extend(
+            [
+                "-jar",
+                super().executable("SURECALLTRIMMER"),
+                "-fq1",
+                "{fastq_r1}",
+                "-fq2",
+                "{fastq_r2}",
+                "-out_loc",
+                "{outdir}",
+            ]
+        )
+        args.extend(config_args(self.operation_config))
+        return args
+
+    def inputs(self, operation):
+        return [ToolInput("fastq_r1", "{fastq_r1}"), ToolInput("fastq_r2", "{fastq_r2}")]
+
+    def outputs(self, operation):
+        return [
+            ToolOutput("fastq_r1", "{sample_name}.R1.trim.fastq.gz"),
+            ToolOutput("fastq_r2", "{sample_name}.R2.trim.fastq.gz"),
+        ]
+
+
 class BwaAlignmentWrapper(ToolWrapper):
     default_operation = "fastq_alignment"
 
@@ -386,7 +470,7 @@ class VepAnnotationWrapper(ToolWrapper):
     def command_args(self, operation):
         raw_args = self.operation_config.get("args", [])
         if isinstance(raw_args, dict):
-            args = build_vep_args(raw_args, self.tools_config)
+            args = build_vep_args(raw_args, self.tools_config, containerized=bool(self.tool_config.get("container") or self.tool_config.get("image")))
         else:
             args = config_args(self.operation_config)
         if self.reference_fasta() and "--fasta" not in args:

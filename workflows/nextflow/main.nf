@@ -99,13 +99,15 @@ workflow {
     if (workflow_steps.contains('prealignment')) {
         PREALIGNMENT(samples_ch, pipeline_config, tools_config, INIT_RUN_INFRA.out.ready)
         PREALIGNMENT.out.statuses.view { item -> "prealigned\t${item[0]}\t${item[1]}\t${item[2]}" }
+        alignment_samples = PREALIGNMENT.out.reads
         alignment_ready = PREALIGNMENT.out.ready
     } else {
+        alignment_samples = samples_ch
         alignment_ready = INIT_RUN_INFRA.out.ready
     }
 
     if (workflow_steps.contains('alignment')) {
-        ALIGNMENT(samples_ch, pipeline_config, tools_config, reference_fasta, alignment_ready)
+        ALIGNMENT(alignment_samples, pipeline_config, tools_config, reference_fasta, alignment_ready)
         ALIGNMENT.out.bams.view { item -> "aligned\t${item[0]}\t${item[1]}\t${item[2]}\t${item[3]}" }
         preprocessing_ready = ALIGNMENT.out.ready
     } else {

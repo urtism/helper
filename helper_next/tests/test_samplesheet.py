@@ -1,7 +1,9 @@
+import json
+
 from helper_next.core.samplesheet import build_samplesheet, load_samplesheet_text, resolve_file_paths, rows_from_files
 
 
-def test_rows_from_fastq_pairs_r1_r2_and_normalizes_sample_name():
+def test_rows_from_fastq_pairs_r1_r2_and_preserves_exact_sample_id():
     rows, warnings = rows_from_files(
         "prealignment",
         [
@@ -11,8 +13,8 @@ def test_rows_from_fastq_pairs_r1_r2_and_normalizes_sample_name():
         ],
     )
 
-    assert warnings == []
-    assert rows[0]["sample_name"] == "A_1"
+    assert warnings == ["R1 without matching R2: /data/B_S2_R1_001.fastq.gz"]
+    assert rows[0]["sample_name"] == "A-1"
     assert rows[0]["fastq_R2"].endswith("_R2_001.fastq.gz")
     assert rows[1]["sample_name"] == "B"
     assert rows[1]["fastq_R2"] == ""
@@ -28,7 +30,29 @@ def test_rows_from_fastq_reports_orphan_r2():
     )
 
     assert [row["sample_name"] for row in rows] == ["A"]
-    assert warnings == ["R2 without matching R1 ignored: /data/B_S2_R2_001.fastq.gz"]
+    assert warnings == [
+        "R1 without matching R2: /data/A_S1_R1_001.fastq.gz",
+        "R2 without matching R1 ignored: /data/B_S2_R2_001.fastq.gz",
+    ]
+
+
+def test_rows_from_fastq_uses_illumina_suffix_as_delimiter_and_finds_r2_on_disk(tmp_path):
+    r1 = tmp_path / "Patient-01_S6_L001_R1_001.fastq.gz"
+    r2 = tmp_path / "Patient-01_S6_L001_R2_001.fastq.gz"
+    r1.write_text("")
+    r2.write_text("")
+
+    rows, warnings = rows_from_files("prealignment", [str(r1)])
+
+    assert warnings == []
+    assert rows == [
+        {
+            "sample_name": "Patient-01",
+            "fastq_R1": str(r1),
+            "fastq_R2": str(r2),
+            "fastq_I2": "",
+        }
+    ]
 
 
 def test_rows_from_bam_ignores_incompatible_files():
@@ -60,6 +84,13 @@ def test_rows_from_alignment_files_accepts_bam_sam_and_cram():
         {"sample_name": "S2", "bam": "/data/S2.sam"},
         {"sample_name": "S3", "bam": "/data/S3.cram"},
     ]
+
+
+def test_rows_from_bam_preserves_exact_sample_id():
+    rows, warnings = rows_from_files("variantcalling", ["/data/Patient-01.bam"])
+
+    assert warnings == []
+    assert rows == [{"sample_name": "Patient-01", "bam": "/data/Patient-01.bam"}]
 
 
 def test_resolve_file_paths_finds_unique_match_in_roots(tmp_path):
@@ -116,6 +147,75 @@ def test_build_only_cases_samplesheet():
     assert samplesheet["sample_list"] == ["S1"]
     assert samplesheet["sample_organization"] == "only cases"
     assert samplesheet["variantcalling"]["S1"]["case"]["bam"] == "/data/S1.bam"
+
+
+def test_build_and_load_mixed_analysis_samplesheet_round_trip():
+    rows = [
+        {"sample_name": "CHILD", "bam": "/data/child.bam"},
+        {"sample_name": "FATHER", "bam": "/data/father.bam"},
+        {"sample_name": "MOTHER", "bam": "/data/mother.bam"},
+        {"sample_name": "SINGLE", "bam": "/data/single.bam"},
+    ]
+    organization_rows = [
+        {
+            "sample_name": "CHILD",
+            "analysis_type": "family",
+            "analysis_id": "FAM-01",
+            "relationship": "proband",
+            "sex": "female",
+            "father": "FATHER",
+            "mother": "MOTHER",
+            "affected": "affected",
+            "twin_group": "",
+        },
+        {
+            "sample_name": "FATHER",
+            "analysis_type": "family",
+            "analysis_id": "FAM-01",
+            "relationship": "father",
+            "sex": "male",
+            "father": "",
+            "mother": "",
+            "affected": "unaffected",
+            "twin_group": "",
+        },
+        {
+            "sample_name": "MOTHER",
+            "analysis_type": "family",
+            "analysis_id": "FAM-01",
+            "relationship": "mother",
+            "sex": "female",
+            "father": "",
+            "mother": "",
+            "affected": "unaffected",
+            "twin_group": "",
+        },
+        {
+            "sample_name": "SINGLE",
+            "analysis_type": "only cases",
+            "analysis_id": "SINGLE",
+            "relationship": "proband",
+        },
+    ]
+
+    samplesheet = build_samplesheet("variantcalling", "mixed", rows, organization_rows)
+
+    assert samplesheet["schema_version"] == 2
+    assert samplesheet["sample_organization"] == "mixed"
+    assert samplesheet["sample_list"] == ["CHILD", "FATHER", "MOTHER", "SINGLE"]
+    assert samplesheet["variantcalling"]["CHILD"]["bam"] == "/data/child.bam"
+    assert samplesheet["analysis_groups"][0]["analysis_id"] == "FAM-01"
+    assert samplesheet["analysis_groups"][0]["members"][0]["father"] == "FATHER"
+
+    loaded = load_samplesheet_text(json.dumps(samplesheet))
+
+    assert loaded["organization"] == "mixed"
+    assert loaded["rows"] == rows
+    loaded_members = {row["sample_name"]: row for row in loaded["organization_rows"]}
+    assert loaded_members["CHILD"]["analysis_id"] == "FAM-01"
+    assert loaded_members["CHILD"]["relationship"] == "proband"
+    assert loaded_members["CHILD"]["father"] == "FATHER"
+    assert loaded_members["SINGLE"]["analysis_type"] == "only cases"
 
 
 def test_load_existing_samplesheet():

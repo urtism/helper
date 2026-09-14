@@ -298,6 +298,41 @@ def gvcf_caller():
 		gatk.init_tool(path, threads, ram, args)
 		return gatk.HaplotypeCaller(varcaller, threads, ram, bam, sample_name, reference_fasta, workdir, log, target_list, tools_configuration)
 
+def is_supported_legacy_germline_variantcaller(tool):
+	tool_name = tool.upper()
+	return tool_name.startswith('GATK') or tool_name.startswith('FREEBAYES') or tool_name.startswith('VARSCAN')
+
+def existing_nonempty_file(path):
+	return path != '' and os.path.isfile(path) and os.path.getsize(path) > 0
+
+def expected_legacy_germline_vcf(tool, sample_name, workdir, tools_info):
+	tool_name = tool.upper()
+
+	if tool_name.startswith('GATK'):
+		version = tools_info[tool]['version']
+		if version.startswith('3'):
+			return workdir + '/' + sample_name + '.GATKv3.vcf'
+		if version.startswith('4'):
+			return workdir + '/' + sample_name + '.GATKv4.vcf'
+
+	if tool_name.startswith('FREEBAYES'):
+		return workdir + '/' + sample_name + '.Freebayes.vcf'
+
+	if tool_name.startswith('VARSCAN'):
+		return workdir + '/' + sample_name + '.VarScan.vcf'
+
+	return ''
+
+def reuse_existing_variant_vcf(tool, sample_name, workdir, tools_info, log=None):
+	vcf = expected_legacy_germline_vcf(tool, sample_name, workdir, tools_info)
+	if existing_nonempty_file(vcf):
+		message = '- Skip ' + tool + ': using existing VCF ' + vcf
+		print(message)
+		if log is not None:
+			log.write(message + '\n')
+		return vcf
+	return None
+
 def genotype_germline_single_samples(tool, args, filters, threads, ram, bam, sample_name, runID, reference_fasta, workdir, log, panel_info, tools_info):
 
 	path = tools_info[tool]['path']
@@ -328,6 +363,8 @@ def genotype_germline_single_samples(tool, args, filters, threads, ram, bam, sam
 		varscan.init_tool(path, threads, ram, args)
 		return varscan.variant_calling(mpileup,[sample_name], filters, target_bed, reference_fasta, log, workdir)
 
+	raise RuntimeError('Unsupported germline single-sample variant caller in legacy pipeline: ' + tool)
+
 def parallel_genotype_germline_single_samples(tool, args, filters, threads, ram, bam_list, runID, reference_fasta, workdir, log, panel_info, tools_info):
 
 	path = tools_info[tool]['path']
@@ -357,6 +394,8 @@ def parallel_genotype_germline_single_samples(tool, args, filters, threads, ram,
 		mpileup_list = samtools.mpileup(bam_list, filters, target_bed, reference_fasta, log, workdir)
 		varscan.init_tool(path, threads, ram, args)
 		return varscan.variant_calling(mpileup_list, filters, target_bed, reference_fasta, log, workdir)
+
+	raise RuntimeError('Unsupported parallel germline single-sample variant caller in legacy pipeline: ' + tool)
 
 def genotype_germline_cohort(tool, args, filters, threads, ram, samplename_array, bam_array, runID, reference_fasta, workdir, log, panel_info, tools_info):
 	print('-genotype_germline_cohort')
@@ -401,6 +440,8 @@ def genotype_germline_cohort(tool, args, filters, threads, ram, samplename_array
 		varscan.init_tool(path, threads, ram, args)
 		return varscan.variant_calling(mpileup_list, samplename_array, filters, target_bed, reference_fasta, log, workdir), []
 
+	raise RuntimeError('Unsupported germline cohort variant caller in legacy pipeline: ' + tool)
+
 def genotype_germline_trio(tool, args, filters, threads, ram, samplename_array, bam_array, runID, reference_fasta, workdir, log, panel_info, tools_info):
 	print('-genotype_germline_trio')
 
@@ -441,6 +482,8 @@ def genotype_germline_trio(tool, args, filters, threads, ram, samplename_array, 
 		mpileup_list = samtools.mpileup(runID, bam_array, filters, target_bed, reference_fasta, log, workdir)
 		varscan.init_tool(path, threads, ram, args)
 		return varscan.variant_calling(mpileup_list, samplename_array, filters, target_bed, reference_fasta, log, workdir), []
+
+	raise RuntimeError('Unsupported germline trio variant caller in legacy pipeline: ' + tool)
 
 
 def genotype_somatic_single_samples(tool, args, filters, threads, ram, bam, sample_name, reference_fasta, workdir, log, panel_info, tools_info):
@@ -702,6 +745,7 @@ def vcf_annotation(tool, args, threads, ram, vcf, reference_fasta, workdir, log,
 		vep = t.VEP()
 
 		#print(args)
+		vep.tool_info = tools_info[tool]
 		vep.init_tool(path, threads, ram, args['args'])
 		plugins = args['plugins']
 		assembly = args['assembly']
@@ -1284,18 +1328,34 @@ def	variantcalling(samplesheet, variantcalling_info, reference_fasta, pipeline_c
 		
 		for tool in tools:
 			bam_list =[]
+			if not is_supported_legacy_germline_variantcaller(tool):
+				message = '- Skip unsupported germline single-sample variant caller in legacy pipeline: ' + tool
+				print(message)
+				log.write(message + '\n')
+				continue
+
 			for sampleID in samples.keys():
 				args = variantcalling_info[tool]['args']
 				for sample in samples[sampleID]:
 					sample_type, sample_name, bam = sample
-					bam_list += [[sample_name,bam]]
 					gvcf = ""
 					if bam != '':
-						if not opts.parallel:
-							vcf = genotype_germline_single_samples(tool, args, filters, threads, ram, bam, sample_name, runID, reference_fasta, workdir, log, panel_configuration, tools_configuration)
+						vcf = reuse_existing_variant_vcf(tool, sample_name, workdir, tools_configuration, log)
+						if vcf is not None:
 							samplesheet['postprocessing'][sampleID][sample_type]['vcf'][tool] = vcf
+							continue
 
-			if opts.parallel:
+						bam_list += [[sample_name,bam]]
+						if not opts.parallel:
+							try:
+								vcf = genotype_germline_single_samples(tool, args, filters, threads, ram, bam, sample_name, runID, reference_fasta, workdir, log, panel_configuration, tools_configuration)
+								samplesheet['postprocessing'][sampleID][sample_type]['vcf'][tool] = vcf
+							except RuntimeError as err:
+								message = '- Skip ' + tool + ': ' + str(err)
+								print(message)
+								log.write(message + '\n')
+
+			if opts.parallel and bam_list != []:
 				vcf_list = parallel_genotype_germline_single_samples(tool, args, filters, threads, ram, bam_list, runID, reference_fasta, workdir, log, panel_configuration, tools_configuration)
 							
 				for sampleID in samples.keys():
@@ -1319,6 +1379,12 @@ def	variantcalling(samplesheet, variantcalling_info, reference_fasta, pipeline_c
 					samplesheet['postprocessing'][sampleID][sample_type] = {'sample_name':sample_name, 'vcf':{}, 'cnv':''}
 
 		for tool in tools:	
+			if not is_supported_legacy_germline_variantcaller(tool):
+				message = '- Skip unsupported germline cohort variant caller in legacy pipeline: ' + tool
+				print(message)
+				log.write(message + '\n')
+				continue
+
 			args = variantcalling_info[tool]['args']
 			for sampleID in samples.keys():
 				for sample in samples[sampleID]:
@@ -1327,7 +1393,16 @@ def	variantcalling(samplesheet, variantcalling_info, reference_fasta, pipeline_c
 						bam_array += [bam]
 						sample_name_array += [sample_name]
 			
-			vcf, gvcf_array = genotype_germline_cohort(tool, args, filters, threads, ram, sample_name_array, bam_array, runID, reference_fasta, workdir, log, panel_configuration, tools_configuration)
+			vcf = reuse_existing_variant_vcf(tool, runID, workdir, tools_configuration, log)
+			if vcf is None:
+				try:
+					vcf, gvcf_array = genotype_germline_cohort(tool, args, filters, threads, ram, sample_name_array, bam_array, runID, reference_fasta, workdir, log, panel_configuration, tools_configuration)
+				except RuntimeError as err:
+					message = '- Skip ' + tool + ': ' + str(err)
+					print(message)
+					log.write(message + '\n')
+					continue
+
 			samplesheet['postprocessing']['cohort-vcf-files'][tool] = vcf
 
 			for sampleID in samples.keys():
@@ -1352,6 +1427,12 @@ def	variantcalling(samplesheet, variantcalling_info, reference_fasta, pipeline_c
 		for tool in tools:
 			bam_list = []
 			samplename_list = []
+			if not is_supported_legacy_germline_variantcaller(tool):
+				message = '- Skip unsupported germline trio variant caller in legacy pipeline: ' + tool
+				print(message)
+				log.write(message + '\n')
+				continue
+
 			args = variantcalling_info[tool]['args']
 			for sampleID in samples.keys():
 				trio_bam_array = []
@@ -1361,7 +1442,15 @@ def	variantcalling(samplesheet, variantcalling_info, reference_fasta, pipeline_c
 					if bam != '' and bam not in bam_list:
 						trio_bam_array += [bam]
 						samplename_array += [sample_name]
-				vcf, gvcf_array = genotype_germline_trio(tool, args, filters, threads, ram, samplename_array, trio_bam_array, sampleID, reference_fasta, workdir, log, panel_configuration, tools_configuration)
+				vcf = reuse_existing_variant_vcf(tool, sampleID, workdir, tools_configuration, log)
+				if vcf is None:
+					try:
+						vcf, gvcf_array = genotype_germline_trio(tool, args, filters, threads, ram, samplename_array, trio_bam_array, sampleID, reference_fasta, workdir, log, panel_configuration, tools_configuration)
+					except RuntimeError as err:
+						message = '- Skip ' + tool + ': ' + str(err)
+						print(message)
+						log.write(message + '\n')
+						continue
 				samplesheet['postprocessing'][sampleID]['vcf-files'][tool] = vcf
 										
 	elif variantcalling_info['samples_org'] == 'case-control':
@@ -2194,5 +2283,3 @@ if __name__ == '__main__':
 		samplesheet = postannotation(samplesheet, pipeline_configuration['postannotation'], reference_fasta, pipeline_configuration, panel_configuration, tools_configuration, runID)
 
 	print('\nAnalysis: ' + runID + ' --> Complete!')
-
-

@@ -1,21 +1,30 @@
 {
     "id": "new_pipeline",
     "design": "cohort",
-    "analysis": "",
+    "analysis": "germline",
     "reference_version": "hg19",
-    "workflow": ["preprocessing"
+    "workflow": [
+        "prealignment"
     ],
     "prealignment": {
-        "workflow": [],
+        "workflow": [
+            "trim_adapters",
+            "fastq_QC"
+        ],
         "threads": "1",
         "ram": "1g",
         "trim_adapters": {
             "tool": "CUTADAPT",
-            "adapter1": "CTGTCTCTTATACACATCT",
-            "adapter2": "CTGTCTCTTATACACATCT",
+            "adapter1": "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA",
+            "adapter2": "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT",
             "tag": "",
             "CUTADAPT": {
                 "args": []
+            },
+            "SURECALLTRIMMER v.3.5.1.46": {
+                "args": [
+                    "-xt"
+                ]
             }
         },
         "filter_fastq_by_qual": {

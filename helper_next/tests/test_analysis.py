@@ -5,60 +5,107 @@ import pytest
 from fastapi import HTTPException
 
 from helper_next.api.analysis import (
-    FakeRunRequest,
+    AnalysisRunRequest as FakeRunRequest,
+    clean_requested_prealignment_workflow,
+    clean_requested_alignment_workflow,
+    container_aware_execution_profile,
     nextflow_environment,
     normalize_pipeline_for_nextflow,
     real_run,
     resolve_pipeline_config,
     resolve_tools_path,
+    router,
     run_status,
     StopRunRequest,
     stop_run,
-    test_run as run_fake_analysis,
     validate_run,
 )
 from helper_next.core.project import ProjectPaths
 
 
-def test_fake_analysis_writes_manifest_outputs_and_logs(tmp_path):
-    samplesheet = """
-    {
-      "sample_list": ["S1"],
-      "sample_organization": "only cases",
-      "prealignment": {
-        "S1": {
-          "case": {
-            "sample_name": "S1",
-            "fastq_R1": "/data/S1_R1.fastq.gz",
-            "fastq_R2": "/data/S1_R2.fastq.gz",
-            "fastq_I2": ""
-          }
-        }
-      }
-    }
-    """
+def test_analysis_api_exposes_real_run_without_simulation_endpoint():
+    paths = {route.path for route in router.routes}
 
-    result = run_fake_analysis(
-        FakeRunRequest(
-            run_id="run 1",
-            samplesheet_content=samplesheet,
-            aligner="BOWTIE2",
-            workdir=str(tmp_path),
+    assert "/api/analysis/real-run" in paths
+    assert "/api/analysis/validate-run" in paths
+    assert "/api/analysis/test-run" not in paths
+
+
+def test_cutadapt_container_automatically_enables_docker_profile():
+    pipeline = {
+        "resolved_tools": {
+            "prealignment": {
+                "trim_adapters": {
+                    "invocation": {
+                        "container": {
+                            "engine": "docker",
+                            "image": "pipecraft/cutadapt:5.2-pc1.2.0",
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert container_aware_execution_profile("local", pipeline) == "local,docker"
+
+
+def test_clean_requested_prealignment_workflow_preserves_ui_order():
+    assert clean_requested_prealignment_workflow(["trim_adapters", "fastq_QC"]) == [
+        "trim_adapters",
+        "fastq_QC",
+    ]
+    assert clean_requested_prealignment_workflow(["unsupported"]) == ["fastq_QC"]
+
+
+def test_clean_requested_alignment_workflow_includes_bam_qc():
+    assert clean_requested_alignment_workflow(["fastq_alignment", "bam_QC"]) == [
+        "fastq_alignment",
+        "bam_QC",
+    ]
+
+
+def test_resolve_pipeline_config_applies_selected_prealignment_substeps(tmp_path):
+    pipelines = tmp_path / "pipelines"
+    pipelines.mkdir()
+    (pipelines / "trim.pipeline").write_text(
+        json.dumps(
+            {
+                "workflow": ["prealignment"],
+                "prealignment": {
+                    "workflow": ["trim_adapters", "fastq_QC"],
+                    "threads": "2",
+                    "ram": "2g",
+                    "trim_adapters": {
+                        "tool": "CUTADAPT",
+                        "adapter1": "AD1",
+                        "adapter2": "AD2",
+                        "CUTADAPT": {"args": []},
+                    },
+                    "fastq_QC": {"tool": "FASTQC v.0.11.8"},
+                },
+            }
         )
     )
 
-    assert result["status"] == "completed"
-    assert result["run_id"] == "run_1"
-    assert result["manifest"].endswith("manifest.tsv")
-    assert result["outputs"][0]["bam"].endswith("S1.sort.bam")
-    assert result["logs"]["step"].endswith("alignment.step.log")
+    resolved = resolve_pipeline_config(
+        "trim.pipeline",
+        pipelines,
+        "BWA v.0.7.17",
+        "prealignment",
+        ["prealignment"],
+        "prealignment",
+        [],
+        [],
+        [],
+        {
+            "CUTADAPT": {"path": "cutadapt"},
+            "FASTQC v.0.11.8": {"path": "fastqc"},
+        },
+        prealignment_workflow=["trim_adapters"],
+    )
 
-    status = run_status(result["run_dir"])
-    assert status["status"] == "completed"
-    assert status["workflow_matrix"][0]["counts"]["completed"] == 1
-    assert "alignment: total=1 running=0 completed=1 failed=0 planned=0" in status["content"]["workflow_matrix"]
-    assert status["content"]["workflow_plan"].startswith("order\tstep\tstatus")
-    assert "ALIGNMENT:FAKE_ALIGN" in status["content"]["nextflow_trace"]
+    assert resolved["prealignment"]["workflow"] == ["trim_adapters"]
 
 
 def test_resolve_tools_path_accepts_relative_config_path(tmp_path):
@@ -138,7 +185,6 @@ def test_validate_analysis_rejects_missing_samplesheet_file(tmp_path):
         validate_run(
             FakeRunRequest(
                 run_id="queued",
-                mode="fake_alignment",
                 samplesheet_content=samplesheet,
                 workdir=str(tmp_path),
                 gene_panel_design="panel",
@@ -150,7 +196,7 @@ def test_validate_analysis_rejects_missing_samplesheet_file(tmp_path):
     assert "samplesheet file not found: /missing/S1_R1.fastq.gz" in exc.value.detail
 
 
-def test_validate_analysis_accepts_reachable_samplesheet_files(tmp_path):
+def test_validate_analysis_accepts_reachable_samplesheet_files(monkeypatch, tmp_path):
     r1 = tmp_path / "S1_R1.fastq.gz"
     r2 = tmp_path / "S1_R2.fastq.gz"
     r1.write_text("")
@@ -172,10 +218,20 @@ def test_validate_analysis_accepts_reachable_samplesheet_files(tmp_path):
     }}
     """.format(r1=r1, r2=r2)
 
+    tools_path = tmp_path / "tools.json"
+    tools_path.write_text("{}")
+    monkeypatch.setattr("helper_next.api.analysis.shutil.which", lambda name: "/usr/bin/nextflow")
+    monkeypatch.setattr("helper_next.api.analysis.resolve_tools_path", lambda *_args: tools_path)
+    monkeypatch.setattr("helper_next.api.analysis.resolve_panel_design", lambda *_args: {})
+    monkeypatch.setattr("helper_next.api.analysis.resolve_pipeline_config", lambda *_args: {})
+    monkeypatch.setattr("helper_next.api.analysis.resolve_pipeline_tools", lambda pipeline, *_args: pipeline)
+    monkeypatch.setattr("helper_next.api.analysis.validate_workflow_availability", lambda *_args: None)
+    monkeypatch.setattr("helper_next.api.analysis.container_aware_execution_profile", lambda *_args: "local")
+    monkeypatch.setattr("helper_next.api.analysis.validate_nextflow_inputs", lambda *_args, **_kwargs: True)
+
     result = validate_run(
         FakeRunRequest(
             run_id="queued",
-            mode="fake_alignment",
             samplesheet_content=samplesheet,
             workdir=str(tmp_path),
             gene_panel_design="panel",
@@ -193,7 +249,6 @@ def test_validate_analysis_requires_panel_and_pipeline(tmp_path):
         validate_run(
             FakeRunRequest(
                 run_id="queued",
-                mode="fake_alignment",
                 samplesheet_content="S1\t/missing/S1_R1.fastq.gz\t/missing/S1_R2.fastq.gz\n",
                 workdir=str(tmp_path),
             )
@@ -326,7 +381,7 @@ def test_normalize_legacy_pipeline_fills_supported_step_defaults():
 
     normalized = normalize_pipeline_for_nextflow(pipeline)
 
-    assert normalized["prealignment"]["workflow"] == ["fastq_QC"]
+    assert normalized["prealignment"]["workflow"] == ["trim_adapters"]
     assert normalized["variantcalling"]["ram"] == "8g"
 
 
@@ -584,9 +639,33 @@ def test_real_analysis_snapshots_selected_panel_design(monkeypatch, tmp_path):
     with open(result["run_config"]) as handle:
         run_config = json.load(handle)
 
+    from helper_next.core import analysis_history as history
+    archived = history.get(result["history_id"])
+    assert archived["panel_design"] == result["panel_design"]
+    assert archived["samples"][0]["sample_name"] == "S1"
+    assert archived["workflow"] == ["preprocessing"]
+    assert json.loads((Path(result["run_dir"]) / "input.tools.json").read_text()) == archived["tools_config"]
+    assert str(Path(result["run_dir"]) / "input.tools.json") in archived["command"]
+
     assert result["panel_design"]["source_name"] == "Panel A"
     assert run_config["panel_design"]["assets"]["target_bed"] == "/targets/panel_a.bed"
     assert run_config["panel_design"]["validation"]["target_bed_present"] is True
+
+    # Replay must survive removal of the run directory and changes to source configs.
+    import shutil
+    from helper_next.api.analysis import HistoryReplayRequest, replay_analysis
+    shutil.rmtree(result["run_dir"])
+    monkeypatch.setattr("helper_next.api.analysis.validate_samplesheet_file_access", lambda *args: None)
+    monkeypatch.setattr("helper_next.api.analysis.resolve_panel_design", lambda *args: pytest.fail("Must use archived panel"))
+    monkeypatch.setattr("helper_next.api.analysis.resolve_pipeline_config", lambda *args: pytest.fail("Must use archived pipeline"))
+    monkeypatch.setattr("helper_next.api.analysis.resolve_tools_path", lambda *args: pytest.fail("Must use archived tools"))
+    replay = replay_analysis(result["history_id"], HistoryReplayRequest())
+    replay_record = history.get(replay["history_id"])
+    assert replay_record["parent_id"] == archived["id"]
+    assert replay_record["pipeline_config"] == archived["pipeline_config"]
+    assert replay_record["run_config"] == archived["run_config"]
+    assert replay_record["tools_config"] == archived["tools_config"]
+    assert replay["resume"] is False
 
 
 def test_real_analysis_default_prealignment_run_uses_full_stable_slice(monkeypatch, tmp_path):

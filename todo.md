@@ -9,10 +9,28 @@ Regola di lavoro:
 
 ## Da Fare
 
-- Testare tutte le modalita di short variant calling: single case, cohort, case-control, trios.
-- Verificare gli output attesi per ogni modalita di short variant calling e che postprocessing/annotation ricevano il VCF corretto.
-- Aggiungere validazioni per samplesheet incompleti: case-control senza control, trio senza parent1/parent2, cohort con un solo sample, BAM mancanti.
-- Verificare la compatibilita del nuovo joint calling con postprocessing e VEP annotation.
+### Priorita immediata: matrice E2E short variant calling
+
+- Preparare fixture sintetiche schema v2 per cinque scenari: only-case, family, case-control, tumor-normal e run mista con tutti i tipi di analisi.
+- Aggiungere uno script E2E Nextflow schema v2 con wrapper locali, sul modello di `scripts/run_nextflow_demo.sh`.
+- Verificare che only-case, family e case-control producano GVCF per campione e un solo `run.GATK.vcf` multisample.
+- Verificare che ogni coppia tumor-normal produca un VCF filtrato con Mutect2 + FilterMutectCalls e che tumor/normal non entrino nel joint VCF germline.
+- Verificare nomi, numero di campioni e genotipi contenuti nei VCF prodotti, non solo l'esistenza dei file.
+- Eseguire la matrice sia con ingresso BAM sia, almeno per una run mista, partendo da FASTQ attraverso alignment e preprocessing.
+- Verificare la propagazione contemporanea del VCF germline e dei VCF tumor-normal attraverso `vcf_norm`, `vcf_filter`, `vcf_to_tsv` e VEP.
+- Verificare log, status TSV, conteggi della run matrix e arresto dei downstream step quando fallisce un campione o un gruppo.
+- Aggiungere una validazione del read-group `SM` dei BAM rispetto a `sample_name`, necessaria per associare correttamente tumor e normal in Mutect2.
+- Dopo i test con wrapper, eseguire una smoke run con piccoli BAM reali e installazioni reali di GATK, bcftools e VEP.
+
+### Dopo la stabilizzazione E2E
+
+- Esportare un file PED dai campi `sample_name`, `father`, `mother`, `sex` e `affected`, includendo gli individui non sequenziati referenziati come genitori.
+- Implementare analisi downstream di segregazione, ereditarieta e prioritizzazione de novo usando i gruppi family.
+- Rendere esplicita la configurazione somatica per germline resource, panel of normals, contaminazione e orientation-bias filtering.
+- Implementare i moduli ancora mancanti: adapter trimming, FASTQ filtering, BAM filtering e UMI merging.
+- Implementare nel DAG Nextflow i quattro tipi di Variant Calling esposti dalla UI: Short variants, CNV, SV e metilazione, con canali di input/output, validazione, log e status dedicati per ciascun ramo.
+- Implementare postannotation nel DAG Nextflow.
+- Completare e validare container e runtime per profili local e SLURM/HPC.
 
 ## In Corso
 

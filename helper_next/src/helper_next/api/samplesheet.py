@@ -61,7 +61,8 @@ def steps():
             {"id": "annotation", "label": "Annotation", "columns": columns_for_step("annotation")},
             {"id": "postannotation", "label": "Post-annotation", "columns": columns_for_step("postannotation")},
         ],
-        "organizations": ["only cases", "case-control", "trio"],
+        "organizations": ["only cases", "case-control", "trio", "mixed"],
+        "analysis_types": ["only cases", "family", "case-control", "tumor-normal"],
     }
 
 

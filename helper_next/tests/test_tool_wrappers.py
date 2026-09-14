@@ -6,7 +6,9 @@ from helper_next.core.tool_resolver import resolve_pipeline_tools
 from helper_next.core.tool_wrappers import (
     BwaAlignmentWrapper,
     ContainerSpec,
+    CutadaptTrimmingWrapper,
     PicardMarkDuplicatesWrapper,
+    SurecallTrimmingWrapper,
     VepAnnotationWrapper,
     operation_spec,
     build_invocation,
@@ -31,6 +33,41 @@ def test_bwa_wrapper_builds_serializable_invocation_from_pipeline_and_tools_cfg(
     assert "-M" in payload["command_args"]
     assert payload["inputs"][0]["path"] == "/refs/hg19.fa"
     assert json.loads(invocation.to_json())["executable"] == "/tools/bwa"
+
+
+def test_cutadapt_wrapper_adds_default_adapters_and_preserves_extra_args():
+    invocation = CutadaptTrimmingWrapper(
+        {"adapter1": "AD1", "adapter2": "AD2", "args": ["--minimum-length", "75"]},
+        {"path": "cutadapt", "version": "1.13"},
+    ).build("CUTADAPT", "trim_adapters")
+
+    assert invocation.executable == "cutadapt"
+    assert invocation.command_args[:4] == ["-a", "AD1", "-A", "AD2"]
+    assert ["--minimum-length", "75"] == invocation.command_args[4:6]
+    assert invocation.outputs[0].path == "{sample_name}.R1.trim.fastq.gz"
+
+
+def test_cutadapt_wrapper_does_not_duplicate_custom_adapter_arguments():
+    invocation = CutadaptTrimmingWrapper(
+        {"adapter1": "DEFAULT", "adapter2": "DEFAULT", "args": ["-g", "CUSTOM"]},
+        {"path": "cutadapt"},
+    ).build("CUTADAPT", "trim_adapters")
+
+    assert invocation.command_args[:2] == ["-g", "CUSTOM"]
+    assert "DEFAULT" not in invocation.command_args
+
+
+def test_surecall_wrapper_builds_java_jar_invocation_with_tool_ram():
+    invocation = SurecallTrimmingWrapper(
+        {"args": ["-hs"]},
+        {"path": "/tools/SurecallTrimmer.jar", "ram": "32g", "version": "3.5.1.46"},
+    ).build("SURECALLTRIMMER v.3.5.1.46", "trim_adapters")
+
+    assert invocation.executable == "java"
+    assert invocation.command_args[:3] == ["-Xmx32g", "-jar", "/tools/SurecallTrimmer.jar"]
+    assert "-fq1" in invocation.command_args
+    assert "-fq2" in invocation.command_args
+    assert invocation.command_args[-1] == "-hs"
 
 
 def test_container_spec_is_populated_from_tool_cfg():

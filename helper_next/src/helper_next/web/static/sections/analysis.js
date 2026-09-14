@@ -1,4 +1,4 @@
-import {getAnalysisRunStatus, getAnalysisPipeline, startFakeAnalysis, startRealAnalysis, validateAnalysisRun, stopAnalysisRun, getProject, getPickerSelection} from "../api.js?v=20260629-8";
+import {getAnalysisRunStatus, getAnalysisPipeline, startRealAnalysis, validateAnalysisRun, stopAnalysisRun, getProject, getPickerSelection} from "../api.js?v=20260909-1";
 
 const baseWorkflowTree = [
   {
@@ -7,7 +7,10 @@ const baseWorkflowTree = [
     detail: "FASTQ quality control",
     inputs: ["fastq"],
     outputs: ["fastq"],
-    children: [{id: "fastq_QC", label: "fastq_QC", detail: "FastQC reports"}],
+    children: [
+      {id: "trim_adapters", label: "Adapter trimming", detail: "Cutadapt or SurecallTrimmer", defaultChecked: false},
+      {id: "fastq_QC", label: "fastq_QC", detail: "FastQC reports"},
+    ],
   },
   {
     id: "alignment",
@@ -20,6 +23,7 @@ const baseWorkflowTree = [
       {id: "sam_to_bam", label: "sam_to_bam", detail: "samtools view"},
       {id: "sort_bam", label: "sort_bam", detail: "samtools sort"},
       {id: "index_bam", label: "index_bam", detail: "samtools index"},
+      {id: "bam_QC", label: "BAM QC", detail: "FastQC report on the sorted BAM", defaultChecked: false},
     ],
   },
   {
@@ -40,13 +44,14 @@ const baseWorkflowTree = [
   {
     id: "variantcalling",
     label: "Variant Calling",
-    detail: "SNV/InDel, CNV, and SV calling",
+    detail: "Short variants, CNV, SV, and methylation",
     inputs: ["bam"],
-    outputs: ["vcf", "cnv", "sv"],
+    outputs: ["vcf", "cnv", "sv", "methylation"],
     children: [
       {id: "short_variants", label: "Short Variants", detail: "SNV and small InDel calling"},
       {id: "cnv_calling", label: "CNV Calling", detail: "Copy-number variant calling module pending", disabled: true},
       {id: "sv_calling", label: "SV Calling", detail: "Structural variant calling module pending", disabled: true},
+      {id: "methylation", label: "Methylation", detail: "Methylation calling module pending", disabled: true},
     ],
   },
   {
@@ -123,7 +128,7 @@ export function initAnalysis() {
   bindChange("#analysis-set-workdir-default", updateDefaultWorkdir);
   bindChange("#analysis-workdir", updateDefaultWorkdir);
   bindClick("#analysis-workdir-browse", openWorkdirPickerPage);
-  bindClickAll(".analysis-start-fake", startFakeRun);
+  bindClickAll(".analysis-start-run", startRun);
   bindClick("#analysis-add-to-queue", addCurrentRunToQueue);
   bindClick("#analysis-stop-run", stopCurrentRunAndContinue);
   bindClick("#analysis-console-refresh", refreshConsole);
@@ -131,6 +136,51 @@ export function initAnalysis() {
   renderWorkflowTree();
   renderQueueList();
   renderSelectedWorkflow();
+}
+
+export function loadArchivedAnalysis(record, overrides = {}) {
+  const request = record?.request || {};
+  analysisState.samplesheetContent = request.samplesheet_content || JSON.stringify(record?.samplesheet || {}, null, 2);
+  analysisState.samplesheetName = `Archived: ${record?.run_id || "analysis"}`;
+  analysisState.inputTypes = inferSamplesheetInputTypes(analysisState.samplesheetContent);
+  analysisState.pipelineConfig = record?.pipeline_config || null;
+  analysisState.pipelineName = request.pipeline_path || "Archived pipeline";
+
+  setControlValue("#analysis-run-id", overrides.runId || `${record?.run_id || "analysis"}_rerun`);
+  setControlValue("#analysis-workdir", overrides.workdir || request.workdir || "");
+  setControlValue("#analysis-gene-panel-design", request.gene_panel_design || "");
+  setControlValue("#analysis-pipeline-file", request.pipeline_path || "");
+  setControlValue("#analysis-tools-file", request.tools_path || "");
+  setControlValue("#analysis-execution-profile", request.execution_profile || "local");
+  setControlValue("#analysis-slurm-queue", request.queue || "");
+  const keepIntermediates = document.querySelector("#analysis-keep-intermediates");
+  if (keepIntermediates) keepIntermediates.checked = Boolean(request.keep_intermediates);
+  const sampleName = document.querySelector("#analysis-samplesheet-name");
+  if (sampleName) sampleName.textContent = analysisState.samplesheetName;
+
+  if (analysisState.pipelineConfig) {
+    applyPipelineToWorkflowTree(analysisState.pipelineConfig);
+  } else {
+    workflowTree = cloneWorkflowTree(baseWorkflowTree);
+    resetDefaultWorkflowSelection();
+  }
+  updateWorkflowAvailability();
+  renderConsoleText(`Archived settings loaded from ${record?.run_id || "analysis"}. Review and modify them before starting.`);
+  const status = document.querySelector("#analysis-status");
+  if (status) status.textContent = "Archived parameters loaded. Changes will create a new analysis.";
+}
+
+function setControlValue(selector, value) {
+  const control = document.querySelector(selector);
+  if (!control) return;
+  const normalized = String(value || "");
+  if (control instanceof HTMLSelectElement && normalized && !Array.from(control.options).some((option) => option.value === normalized)) {
+    const option = document.createElement("option");
+    option.value = normalized;
+    option.textContent = normalized;
+    control.append(option);
+  }
+  control.value = normalized;
 }
 
 function bindClick(selector, callback) {
@@ -152,7 +202,7 @@ function bindChange(selector, callback) {
 function defaultRunId() {
   const now = new Date();
   const date = now.toISOString().slice(0, 10).replaceAll("-", "");
-  return `${date}_fake_alignment`;
+  return `${date}_analysis`;
 }
 
 async function loadSamplesheetFile(event) {
@@ -166,7 +216,7 @@ async function loadSamplesheetFile(event) {
   renderConsoleText("Samplesheet loaded: " + file.name);
 }
 
-async function startFakeRun() {
+async function startRun() {
   const status = document.querySelector("#analysis-status");
   status.textContent = "";
   stopConsolePolling();
@@ -318,13 +368,14 @@ function setWorkdir(directory) {
 
 async function startAnalysisPayload(payload) {
   const status = document.querySelector("#analysis-status");
-  const workflow = payload.mode || "fake_alignment";
+  const workflow = "real_alignment";
+  document.querySelector(".analysis-console-panel").open = true;
   analysisState.activeRunPayload = payload;
   renderQueueList();
   setConsoleState("Submitting");
   renderConsoleText(`Submitting ${payload.run_id} (${workflow})...`);
   try {
-    const result = workflow === "real_alignment" ? await startRealAnalysis(payload) : await startFakeAnalysis(payload);
+    const result = await startRealAnalysis(payload);
     renderResult(result);
     startConsolePolling(result.run_dir, result.status === "submitted");
   } catch (error) {
@@ -419,6 +470,7 @@ function applyPipelineToWorkflowTree(config) {
         },
         {id: "cnv_calling", label: "CNV Calling", detail: "Copy-number variant calling module pending", disabled: true},
         {id: "sv_calling", label: "SV Calling", detail: "Structural variant calling module pending", disabled: true},
+        {id: "methylation", label: "Methylation", detail: "Methylation calling module pending", disabled: true},
       ];
       if (workflow.includes(node.id)) {
         analysisState.workflowChecked.add("short_variants");
@@ -447,6 +499,28 @@ function selectedPreprocessingSubsteps() {
   const preprocessing = workflowTree.find((node) => node.id === "preprocessing");
   if (!preprocessing) return [];
   return preprocessing.children
+    .filter((child) => !child.disabled && analysisState.workflowChecked.has(child.id))
+    .map((child) => child.id);
+}
+
+function selectedAlignmentSubsteps() {
+  if (!analysisState.workflowChecked.has("alignment")) {
+    return [];
+  }
+  const alignment = workflowTree.find((node) => node.id === "alignment");
+  if (!alignment) return [];
+  return alignment.children
+    .filter((child) => !child.disabled && analysisState.workflowChecked.has(child.id))
+    .map((child) => child.id);
+}
+
+function selectedPrealignmentSubsteps() {
+  if (!analysisState.workflowChecked.has("prealignment")) {
+    return [];
+  }
+  const prealignment = workflowTree.find((node) => node.id === "prealignment");
+  if (!prealignment) return [];
+  return prealignment.children
     .filter((child) => !child.disabled && analysisState.workflowChecked.has(child.id))
     .map((child) => child.id);
 }
@@ -674,7 +748,6 @@ function renderSelectedWorkflow() {
 function analysisPayload() {
   return {
     run_id: valueOf("#analysis-run-id"),
-    mode: valueOf("#analysis-workflow"),
     workdir: valueOf("#analysis-workdir"),
     gene_panel_design: valueOf("#analysis-gene-panel-design"),
     tools_path: valueOf("#analysis-tools-file"),
@@ -684,6 +757,8 @@ function analysisPayload() {
     execution_profile: valueOf("#analysis-execution-profile") || "local",
     queue: valueOf("#analysis-slurm-queue"),
     requested_workflow: selectedWorkflowSteps(),
+    requested_prealignment_workflow: selectedPrealignmentSubsteps(),
+    requested_alignment_workflow: selectedAlignmentSubsteps(),
     requested_preprocessing_workflow: selectedPreprocessingSubsteps(),
     requested_postprocessing_workflow: selectedPostprocessingSubsteps(),
     requested_annotation_workflow: selectedAnnotationSubsteps(),
@@ -729,6 +804,7 @@ async function addCurrentRunToQueue() {
   };
   analysisState.queueItems.push(item);
   renderQueueList();
+  document.querySelector(".analysis-queue-block").open = true;
   status.textContent = `Run added to queue. Checked ${validation.checked_files} input file${validation.checked_files === 1 ? "" : "s"}.`;
 }
 
@@ -740,7 +816,6 @@ function queueHasDuplicate(payload) {
 function queueSignature(payload) {
   const relevant = {
     run_id: payload.run_id,
-    mode: payload.mode,
     workdir: payload.workdir,
     gene_panel_design: payload.gene_panel_design,
     tools_path: payload.tools_path,
@@ -749,6 +824,8 @@ function queueSignature(payload) {
     execution_profile: payload.execution_profile,
     queue: payload.queue,
     requested_workflow: payload.requested_workflow,
+    requested_prealignment_workflow: payload.requested_prealignment_workflow,
+    requested_alignment_workflow: payload.requested_alignment_workflow,
     requested_preprocessing_workflow: payload.requested_preprocessing_workflow,
     requested_postprocessing_workflow: payload.requested_postprocessing_workflow,
     requested_annotation_workflow: payload.requested_annotation_workflow,
@@ -928,6 +1005,8 @@ function renderOutputList(outputs, logs) {
     if (output.unsorted_bam) rows.push(`${output.sample_name}: ${output.unsorted_bam}`);
   });
   logs.forEach((log) => rows.push(log));
+
+  if (rows.length) document.querySelector(".analysis-output-block").open = true;
 
   if (!rows.length) {
     const empty = document.createElement("li");

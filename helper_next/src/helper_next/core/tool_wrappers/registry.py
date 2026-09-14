@@ -3,6 +3,7 @@ from helper_next.core.tool_wrappers.wrappers import (
     BcftoolsNormWrapper,
     Bowtie2AlignmentWrapper,
     BwaAlignmentWrapper,
+    CutadaptTrimmingWrapper,
     DeepVariantWrapper,
     FreeBayesWrapper,
     Gatk3BqsrWrapper,
@@ -12,6 +13,7 @@ from helper_next.core.tool_wrappers.wrappers import (
     PicardAddOrReplaceReadGroupsWrapper,
     PicardMarkDuplicatesWrapper,
     SamtoolsWrapper,
+    SurecallTrimmingWrapper,
     VepAnnotationWrapper,
 )
 
@@ -21,6 +23,10 @@ def wrapper_for(operation_name, tool_name):
     operation = str(operation_name or "")
     operation_lower = operation.lower()
 
+    if operation == "trim_adapters" and tool_upper.startswith("CUTADAPT"):
+        return CutadaptTrimmingWrapper
+    if operation == "trim_adapters" and tool_upper.startswith("SURECALLTRIMMER"):
+        return SurecallTrimmingWrapper
     if operation == "fastq_alignment" and tool_upper.startswith("BWA"):
         return BwaAlignmentWrapper
     if operation == "fastq_alignment" and tool_upper.startswith("BOWTIE2"):

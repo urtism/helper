@@ -1,4 +1,5 @@
 import csv
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +10,137 @@ from helper_next.core.nextflow import (
     validate_nextflow_inputs,
     write_manifest,
 )
+
+
+def test_variant_callers_receive_panel_target_intervals():
+    module = (Path(__file__).resolve().parents[2] / "workflows/nextflow/modules/variantcalling.nf").read_text()
+    haplotype = module.split("process GATK_HAPLOTYPECALLER", 1)[1].split("process GATK_JOINT_GENOTYPING", 1)[0]
+    joint = module.split("process GATK_JOINT_GENOTYPING", 1)[1].split("process GATK_MUTECT2", 1)[0]
+    mutect2 = module.split("process GATK_MUTECT2", 1)[1].split("process DEEPVARIANT_CALLER", 1)[0]
+    deepvariant = module.split("process DEEPVARIANT_CALLER", 1)[1].split("process FREEBAYES_CALLER", 1)[0]
+    freebayes = module.split("process FREEBAYES_CALLER", 1)[1].split("process VARIANTCALLING_STEP_LOG", 1)[0]
+
+    assert "resolved_cfg.caller?.target_intervals ?: run_config.panel_design?.assets?.target_bed" in module
+    assert 'def target_arg = target_intervals ? "-L \\"${target_intervals}\\"" : \'\'' in haplotype
+    assert "${target_arg}" in haplotype
+    assert 'def target_arg = target_intervals ? "-L \\"${target_intervals}\\"" : \'\'' in joint
+    assert "${target_arg}" in joint
+    assert 'def target_arg = target_intervals ? "-L \\"${target_intervals}\\"" : \'\'' in mutect2
+    assert "${target_arg}" in mutect2
+    assert 'def regions_arg = target_intervals ? "--regions \\"${target_intervals}\\"" : \'\'' in deepvariant
+    assert "${regions_arg}" in deepvariant
+    assert 'def target_arg = target_intervals ? "-t \\"${target_intervals}\\"" : \'\'' in freebayes
+    assert "${target_arg}" in freebayes
+
+
+def mixed_variant_samplesheet():
+    sample_names = ["CHILD", "FATHER", "MOTHER", "CASE", "CONTROL", "SINGLE", "TUMOR", "NORMAL"]
+    return {
+        "schema_version": 2,
+        "sample_list": sample_names,
+        "sample_organization": "mixed",
+        "analysis_groups": [
+            {
+                "analysis_id": "FAM-01",
+                "analysis_type": "family",
+                "members": [
+                    {
+                        "sample_name": "CHILD",
+                        "relationship": "proband",
+                        "sex": "female",
+                        "father": "FATHER",
+                        "mother": "MOTHER",
+                        "affected": "affected",
+                        "twin_group": "",
+                    },
+                    {
+                        "sample_name": "FATHER",
+                        "relationship": "father",
+                        "sex": "male",
+                        "father": "",
+                        "mother": "",
+                        "affected": "unaffected",
+                        "twin_group": "",
+                    },
+                    {
+                        "sample_name": "MOTHER",
+                        "relationship": "mother",
+                        "sex": "female",
+                        "father": "",
+                        "mother": "",
+                        "affected": "unaffected",
+                        "twin_group": "",
+                    },
+                ],
+            },
+            {
+                "analysis_id": "CASE-CONTROL-01",
+                "analysis_type": "case-control",
+                "members": [
+                    {
+                        "sample_name": "CASE",
+                        "relationship": "case",
+                        "sex": "female",
+                        "affected": "affected",
+                        "control_relationship": "",
+                    },
+                    {
+                        "sample_name": "CONTROL",
+                        "relationship": "control",
+                        "sex": "female",
+                        "affected": "unaffected",
+                        "control_relationship": "unrelated",
+                    },
+                ],
+            },
+            {
+                "analysis_id": "SINGLE",
+                "analysis_type": "only cases",
+                "members": [{"sample_name": "SINGLE", "relationship": "proband"}],
+            },
+            {
+                "analysis_id": "PAIR-01",
+                "analysis_type": "tumor-normal",
+                "members": [
+                    {
+                        "sample_name": "TUMOR",
+                        "relationship": "tumor",
+                        "individual_id": "PATIENT-01",
+                        "sex": "male",
+                        "specimen_type": "tumor tissue",
+                        "tumor_purity": "65",
+                    },
+                    {
+                        "sample_name": "NORMAL",
+                        "relationship": "normal",
+                        "individual_id": "PATIENT-01",
+                        "sex": "male",
+                        "specimen_type": "blood",
+                        "tumor_purity": "",
+                    },
+                ],
+            },
+        ],
+        "variantcalling": {
+            sample_name: {"sample_name": sample_name, "bam": "/data/{}.bam".format(sample_name.lower())}
+            for sample_name in sample_names
+        },
+    }
+
+
+def gatk_variant_pipeline():
+    return {
+        "analysis": "Mixed",
+        "reference_version": "hg19",
+        "workflow": ["variantcalling"],
+        "variantcalling": {
+            "tools": ["GATK v.4.1"],
+            "threads": "4",
+            "ram": "12g",
+            "filters": {},
+            "GATK v.4.1": {"args": []},
+        },
+    }
 
 
 def test_manifest_rows_preserve_trio_roles():
@@ -68,6 +200,18 @@ def test_write_manifest_outputs_tsv_with_stable_columns(tmp_path):
             "sample_id": "S1",
             "role": "case",
             "sample_name": "S1",
+            "analysis_id": "",
+            "analysis_type": "",
+            "relationship": "",
+            "individual_id": "",
+            "sex": "",
+            "father": "",
+            "mother": "",
+            "affected": "",
+            "control_relationship": "",
+            "specimen_type": "",
+            "tumor_purity": "",
+            "twin_group": "",
             "fastq_r1": "",
             "fastq_r2": "",
             "fastq_i2": "",
@@ -76,6 +220,99 @@ def test_write_manifest_outputs_tsv_with_stable_columns(tmp_path):
             "variants_tsv": "",
         }
     ]
+
+
+def test_manifest_rows_export_analysis_metadata_and_legacy_aliases():
+    rows = manifest_rows(mixed_variant_samplesheet(), "variantcalling")
+
+    child = next(row for row in rows if row["sample_name"] == "CHILD")
+    tumor = next(row for row in rows if row["sample_name"] == "TUMOR")
+    assert (child["sample_id"], child["role"]) == ("FAM-01", "proband")
+    assert (child["analysis_id"], child["analysis_type"]) == ("FAM-01", "family")
+    assert (child["father"], child["mother"]) == ("FATHER", "MOTHER")
+    assert tumor["individual_id"] == "PATIENT-01"
+    assert tumor["tumor_purity"] == "65"
+
+
+def test_validate_and_build_run_config_for_mixed_analysis():
+    samplesheet = mixed_variant_samplesheet()
+    pipeline = gatk_variant_pipeline()
+    tools = {"hg19": {"fasta": "/refs/hg19.fa"}, "GATK v.4.1": {"path": "gatk"}}
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="variantcalling") is True
+
+    config = build_nextflow_run_config(samplesheet, pipeline, tools, entry_step="variantcalling")
+    assert config["schema_version"] == 2
+    assert config["calling_scope"] == "single-sample"
+    assert config["gvcf_storage"] is True
+    assert config["comparative_analysis"] is True
+    assert "calling_group" not in config
+    assert config["analysis_groups"] == samplesheet["analysis_groups"]
+
+
+def test_validate_mixed_analysis_rejects_loaded_parent_outside_family():
+    samplesheet = mixed_variant_samplesheet()
+    samplesheet["analysis_groups"][0]["members"][0]["father"] = "SINGLE"
+    tools = {"hg19": {"fasta": "/refs/hg19.fa"}, "GATK v.4.1": {"path": "gatk"}}
+
+    with pytest.raises(ValidationError) as exc:
+        validate_nextflow_inputs(samplesheet, gatk_variant_pipeline(), tools, entry_step="variantcalling")
+
+    assert "father 'SINGLE' is loaded but assigned outside this family" in "\n".join(exc.value.errors)
+
+
+def test_validate_mixed_analysis_allows_unsequenced_parent_id():
+    samplesheet = mixed_variant_samplesheet()
+    samplesheet["analysis_groups"][0]["members"][1]["father"] = "GRANDFATHER-NOT-LOADED"
+    tools = {"hg19": {"fasta": "/refs/hg19.fa"}, "GATK v.4.1": {"path": "gatk"}}
+
+    assert validate_nextflow_inputs(
+        samplesheet,
+        gatk_variant_pipeline(),
+        tools,
+        entry_step="variantcalling",
+    ) is True
+
+
+def test_validate_mixed_analysis_accepts_deepvariant_with_gatk4_for_tumor_normal():
+    samplesheet = mixed_variant_samplesheet()
+    pipeline = gatk_variant_pipeline()
+    pipeline["variantcalling"]["tools"] = ["DeepVariant v.1.10.0"]
+    tools = {
+        "hg19": {"fasta": "/refs/hg19.fa"},
+        "DeepVariant v.1.10.0": {"path": "run_deepvariant"},
+        "GATK v.4.1": {"path": "gatk"},
+    }
+
+    assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="variantcalling") is True
+
+
+def test_validate_mixed_analysis_rejects_missing_gatk4_for_tumor_normal():
+    samplesheet = mixed_variant_samplesheet()
+    pipeline = gatk_variant_pipeline()
+    pipeline["variantcalling"]["tools"] = ["FreeBayes"]
+    tools = {"hg19": {"fasta": "/refs/hg19.fa"}, "FreeBayes": {"path": "freebayes"}}
+
+    with pytest.raises(ValidationError) as exc:
+        validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="variantcalling")
+
+    assert "pipeline.variantcalling: tumor-normal analysis requires a configured GATK 4 caller for Mutect2" in exc.value.errors
+
+
+def test_validate_mixed_analysis_rejects_unusable_gatk4_for_tumor_normal():
+    samplesheet = mixed_variant_samplesheet()
+    pipeline = gatk_variant_pipeline()
+    pipeline["variantcalling"]["tools"] = ["DeepVariant v.1.10.0"]
+    tools = {
+        "hg19": {"fasta": "/refs/hg19.fa"},
+        "DeepVariant v.1.10.0": {"path": "run_deepvariant"},
+        "GATK v.4.1": {},
+    }
+
+    with pytest.raises(ValidationError) as exc:
+        validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="variantcalling")
+
+    assert "pipeline.variantcalling: tumor-normal analysis requires a configured GATK 4 caller for Mutect2" in exc.value.errors
 
 
 def test_build_nextflow_run_config_keeps_json_workflow_and_resources():
@@ -174,6 +411,110 @@ def test_validate_nextflow_inputs_accepts_configured_prealignment():
     }
 
     assert validate_nextflow_inputs(samplesheet, pipeline, tools, entry_step="prealignment") is True
+
+
+@pytest.mark.parametrize(
+    "tool_name,tool_path",
+    [
+        ("CUTADAPT", "cutadapt"),
+        ("SURECALLTRIMMER v.3.5.1.46", "/tools/SurecallTrimmer.jar"),
+    ],
+)
+def test_validate_nextflow_inputs_accepts_supported_adapter_trimmers(tool_name, tool_path):
+    samplesheet = {
+        "sample_list": ["S1"],
+        "sample_organization": "only cases",
+        "prealignment": {
+            "S1": {
+                "case": {
+                    "sample_name": "S1",
+                    "fastq_R1": "/data/S1_R1.fastq.gz",
+                    "fastq_R2": "/data/S1_R2.fastq.gz",
+                }
+            }
+        },
+    }
+    pipeline = {
+        "workflow": ["prealignment"],
+        "prealignment": {
+            "workflow": ["trim_adapters"],
+            "threads": "2",
+            "ram": "2g",
+            "trim_adapters": {
+                "tool": tool_name,
+                "adapter1": "ADAPTER_R1",
+                "adapter2": "ADAPTER_R2",
+                tool_name: {"args": ["-hs"] if tool_name.startswith("SURECALL") else []},
+            },
+        },
+    }
+
+    assert validate_nextflow_inputs(
+        samplesheet,
+        pipeline,
+        {tool_name: {"path": tool_path}},
+        entry_step="prealignment",
+    ) is True
+
+
+def test_validate_nextflow_inputs_rejects_unsupported_adapter_trimmer():
+    samplesheet = {
+        "sample_list": ["S1"],
+        "sample_organization": "only cases",
+        "prealignment": {
+            "S1": {
+                "case": {
+                    "sample_name": "S1",
+                    "fastq_R1": "/data/S1_R1.fastq.gz",
+                    "fastq_R2": "/data/S1_R2.fastq.gz",
+                }
+            }
+        },
+    }
+    pipeline = {
+        "workflow": ["prealignment"],
+        "prealignment": {
+            "workflow": ["trim_adapters"],
+            "threads": "1",
+            "ram": "1g",
+            "trim_adapters": {"tool": "TRIMMOMATIC"},
+        },
+    }
+
+    with pytest.raises(ValidationError) as exc:
+        validate_nextflow_inputs(
+            samplesheet,
+            pipeline,
+            {"TRIMMOMATIC": {"path": "trimmomatic"}},
+            entry_step="prealignment",
+        )
+
+    assert "pipeline.prealignment.trim_adapters: unsupported trimming tool 'TRIMMOMATIC'" in exc.value.errors
+
+
+def test_prealignment_module_routes_trimmed_reads_to_qc_and_alignment():
+    root = Path(__file__).resolve().parents[2]
+    module = (root / "workflows/nextflow/modules/prealignment.nf").read_text()
+    main = (root / "workflows/nextflow/main.nf").read_text()
+
+    assert "process TRIM_CUTADAPT" in module
+    assert "process TRIM_SURECALL" in module
+    assert "container { cutadapt_container ?: null }" in module
+    assert "trim_tool_cfg.container.image" in module
+    assert "FASTQ_QC(reads_ch" in module
+    assert "reads = reads_ch" in module
+    assert "alignment_samples = PREALIGNMENT.out.reads" in main
+    assert "ALIGNMENT(alignment_samples" in main
+
+
+def test_alignment_module_runs_selected_bam_qc_on_sorted_bams():
+    module = (Path(__file__).resolve().parents[2] / "workflows/nextflow/modules/alignment.nf").read_text()
+
+    assert "process BAM_QC" in module
+    assert "bam_qc_enabled = enabled_operations.contains('bam_QC')" in module
+    assert "BAM_QC(aligned_bams" in module
+    assert 'publishDir "${params.outdir}/ALIGNMENT/bam_qc"' in module
+    assert "alignment_statuses.mix(BAM_QC.out.statuses)" in module
 
 
 def test_validate_nextflow_inputs_accepts_gatk3_preprocessing_databases():

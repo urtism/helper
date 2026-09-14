@@ -46,3 +46,24 @@ def test_build_vep_args_filters_removed_esp_frequency_flag():
     assert "--af_esp" not in args
     assert "--af" in args
     assert "--af_gnomad" in args
+
+
+def test_build_vep_args_selects_local_or_container_database_paths():
+    legacy_args = {"plugins": {"list": ["GeneSplicer", "dbNSFP"]}}
+    tools = {
+        "GeneSplicer": {"path": "/container/genesplicer", "local_path": "/host/genesplicer"},
+        "dbNSFP": {
+            "path": "/container/dbNSFP.gz",
+            "files": "/container/logic",
+            "local_path": "/host/dbNSFP.gz",
+            "local_files": "/host/logic",
+        },
+    }
+
+    local = build_vep_args(legacy_args, tools)
+    container = build_vep_args(legacy_args, tools, containerized=True)
+
+    assert "GeneSplicer,/host/genesplicer" in local
+    assert "dbNSFP,/host/dbNSFP.gz,/host/logic" in local
+    assert "GeneSplicer,/container/genesplicer" in container
+    assert "dbNSFP,/container/dbNSFP.gz,/container/logic" in container

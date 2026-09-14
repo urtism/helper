@@ -1950,6 +1950,10 @@ class VEP(Tool):
 			fields = plugins[plugin]['fields']			
 			try:
 				if tools_info[plugin]['local'] == "True":
+					if path != "" and not os.path.isdir(path):
+						print('WARNING: skipping VEP plugin ' + plugin + ': local path not found: ' + path)
+						continue
+
 					if path != "":
 						args_dir_plugin += ['-v', path+':/'+plugin]
 
@@ -1957,10 +1961,20 @@ class VEP(Tool):
 						for file in files.split(','):
 							if '=' in file:
 								parts=file.split('=')
+								if not os.path.isfile(path + '/' + parts[-1]):
+									print('WARNING: skipping VEP plugin ' + plugin + ': local file not found: ' + path + '/' + parts[-1])
+									pl_files = []
+									break
 								parts[-1] = '/'+plugin+'/'+ parts[-1]
 								pl_files += ['='.join(parts)]
 							else:
+								if not os.path.isfile(path + '/' + file):
+									print('WARNING: skipping VEP plugin ' + plugin + ': local file not found: ' + path + '/' + file)
+									pl_files = []
+									break
 								pl_files += ['/'+plugin+'/'+ file]
+						if pl_files == []:
+							continue
 
 					if fields != "":	
 						pl_fields += [fields]
@@ -1968,29 +1982,29 @@ class VEP(Tool):
 					args_plugin += ['--plugin', ','.join([plugin]+pl_files+pl_fields)]		
 				else:
 					if path != "":
-						pl_dir = ['./Plugins/'+ path]
+						pl_dir = ['/data/Plugins/'+ path.lstrip('/')]
 					if files != "":
 						for file in files.split(','):
 							if '=' in file:
 								parts=file.split('=')
-								parts[-1] = './Plugins'+'/'+ parts[-1]
+								parts[-1] = '/data/Plugins'+'/'+ parts[-1].lstrip('/')
 								pl_files += ['='.join(parts)]
 							else:
-								pl_files += ['./Plugins/'+ file]
+								pl_files += ['/data/Plugins/'+ file.lstrip('/')]
 					if fields != "":	
 						pl_fields += [fields]
 					args_plugin += ['--plugin', ','.join([plugin]+pl_dir+pl_files+pl_fields)]
 			except Exception as e:
 				if path != "":
-					pl_dir = ['./Plugins/'+ path]
+					pl_dir = ['/data/Plugins/'+ path.lstrip('/')]
 				if files != "":
 					for file in files.split(','):
 						if '=' in file:
 							parts=file.split('=')
-							parts[-1] = './Plugins'+'/'+ parts[-1]
+							parts[-1] = '/data/Plugins'+'/'+ parts[-1].lstrip('/')
 							pl_files += ['='.join(parts)]
 						else:
-							pl_files += ['./Plugins/'+ file]
+							pl_files += ['/data/Plugins/'+ file.lstrip('/')]
 				if fields != "":	
 					pl_fields += [fields]
 
@@ -2008,16 +2022,24 @@ class VEP(Tool):
 		vcf_name = vcf.split('/')[-1]
 		fastadir = '/'.join(reference_fasta.split('/')[:-1])
 		fasta_name = reference_fasta.split('/')[-1]
+		cache_dir = self.path
+		image = 'ensemblorg/ensembl-vep'
+		tool_info = getattr(self, 'tool_info', {})
+
+		if 'cache_dir' in tool_info:
+			cache_dir = tool_info['cache_dir']
+		if 'container' in tool_info and 'image' in tool_info['container']:
+			image = tool_info['container']['image']
 	
 		#args = [self.path,'-i',vcf,'-o',vep_vcf,'--fasta',reference_fasta, '--vcf']
 
 		args = ['docker', 'run', '-it', '--rm', '-u', '1000:1000']
-		args_dir = ['-v', self.path + ':/data',
+		args_dir = ['-v', cache_dir + ':/data',
 			'-v', workdir + ':/output_dir',
 			'-v', inputdir + ':/input_dir',
 			'-v', fastadir + ':/fasta_dir']
 			
-		args_vep = ['ensemblorg/ensembl-vep', 'vep',
+		args_vep = [image, 'vep',
 			'--dir_cache', '/data/',
 			'--dir_plugins', '/data/Plugins',
 			'--quiet',

@@ -5,7 +5,8 @@ process GATK_HAPLOTYPECALLER {
     tag "${sample_name}"
     cpus { variant_threads }
     memory { variant_ram }
-    publishDir "${params.outdir}/VARIANTCALLING", mode: 'copy', pattern: '*.vcf*'
+    publishDir "${params.outdir}/VARIANTCALLING", mode: 'copy', pattern: '*.GATK.vcf*'
+    publishDir "${params.outdir}/VARIANTCALLING/GVCF", mode: 'copy', pattern: '*.GATK.g.vcf*'
     publishDir "${params.outdir}/VARIANTCALLING/realigned_bam", mode: 'copy', pattern: '*.realign.bam*', enabled: params.keep_intermediates == true || params.keep_intermediates?.toString()?.toLowerCase() in ['true', '1', 'yes']
     publishDir "${params.outdir}/LOGS/VARIANTCALLING/samples", mode: 'copy', pattern: '*.variantcalling.log'
     publishDir "${params.outdir}/LOGS/VARIANTCALLING/samples", mode: 'copy', pattern: '*.variantcalling.status.tsv'
@@ -19,17 +20,21 @@ process GATK_HAPLOTYPECALLER {
     val gatk_java_home
     val gatk_java_cmd
     val reference_fasta
+    val target_intervals
     val calling_mode
 
     output:
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.GATK.vcf"), optional: true, emit: vcfs
-    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.GATK.g.vcf"), optional: true, emit: gvcfs
+    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.GATK.g.vcf.gz"), optional: true, emit: gvcfs
+    path "${sample_name}.GATK.g.vcf.gz.tbi", optional: true, emit: gvcf_indexes
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.GATK.realign.bam"), optional: true, emit: realigned_bams
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.variantcalling.log"), path("${sample_name}.variantcalling.status.tsv"), emit: statuses
 
     script:
-    def output_vcf = calling_mode == 'single-sample' ? "${sample_name}.GATK.vcf" : "${sample_name}.GATK.g.vcf"
-    def gvcf_arg = calling_mode == 'single-sample' ? "" : "-ERC GVCF"
+    def target_arg = target_intervals ? "-L \"${target_intervals}\"" : ''
+    def genotype_command = calling_mode == 'single-sample'
+        ? "${gatk_path} --java-options -Xmx${task.memory.toGiga()}g GenotypeGVCFs -R ${reference_fasta} -V ${sample_name}.GATK.g.vcf.gz -O ${sample_name}.GATK.vcf ${target_arg}"
+        : "not requested"
     """
     set +e
     if [ -n "${gatk_java_cmd}" ]; then
@@ -48,30 +53,41 @@ process GATK_HAPLOTYPECALLER {
         echo "calling_mode=${calling_mode}"
         echo "threads=${task.cpus}"
         echo "reference=${reference_fasta}"
+        echo "target_intervals=${target_intervals}"
         echo "input_bam=${input_bam}"
         echo "java_home=\${JAVA_HOME:-}"
         echo "java_version=\$(java -version 2>&1 | head -n 1)"
         echo "started=\$(date -Is)"
-        echo "command=${gatk_path} --java-options -Xmx${task.memory.toGiga()}g HaplotypeCaller -R ${reference_fasta} -I ${input_bam} -O ${output_vcf} -bamout ${sample_name}.GATK.realign.bam ${gvcf_arg} --native-pair-hmm-threads ${task.cpus} ${gatk_args}"
+        echo "haplotype_command=${gatk_path} --java-options -Xmx${task.memory.toGiga()}g HaplotypeCaller -R ${reference_fasta} -I ${input_bam} -O ${sample_name}.GATK.g.vcf.gz -bamout ${sample_name}.GATK.realign.bam -ERC GVCF --native-pair-hmm-threads ${task.cpus} ${target_arg} ${gatk_args}"
+        echo "genotype_command=${genotype_command}"
         echo
     } > ${sample_name}.variantcalling.log
     started_at=\$(date -Is)
     ${gatk_path} --java-options "-Xmx${task.memory.toGiga()}g" HaplotypeCaller \
         -R "${reference_fasta}" \
         -I "${input_bam}" \
-        -O "${output_vcf}" \
+        -O "${sample_name}.GATK.g.vcf.gz" \
         -bamout "${sample_name}.GATK.realign.bam" \
-        ${gvcf_arg} \
+        -ERC GVCF \
         --native-pair-hmm-threads ${task.cpus} \
+        ${target_arg} \
         ${gatk_args} >> ${sample_name}.variantcalling.log 2>&1
     exit_code=\$?
+    if [ "\${exit_code}" -eq 0 ] && [ "${calling_mode}" = "single-sample" ]; then
+        ${gatk_path} --java-options "-Xmx${task.memory.toGiga()}g" GenotypeGVCFs \
+            -R "${reference_fasta}" \
+            -V "${sample_name}.GATK.g.vcf.gz" \
+            -O "${sample_name}.GATK.vcf" \
+            ${target_arg} >> ${sample_name}.variantcalling.log 2>&1
+        exit_code=\$?
+    fi
     completed_at=\$(date -Is)
     if [ "\${exit_code}" -eq 0 ]; then
         status=completed
         echo "completed=\${completed_at}" >> ${sample_name}.variantcalling.log
     else
         status=failed
-        rm -f ${sample_name}.GATK.vcf ${sample_name}.GATK.vcf.idx ${sample_name}.GATK.g.vcf ${sample_name}.GATK.g.vcf.idx ${sample_name}.GATK.realign.bam
+        rm -f ${sample_name}.GATK.vcf ${sample_name}.GATK.vcf.idx ${sample_name}.GATK.g.vcf.gz ${sample_name}.GATK.g.vcf.gz.tbi ${sample_name}.GATK.realign.bam
         echo "failed=\${completed_at}" >> ${sample_name}.variantcalling.log
         echo "exit_code=\${exit_code}" >> ${sample_name}.variantcalling.log
     fi
@@ -102,6 +118,7 @@ process GATK_JOINT_GENOTYPING {
     val gatk_java_home
     val gatk_java_cmd
     val reference_fasta
+    val target_intervals
     val calling_mode
 
     output:
@@ -110,6 +127,7 @@ process GATK_JOINT_GENOTYPING {
 
     script:
     def variant_inputs = gvcfs.collect { "-V ${it}" }.join(' ')
+    def target_arg = target_intervals ? "-L \"${target_intervals}\"" : ''
     """
     set +e
     if [ -n "${gatk_java_cmd}" ]; then
@@ -128,25 +146,28 @@ process GATK_JOINT_GENOTYPING {
         echo "sample_name=${group_name}"
         echo "threads=${task.cpus}"
         echo "reference=${reference_fasta}"
+        echo "target_intervals=${target_intervals}"
         echo "input_gvcfs=${gvcfs.join(',')}"
         echo "java_home=\${JAVA_HOME:-}"
         echo "java_version=\$(java -version 2>&1 | head -n 1)"
         echo "started=\$(date -Is)"
-        echo "combine_command=${gatk_path} --java-options -Xmx${task.memory.toGiga()}g CombineGVCFs -R ${reference_fasta} ${variant_inputs} -O ${group_name}.combined.g.vcf"
-        echo "genotype_command=${gatk_path} --java-options -Xmx${task.memory.toGiga()}g GenotypeGVCFs -R ${reference_fasta} -V ${group_name}.combined.g.vcf -O ${group_name}.GATK.vcf ${joint_args}"
+        echo "combine_command=${gatk_path} --java-options -Xmx${task.memory.toGiga()}g CombineGVCFs -R ${reference_fasta} ${variant_inputs} -O ${group_name}.combined.g.vcf ${target_arg}"
+        echo "genotype_command=${gatk_path} --java-options -Xmx${task.memory.toGiga()}g GenotypeGVCFs -R ${reference_fasta} -V ${group_name}.combined.g.vcf -O ${group_name}.GATK.vcf ${target_arg} ${joint_args}"
         echo
     } > ${group_name}.variantcalling.log
     started_at=\$(date -Is)
     ${gatk_path} --java-options "-Xmx${task.memory.toGiga()}g" CombineGVCFs \
         -R "${reference_fasta}" \
         ${variant_inputs} \
-        -O "${group_name}.combined.g.vcf" >> ${group_name}.variantcalling.log 2>&1
+        -O "${group_name}.combined.g.vcf" \
+        ${target_arg} >> ${group_name}.variantcalling.log 2>&1
     exit_code=\$?
     if [ "\${exit_code}" -eq 0 ]; then
         ${gatk_path} --java-options "-Xmx${task.memory.toGiga()}g" GenotypeGVCFs \
             -R "${reference_fasta}" \
             -V "${group_name}.combined.g.vcf" \
             -O "${group_name}.GATK.vcf" \
+            ${target_arg} \
             ${joint_args} >> ${group_name}.variantcalling.log 2>&1
         exit_code=\$?
     fi
@@ -167,13 +188,105 @@ process GATK_JOINT_GENOTYPING {
 }
 
 
+process GATK_MUTECT2 {
+    tag "${group_name}"
+    cpus { variant_threads }
+    memory { variant_ram }
+    publishDir "${params.outdir}/VARIANTCALLING", mode: 'copy', pattern: '*.Mutect2.vcf*'
+    publishDir "${params.outdir}/LOGS/VARIANTCALLING/samples", mode: 'copy', pattern: '*.variantcalling.log'
+    publishDir "${params.outdir}/LOGS/VARIANTCALLING/samples", mode: 'copy', pattern: '*.variantcalling.status.tsv'
+
+    input:
+    tuple val(analysis_id), val(role), val(group_name), val(tumor_name), path(tumor_bam), val(normal_name), path(normal_bam)
+    val variant_threads
+    val variant_ram
+    val gatk_path
+    val mutect2_args
+    val mutect2_filter_args
+    val gatk_java_home
+    val gatk_java_cmd
+    val reference_fasta
+    val target_intervals
+
+    output:
+    tuple val(analysis_id), val(role), val(group_name), path("${group_name}.Mutect2.vcf"), optional: true, emit: vcfs
+    tuple val(analysis_id), val(role), val(group_name), path("${group_name}.variantcalling.log"), path("${group_name}.variantcalling.status.tsv"), emit: statuses
+
+    script:
+    def target_arg = target_intervals ? "-L \"${target_intervals}\"" : ''
+    """
+    set +e
+    if [ -n "${gatk_java_cmd}" ]; then
+        export PATH="\$(dirname "${gatk_java_cmd}"):\${PATH}"
+        export JAVA_HOME="\$(dirname "\$(dirname "${gatk_java_cmd}")")"
+    elif [ -n "${gatk_java_home}" ]; then
+        export JAVA_HOME="${gatk_java_home}"
+        export PATH="${gatk_java_home}/bin:\${PATH}"
+    fi
+    {
+        echo "step=variantcalling"
+        echo "tool=GATK Mutect2"
+        echo "analysis_id=${analysis_id}"
+        echo "role=${role}"
+        echo "sample_name=${group_name}"
+        echo "tumor_name=${tumor_name}"
+        echo "normal_name=${normal_name}"
+        echo "tumor_bam=${tumor_bam}"
+        echo "normal_bam=${normal_bam}"
+        echo "reference=${reference_fasta}"
+        echo "target_intervals=${target_intervals}"
+        echo "java_home=\${JAVA_HOME:-}"
+        echo "java_version=\$(java -version 2>&1 | head -n 1)"
+        echo "started=\$(date -Is)"
+        echo "mutect2_command=${gatk_path} --java-options -Xmx${task.memory.toGiga()}g Mutect2 -R ${reference_fasta} -I ${tumor_bam} -tumor ${tumor_name} -I ${normal_bam} -normal ${normal_name} -O ${group_name}.Mutect2.unfiltered.vcf ${target_arg} ${mutect2_args}"
+        echo "filter_command=${gatk_path} --java-options -Xmx${task.memory.toGiga()}g FilterMutectCalls -R ${reference_fasta} -V ${group_name}.Mutect2.unfiltered.vcf -O ${group_name}.Mutect2.vcf ${target_arg} ${mutect2_filter_args}"
+        echo
+    } > ${group_name}.variantcalling.log
+    started_at=\$(date -Is)
+    ${gatk_path} --java-options "-Xmx${task.memory.toGiga()}g" Mutect2 \
+        -R "${reference_fasta}" \
+        -I "${tumor_bam}" \
+        -tumor "${tumor_name}" \
+        -I "${normal_bam}" \
+        -normal "${normal_name}" \
+        -O "${group_name}.Mutect2.unfiltered.vcf" \
+        ${target_arg} \
+        ${mutect2_args} >> ${group_name}.variantcalling.log 2>&1
+    exit_code=\$?
+    if [ "\${exit_code}" -eq 0 ]; then
+        ${gatk_path} --java-options "-Xmx${task.memory.toGiga()}g" FilterMutectCalls \
+            -R "${reference_fasta}" \
+            -V "${group_name}.Mutect2.unfiltered.vcf" \
+            -O "${group_name}.Mutect2.vcf" \
+            ${target_arg} \
+            ${mutect2_filter_args} >> ${group_name}.variantcalling.log 2>&1
+        exit_code=\$?
+    fi
+    completed_at=\$(date -Is)
+    if [ "\${exit_code}" -eq 0 ]; then
+        status=completed
+        echo "completed=\${completed_at}" >> ${group_name}.variantcalling.log
+    else
+        status=failed
+        rm -f ${group_name}.Mutect2.vcf ${group_name}.Mutect2.vcf.idx
+        echo "failed=\${completed_at}" >> ${group_name}.variantcalling.log
+        echo "exit_code=\${exit_code}" >> ${group_name}.variantcalling.log
+    fi
+    rm -f ${group_name}.Mutect2.unfiltered.vcf ${group_name}.Mutect2.unfiltered.vcf.idx ${group_name}.Mutect2.unfiltered.vcf.stats
+    printf "step\\ttool\\tsample_id\\trole\\tsample_name\\tstatus\\texit_code\\tstarted\\tcompleted\\n" > ${group_name}.variantcalling.status.tsv
+    printf "variantcalling\\tGATK_MUTECT2\\t${analysis_id}\\t${role}\\t${group_name}\\t\${status}\\t\${exit_code}\\t\${started_at}\\t\${completed_at}\\n" >> ${group_name}.variantcalling.status.tsv
+    exit 0
+    """
+}
+
+
 process DEEPVARIANT_CALLER {
     tag "${sample_name}"
     cpus { variant_threads }
     memory { variant_ram }
     container { deepvariant_container ?: null }
     publishDir "${params.outdir}/VARIANTCALLING", mode: 'copy', pattern: '*.DeepVariant.vcf*'
-    publishDir "${params.outdir}/VARIANTCALLING", mode: 'copy', pattern: '*.DeepVariant.g.vcf*'
+    publishDir "${params.outdir}/VARIANTCALLING/GVCF", mode: 'copy', pattern: '*.DeepVariant.g.vcf*'
     publishDir "${params.outdir}/LOGS/VARIANTCALLING/samples", mode: 'copy', pattern: '*.variantcalling.log'
     publishDir "${params.outdir}/LOGS/VARIANTCALLING/samples", mode: 'copy', pattern: '*.variantcalling.status.tsv'
 
@@ -190,11 +303,12 @@ process DEEPVARIANT_CALLER {
 
     output:
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.DeepVariant.vcf"), optional: true, emit: vcfs
-    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.DeepVariant.g.vcf"), optional: true, emit: gvcfs
+    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.DeepVariant.g.vcf.gz"), optional: true, emit: gvcfs
+    path "${sample_name}.DeepVariant.g.vcf.gz.tbi", optional: true, emit: gvcf_indexes
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.variantcalling.log"), path("${sample_name}.variantcalling.status.tsv"), emit: statuses
 
     script:
-    def regions_arg = target_intervals ? "--regions ${target_intervals}" : ''
+    def regions_arg = target_intervals ? "--regions \"${target_intervals}\"" : ''
     """
     set +e
     {
@@ -210,7 +324,7 @@ process DEEPVARIANT_CALLER {
         echo "model_type=${model_type}"
         echo "target_intervals=${target_intervals}"
         echo "started=\$(date -Is)"
-        echo "command=${deepvariant_path} --model_type=${model_type} --ref=${reference_fasta} --reads=${input_bam} --output_vcf=${sample_name}.DeepVariant.vcf --output_gvcf=${sample_name}.DeepVariant.g.vcf --num_shards=${task.cpus} ${regions_arg} ${deepvariant_args}"
+        echo "command=${deepvariant_path} --model_type=${model_type} --ref=${reference_fasta} --reads=${input_bam} --output_vcf=${sample_name}.DeepVariant.vcf --output_gvcf=${sample_name}.DeepVariant.g.vcf.gz --num_shards=${task.cpus} ${regions_arg} ${deepvariant_args}"
         echo
     } > ${sample_name}.variantcalling.log
     started_at=\$(date -Is)
@@ -219,7 +333,7 @@ process DEEPVARIANT_CALLER {
         --ref="${reference_fasta}" \
         --reads="${input_bam}" \
         --output_vcf="${sample_name}.DeepVariant.vcf" \
-        --output_gvcf="${sample_name}.DeepVariant.g.vcf" \
+        --output_gvcf="${sample_name}.DeepVariant.g.vcf.gz" \
         --num_shards="${task.cpus}" \
         ${regions_arg} \
         ${deepvariant_args} >> ${sample_name}.variantcalling.log 2>&1
@@ -230,7 +344,7 @@ process DEEPVARIANT_CALLER {
         echo "completed=\${completed_at}" >> ${sample_name}.variantcalling.log
     else
         status=failed
-        rm -f ${sample_name}.DeepVariant.vcf ${sample_name}.DeepVariant.vcf.gz ${sample_name}.DeepVariant.vcf.idx ${sample_name}.DeepVariant.g.vcf ${sample_name}.DeepVariant.g.vcf.gz ${sample_name}.DeepVariant.g.vcf.idx
+        rm -f ${sample_name}.DeepVariant.vcf ${sample_name}.DeepVariant.vcf.gz ${sample_name}.DeepVariant.vcf.idx ${sample_name}.DeepVariant.g.vcf.gz ${sample_name}.DeepVariant.g.vcf.gz.tbi
         echo "failed=\${completed_at}" >> ${sample_name}.variantcalling.log
         echo "exit_code=\${exit_code}" >> ${sample_name}.variantcalling.log
     fi
@@ -267,7 +381,7 @@ process FREEBAYES_CALLER {
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.variantcalling.log"), path("${sample_name}.variantcalling.status.tsv"), emit: statuses
 
     script:
-    def target_arg = target_intervals ? "-t ${target_intervals}" : ''
+    def target_arg = target_intervals ? "-t \"${target_intervals}\"" : ''
     def bam_arg = use_bam_list ? "-L ${sample_name}.bam.list" : "-b ${input_bams}"
     """
     set +e
@@ -374,6 +488,55 @@ process VARIANTCALLING_ASSERT_SUCCESS {
 }
 
 
+process VCF_CALLSET_SUMMARY {
+    tag "${sample_name}"
+
+    input:
+    tuple val(analysis_id), val(role), val(sample_name), path(input_vcf)
+    path comparison_script
+
+    output:
+    path "*.callset.json.gz", emit: summaries
+
+    script:
+    def safe_name = "${analysis_id}.${role}.${sample_name}".replaceAll(/[^A-Za-z0-9._-]/, '_')
+    """
+    python3 "${comparison_script}" summarize \
+        --vcf "${input_vcf}" \
+        --analysis-id "${analysis_id}" \
+        --role "${role}" \
+        --sample-name "${sample_name}" \
+        --output "${safe_name}.callset.json.gz"
+    """
+}
+
+
+process VCF_RUN_COMPARISON {
+    tag 'run-vcf-comparison'
+    publishDir "${params.outdir}/REPORTS/VARIANTCALLING", mode: 'copy'
+
+    input:
+    path callset_summaries
+    path run_config_file
+    path comparison_script
+
+    output:
+    path "run.vcf_statistics.json", emit: statistics_json
+    path "run.sample_statistics.tsv", emit: sample_statistics
+    path "run.group_comparison.tsv", emit: group_comparison
+    path "run.variant_presence.tsv", emit: variant_presence
+
+    script:
+    def summary_args = callset_summaries.collect { "\"${it}\"" }.join(' ')
+    """
+    python3 "${comparison_script}" aggregate \
+        --summaries ${summary_args} \
+        --run-config "${run_config_file}" \
+        --output-dir .
+    """
+}
+
+
 workflow VARIANTCALLING {
     take:
     bam_ch
@@ -399,36 +562,55 @@ workflow VARIANTCALLING {
     tool_cfg = tools_config[tool_name] ?: [:]
     gatk_path = resolved_cfg.caller?.path ?: tool_cfg.path ?: 'gatk'
     gatk_args = resolved_cfg.caller?.resolved_args ?: (variant_cfg[tool_name]?.args ?: []).join(' ')
+    target_intervals = resolved_cfg.caller?.target_intervals ?: run_config.panel_design?.assets?.target_bed ?: ''
     joint_args = variant_cfg.joint_args instanceof List ? variant_cfg.joint_args.join(' ') : (variant_cfg.joint_args ?: '')
+    mutect2_args = variant_cfg.mutect2_args instanceof List ? variant_cfg.mutect2_args.join(' ') : (variant_cfg.mutect2_args ?: '')
+    mutect2_filter_args = variant_cfg.mutect2_filter_args instanceof List ? variant_cfg.mutect2_filter_args.join(' ') : (variant_cfg.mutect2_filter_args ?: '')
     gatk_java_home = resolved_cfg.caller?.java_home ?: tool_cfg.java_home ?: tool_cfg.javaHome ?: System.getenv('GATK_JAVA_HOME') ?: ''
     gatk_java_cmd = resolved_cfg.caller?.java_path ?: resolved_cfg.caller?.java_cmd ?: tool_cfg.java_path ?: tool_cfg.java_cmd ?: tool_cfg.java ?: System.getenv('GATK_JAVA_CMD') ?: ''
     sample_organization = (run_config.sample_organization ?: 'only cases').toString()
+    analysis_schema = ((run_config.schema_version ?: 1) as int) == 2 || sample_organization == 'mixed'
+    has_tumor_normal = analysis_schema && (run_config.analysis_groups ?: []).any { group -> group.analysis_type == 'tumor-normal' }
     pipeline_samples_org = (variant_cfg.samples_org ?: variant_cfg.samples_organization ?: 'single-sample').toString()
-    calling_mode = sample_organization == 'trio'
+    calling_mode = analysis_schema
+        ? (run_config.calling_scope ?: 'single-sample').toString()
+        : (sample_organization == 'trio'
         ? 'trio'
         : (sample_organization == 'case-control'
             ? 'case-control'
-            : (pipeline_samples_org == 'cohort' ? 'cohort' : 'single-sample'))
+            : (pipeline_samples_org == 'cohort' ? 'cohort' : 'single-sample')))
+
+    configured_gatk4_tool = tools_config.keySet().find { name -> name.toString().toUpperCase().startsWith('GATK V.4') }
+    somatic_gatk_tool = gatk_tool?.toString()?.toUpperCase()?.startsWith('GATK V.4') ? gatk_tool : configured_gatk4_tool
+    somatic_gatk_cfg = somatic_gatk_tool ? (tools_config[somatic_gatk_tool] ?: [:]) : [:]
+    selected_gatk4 = somatic_gatk_tool && somatic_gatk_tool == tool_name
+    somatic_gatk_path = selected_gatk4 ? gatk_path : (somatic_gatk_cfg.path ?: 'gatk')
+    somatic_gatk_java_home = selected_gatk4
+        ? gatk_java_home
+        : (somatic_gatk_cfg.java_home ?: somatic_gatk_cfg.javaHome ?: System.getenv('GATK_JAVA_HOME') ?: '')
+    somatic_gatk_java_cmd = selected_gatk4
+        ? gatk_java_cmd
+        : (somatic_gatk_cfg.java_path ?: somatic_gatk_cfg.java_cmd ?: somatic_gatk_cfg.java ?: System.getenv('GATK_JAVA_CMD') ?: '')
 
     ready_bams = bam_ch
         .combine(infra_ready)
         .map { sample_id, role, sample_name, bam, bai, ready -> tuple(sample_id, role, sample_name, bam) }
+    germline_bams = analysis_schema
+        ? ready_bams.filter { sample_id, role, sample_name, bam -> !(role in ['tumor', 'normal']) }
+        : ready_bams
 
     if (tool_upper.startsWith('DEEPVARIANT')) {
         deepvariant_container = (tool_cfg.container instanceof Map ? tool_cfg.container.image : tool_cfg.container) ?: resolved_cfg.caller?.container?.image ?: ''
         deepvariant_path = deepvariant_container ? (tool_cfg.path ?: resolved_cfg.caller?.path ?: '/opt/deepvariant/bin/run_deepvariant') : (resolved_cfg.caller?.path ?: tool_cfg.path ?: 'run_deepvariant')
         deepvariant_args = resolved_cfg.caller?.resolved_args ?: (variant_cfg[tool_name]?.args ?: []).join(' ')
         model_type = variant_cfg[tool_name]?.model_type ?: variant_cfg.model_type ?: 'WES'
-        target_intervals = resolved_cfg.caller?.target_intervals ?: ''
-        DEEPVARIANT_CALLER(ready_bams, variant_threads, variant_ram, deepvariant_path, deepvariant_container, deepvariant_args, reference_fasta, model_type, target_intervals)
-        output_vcfs = DEEPVARIANT_CALLER.out.vcfs
-        output_statuses = DEEPVARIANT_CALLER.out.statuses
-        status_files = DEEPVARIANT_CALLER.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
+        DEEPVARIANT_CALLER(germline_bams, variant_threads, variant_ram, deepvariant_path, deepvariant_container, deepvariant_args, reference_fasta, model_type, target_intervals)
+        germline_vcfs = DEEPVARIANT_CALLER.out.vcfs
+        germline_statuses = DEEPVARIANT_CALLER.out.statuses
     } else if (tool_upper.startsWith('FREEBAYES')) {
         freebayes_container = (tool_cfg.container instanceof Map ? tool_cfg.container.image : tool_cfg.container) ?: resolved_cfg.caller?.container?.image ?: ''
         freebayes_path = freebayes_container ? (tool_cfg.path ?: resolved_cfg.caller?.path ?: 'freebayes') : (resolved_cfg.caller?.path ?: tool_cfg.path ?: 'freebayes')
         freebayes_args = variant_cfg[tool_name]?.args instanceof List ? variant_cfg[tool_name].args.join(' ') : (variant_cfg[tool_name]?.args ?: '')
-        target_intervals = resolved_cfg.caller?.target_intervals ?: ''
         filters = variant_cfg.filters instanceof Map ? variant_cfg.filters : [:]
         freebayes_filter_args = [
             filters.min_base_quality_score ? "--min-base-quality ${filters.min_base_quality_score}" : '',
@@ -437,47 +619,66 @@ workflow VARIANTCALLING {
             filters.min_mapping_quality_score ? "--min-mapping-quality ${filters.min_mapping_quality_score}" : '',
         ].findAll { it }.join(' ')
         if (calling_mode == 'single-sample') {
-            freebayes_inputs = ready_bams.map { sample_id, role, sample_name, bam -> tuple(sample_id, role, sample_name, bam, false) }
+            freebayes_inputs = germline_bams.map { sample_id, role, sample_name, bam -> tuple(sample_id, role, sample_name, bam, false) }
         } else {
-            freebayes_inputs = ready_bams
+            freebayes_inputs = germline_bams
                 .map { sample_id, role, sample_name, bam ->
-                    def group_id = calling_mode == 'cohort' ? 'cohort' : sample_id
-                    def group_role = calling_mode == 'cohort' ? 'cohort' : (calling_mode == 'trio' ? 'trio' : 'case-control')
-                    def group_name = calling_mode == 'cohort' ? 'cohort' : "${sample_id}.${calling_mode.replace('-', '_')}"
+                    def group_id = calling_mode in ['cohort', 'run'] ? (run_config.calling_group ?: calling_mode) : sample_id
+                    def group_role = calling_mode in ['cohort', 'run'] ? calling_mode : (calling_mode == 'trio' ? 'trio' : 'case-control')
+                    def group_name = calling_mode in ['cohort', 'run'] ? (run_config.calling_group ?: calling_mode) : "${sample_id}.${calling_mode.replace('-', '_')}"
                     tuple([group_id, group_role, group_name], bam)
                 }
                 .groupTuple()
                 .map { group_key, bams -> tuple(group_key[0], group_key[1], group_key[2], bams, true) }
         }
         FREEBAYES_CALLER(freebayes_inputs, variant_threads, variant_ram, freebayes_path, freebayes_container, freebayes_args, freebayes_filter_args, reference_fasta, target_intervals, calling_mode)
-        output_vcfs = FREEBAYES_CALLER.out.vcfs
-        output_statuses = FREEBAYES_CALLER.out.statuses
-        status_files = FREEBAYES_CALLER.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
+        germline_vcfs = FREEBAYES_CALLER.out.vcfs
+        germline_statuses = FREEBAYES_CALLER.out.statuses
     } else {
-        GATK_HAPLOTYPECALLER(ready_bams, variant_threads, variant_ram, gatk_path, gatk_args, gatk_java_home, gatk_java_cmd, reference_fasta, calling_mode)
+        GATK_HAPLOTYPECALLER(germline_bams, variant_threads, variant_ram, gatk_path, gatk_args, gatk_java_home, gatk_java_cmd, reference_fasta, target_intervals, calling_mode)
         haplotype_statuses = GATK_HAPLOTYPECALLER.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }
 
         if (calling_mode == 'single-sample') {
-            output_vcfs = GATK_HAPLOTYPECALLER.out.vcfs
-            output_statuses = GATK_HAPLOTYPECALLER.out.statuses
-            status_files = haplotype_statuses.collect()
+            germline_vcfs = GATK_HAPLOTYPECALLER.out.vcfs
+            germline_statuses = GATK_HAPLOTYPECALLER.out.statuses
         } else {
             grouped_gvcfs = GATK_HAPLOTYPECALLER.out.gvcfs
                 .map { sample_id, role, sample_name, gvcf ->
-                    def group_id = calling_mode == 'cohort' ? 'cohort' : sample_id
-                    def group_role = calling_mode == 'cohort' ? 'cohort' : (calling_mode == 'trio' ? 'trio' : 'case-control')
-                    def group_name = calling_mode == 'cohort' ? 'cohort' : "${sample_id}.${calling_mode.replace('-', '_')}"
+                    def group_id = calling_mode in ['cohort', 'run'] ? (run_config.calling_group ?: calling_mode) : sample_id
+                    def group_role = calling_mode in ['cohort', 'run'] ? calling_mode : (calling_mode == 'trio' ? 'trio' : 'case-control')
+                    def group_name = calling_mode in ['cohort', 'run'] ? (run_config.calling_group ?: calling_mode) : "${sample_id}.${calling_mode.replace('-', '_')}"
                     tuple([group_id, group_role, group_name], gvcf)
                 }
                 .groupTuple()
                 .map { group_key, gvcfs -> tuple(group_key[0], group_key[1], group_key[2], gvcfs) }
-            GATK_JOINT_GENOTYPING(grouped_gvcfs, variant_threads, variant_ram, gatk_path, joint_args, gatk_java_home, gatk_java_cmd, reference_fasta, calling_mode)
-            output_vcfs = GATK_JOINT_GENOTYPING.out.vcfs
-            output_statuses = GATK_JOINT_GENOTYPING.out.statuses
-            joint_statuses = GATK_JOINT_GENOTYPING.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }
-            status_files = haplotype_statuses.mix(joint_statuses).collect()
+            GATK_JOINT_GENOTYPING(grouped_gvcfs, variant_threads, variant_ram, gatk_path, joint_args, gatk_java_home, gatk_java_cmd, reference_fasta, target_intervals, calling_mode)
+            germline_vcfs = GATK_JOINT_GENOTYPING.out.vcfs
+            germline_statuses = GATK_HAPLOTYPECALLER.out.statuses.mix(GATK_JOINT_GENOTYPING.out.statuses)
         }
     }
+
+    if (has_tumor_normal) {
+        somatic_pairs = ready_bams
+            .filter { sample_id, role, sample_name, bam -> role in ['tumor', 'normal'] }
+            .groupTuple()
+            .map { analysis_id, roles, sample_names, bams ->
+                def tumor_index = roles.indexOf('tumor')
+                def normal_index = roles.indexOf('normal')
+                def safe_id = analysis_id.toString().replaceAll(/[^A-Za-z0-9._-]/, '_')
+                tuple(analysis_id, 'tumor-normal', "${safe_id}.tumor_normal", sample_names[tumor_index], bams[tumor_index], sample_names[normal_index], bams[normal_index])
+            }
+        GATK_MUTECT2(somatic_pairs, variant_threads, variant_ram, somatic_gatk_path, mutect2_args, mutect2_filter_args, somatic_gatk_java_home, somatic_gatk_java_cmd, reference_fasta, target_intervals)
+        output_vcfs = germline_vcfs.mix(GATK_MUTECT2.out.vcfs)
+        output_statuses = germline_statuses.mix(GATK_MUTECT2.out.statuses)
+    } else {
+        output_vcfs = germline_vcfs
+        output_statuses = germline_statuses
+    }
+    status_files = output_statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
+
+    comparison_script = file("${projectDir}/../../helper_next/src/helper_next/core/vcf_comparison.py", checkIfExists: true)
+    VCF_CALLSET_SUMMARY(output_vcfs, comparison_script)
+    VCF_RUN_COMPARISON(VCF_CALLSET_SUMMARY.out.summaries.collect(), file(params.run_config), comparison_script)
 
     VARIANTCALLING_STEP_LOG(tool_name, status_files)
     VARIANTCALLING_ASSERT_SUCCESS(status_files, VARIANTCALLING_STEP_LOG.out.log)
@@ -485,6 +686,10 @@ workflow VARIANTCALLING {
     emit:
     vcfs = output_vcfs
     statuses = output_statuses
+    comparison_json = VCF_RUN_COMPARISON.out.statistics_json
+    sample_statistics = VCF_RUN_COMPARISON.out.sample_statistics
+    group_comparison = VCF_RUN_COMPARISON.out.group_comparison
+    variant_presence = VCF_RUN_COMPARISON.out.variant_presence
     step_log = VARIANTCALLING_STEP_LOG.out.log
     ready = VARIANTCALLING_ASSERT_SUCCESS.out.ready
 }

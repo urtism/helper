@@ -3,17 +3,22 @@
     "analysis": "Germline",
     "reference_version": "hg19",
     "workflow": [
+        "prealignment",
+        "alignment",
+        "preprocessing",
+        "variantcalling",
         "postprocessing",
+        "annotation",
         "variant_annotation",
         "cnv_annotation",
         "postannotation",
-        "preprocessing",
-        "variantcalling",
-        "cnvcalling",
-        "alignment"
+        "cnvcalling"
     ],
     "prealignment": {
-        "workflow": [],
+        "workflow": [
+            "trim_adapters",
+            "fastq_QC"
+        ],
         "threads": "1",
         "ram": "1g",
         "trim_adapters": {
@@ -52,6 +57,7 @@
             "fastq_alignment",
             "sam_to_bam",
             "sortSam",
+            "index_bam",
             "bam_QC"
         ],
         "threads": "2",
@@ -91,13 +97,18 @@
             "FASTQC v.0.11.8": {
                 "args": []
             }
+        },
+        "index_bam": {
+            "tool": "PICARD v.2.7.1",
+            "PICARD v.2.7.1": {
+                "args": []
+            }
         }
     },
     "preprocessing": {
         "workflow": [
             "add_readgroups",
             "mark_pcr_dup",
-            "indel_realignment",
             "BQ_recalibration"
         ],
         "threads": "2",
@@ -138,9 +149,8 @@
     },
     "variantcalling": {
         "tools": [
-            "VARSCAN2",
             "FREEBAYES v.1.1",
-            "GATK v.4.1"
+            "GATK v.4.5"
         ],
         "threads": "6",
         "ram": "2g",
@@ -167,6 +177,12 @@
             "args": []
         },
         "VARSCAN2": {
+            "args": []
+        },
+        "workflow": [
+            "short_variants"
+        ],
+        "GATK v.4.5": {
             "args": []
         }
     },
@@ -274,7 +290,8 @@
             "args": {
                 "assembly": "GRCh37",
                 "species": "homo_sapiens",
-                "args": ["--vcf_info_field",
+                "args": [
+                    "--vcf_info_field",
                     "ANN",
                     "--force_overwrite",
                     "--no_stats",
@@ -298,7 +315,8 @@
                     "--max_af",
                     "--af_1kg",
                     "--af_esp",
-                    "--af_gnomad"],            
+                    "--af_gnomad"
+                ],
                 "plugins": {
                     "list": [
                         "GeneSplicer",
@@ -362,6 +380,19 @@
         },
         "ann_vcf_to_tsv": {
             "tool": ""
+        }
+    },
+    "design": "single-sample",
+    "annotation": {
+        "workflow": [
+            "vep_annotation",
+            "ann_vcf_to_tsv"
+        ],
+        "vep_annotation": {
+            "tool": "VEP v.115",
+            "VEP v.115": {
+                "args": []
+            }
         }
     }
 }

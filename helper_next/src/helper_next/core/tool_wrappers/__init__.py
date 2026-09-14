@@ -9,7 +9,9 @@ from helper_next.core.tool_wrappers.catalog import all_catalog_operations, opera
 from helper_next.core.tool_wrappers.registry import build_invocation, wrapper_for
 from helper_next.core.tool_wrappers.wrappers import (
     BwaAlignmentWrapper,
+    CutadaptTrimmingWrapper,
     PicardMarkDuplicatesWrapper,
+    SurecallTrimmingWrapper,
     VepAnnotationWrapper,
 )
 
@@ -20,7 +22,9 @@ __all__ = [
     "ToolOutput",
     "ToolWrapper",
     "BwaAlignmentWrapper",
+    "CutadaptTrimmingWrapper",
     "PicardMarkDuplicatesWrapper",
+    "SurecallTrimmingWrapper",
     "VepAnnotationWrapper",
     "all_catalog_operations",
     "build_invocation",

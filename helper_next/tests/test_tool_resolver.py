@@ -1,6 +1,78 @@
 from helper_next.core.tool_resolver import resolve_pipeline_tools
 
 
+def test_resolver_builds_surecall_adapter_trimming_invocation():
+    pipeline = {
+        "workflow": ["prealignment"],
+        "prealignment": {
+            "workflow": ["trim_adapters"],
+            "threads": "2",
+            "ram": "4g",
+            "trim_adapters": {
+                "tool": "SURECALLTRIMMER v.3.5.1.46",
+                "adapter1": "AD1",
+                "adapter2": "AD2",
+                "SURECALLTRIMMER v.3.5.1.46": {"args": ["-hs"]},
+            },
+        },
+    }
+    tools = {
+        "SURECALLTRIMMER v.3.5.1.46": {
+            "path": "/tools/SurecallTrimmer.jar",
+            "ram": "32g",
+            "version": "3.5.1.46",
+        }
+    }
+
+    resolved = resolve_pipeline_tools(pipeline, tools)
+    trimming = resolved["prealignment"]["resolved"]["trim_adapters"]
+
+    assert trimming["path"] == "/tools/SurecallTrimmer.jar"
+    assert trimming["resolved_args"] == "-hs"
+    assert trimming["invocation"]["executable"] == "java"
+    assert trimming["invocation"]["command_args"][:3] == [
+        "-Xmx32g",
+        "-jar",
+        "/tools/SurecallTrimmer.jar",
+    ]
+
+
+def test_resolver_preserves_cutadapt_docker_runtime():
+    pipeline = {
+        "workflow": ["prealignment"],
+        "prealignment": {
+            "workflow": ["trim_adapters"],
+            "threads": "2",
+            "ram": "2g",
+            "trim_adapters": {
+                "tool": "CUTADAPT",
+                "adapter1": "AD1",
+                "adapter2": "AD2",
+                "CUTADAPT": {"args": []},
+            },
+        },
+    }
+    tools = {
+        "CUTADAPT": {
+            "path": "cutadapt",
+            "container": {"engine": "docker", "image": "pipecraft/cutadapt:5.2-pc1.2.0"},
+        }
+    }
+
+    resolved = resolve_pipeline_tools(pipeline, tools)
+    invocation = resolved["prealignment"]["resolved"]["trim_adapters"]["invocation"]
+
+    assert invocation["executable"] == "cutadapt"
+    assert invocation["container"] == {
+        "engine": "docker",
+        "image": "pipecraft/cutadapt:5.2-pc1.2.0",
+        "bind_mounts": [],
+        "workdir": "",
+        "env": {},
+        "extra_args": [],
+    }
+
+
 def test_resolver_keeps_pipeline_intent_and_resolves_environment_paths():
     pipeline = {
         "workflow": ["alignment", "preprocessing", "variantcalling", "annotation"],
@@ -64,6 +136,7 @@ def test_resolver_keeps_pipeline_intent_and_resolves_environment_paths():
     assert resolved["preprocessing"]["resolved"]["databases"]["bqsr_dbsnp"]["path"] == "/refs/dbsnp.vcf"
     assert resolved["preprocessing"]["resolved"]["target_intervals"] == "/targets/panel.bed"
     assert resolved["variantcalling"]["resolved"]["caller"]["resolved_args"] == "--sample-ploidy 2"
+    assert resolved["variantcalling"]["resolved"]["caller"]["target_intervals"] == "/targets/panel.bed"
     assert "--plugin GeneSplicer,/plugins/genesplicer,human" in resolved["annotation"]["resolved"]["vep_annotation"]["resolved_args"]
     assert resolved["resolved_tools"]["annotation"]["panel_assets"]["target_bed"] == "/targets/panel.bed"
 
@@ -94,6 +167,7 @@ def test_resolver_supports_deepvariant_containerized_caller():
     assert caller["path"] == "/opt/deepvariant/bin/run_deepvariant"
     assert caller["container"]["image"] == "google/deepvariant:1.10.0"
     assert caller["resolved_args"] == "--vcf_stats_report=true"
+    assert caller["target_intervals"] == "/targets/panel.bed"
     assert caller["invocation"]["inputs"][2]["path"] == "/targets/panel.bed"
 
 
@@ -124,6 +198,7 @@ def test_resolver_supports_freebayes_containerized_caller():
     assert caller["path"] == "freebayes"
     assert caller["container"]["image"] == "biocontainers/freebayes"
     assert "--use-best-n-alleles 4" in caller["resolved_args"]
+    assert caller["target_intervals"] == "/targets/panel.bed"
     command_args = caller["invocation"]["command_args"]
     assert "--min-base-quality" in command_args
     assert "20" in command_args

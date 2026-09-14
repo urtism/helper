@@ -305,6 +305,66 @@ process ALIGN_NOVOALIGN {
 }
 
 
+process BAM_QC {
+    tag "${sample_name}"
+    cpus { align_threads }
+    memory { align_ram }
+    publishDir "${params.outdir}/ALIGNMENT/bam_qc", mode: 'copy', pattern: 'bam_fastqc_out/*'
+    publishDir "${params.outdir}/LOGS/ALIGNMENT/samples", mode: 'copy', pattern: '*.bam_QC.alignment.log'
+    publishDir "${params.outdir}/LOGS/ALIGNMENT/samples", mode: 'copy', pattern: '*.bam_QC.alignment.status.tsv'
+
+    input:
+    tuple val(sample_id), val(role), val(sample_name), path(bam), path(bai)
+    val align_threads
+    val align_ram
+    val fastqc_path
+    val fastqc_args
+
+    output:
+    tuple val(sample_id), val(role), val(sample_name), path('bam_fastqc_out/*'), optional: true, emit: reports
+    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.bam_QC.alignment.log"), path("${sample_name}.bam_QC.alignment.status.tsv"), emit: statuses
+
+    script:
+    """
+    set +e
+    mkdir -p bam_fastqc_out
+    if [ -x "${fastqc_path}" ]; then
+        fastqc_cmd="${fastqc_path}"
+    else
+        fastqc_cmd="perl ${fastqc_path}"
+    fi
+    {
+        echo "step=alignment"
+        echo "operation=bam_QC"
+        echo "tool=FASTQC"
+        echo "sample_id=${sample_id}"
+        echo "role=${role}"
+        echo "sample_name=${sample_name}"
+        echo "threads=${task.cpus}"
+        echo "bam=${bam}"
+        echo "started=\$(date -Is)"
+        echo "command=\${fastqc_cmd} -t ${task.cpus} -o bam_fastqc_out ${fastqc_args} ${bam}"
+        echo
+    } > ${sample_name}.bam_QC.alignment.log
+    started_at=\$(date -Is)
+    \${fastqc_cmd} -t ${task.cpus} -o bam_fastqc_out ${fastqc_args} ${bam} >> ${sample_name}.bam_QC.alignment.log 2>&1
+    exit_code=\$?
+    completed_at=\$(date -Is)
+    if [ "\${exit_code}" -eq 0 ]; then
+        status=completed
+        echo "completed=\${completed_at}" >> ${sample_name}.bam_QC.alignment.log
+    else
+        status=failed
+        echo "failed=\${completed_at}" >> ${sample_name}.bam_QC.alignment.log
+        echo "exit_code=\${exit_code}" >> ${sample_name}.bam_QC.alignment.log
+    fi
+    printf "step\\ttool\\tsample_id\\trole\\tsample_name\\tstatus\\texit_code\\tstarted\\tcompleted\\n" > ${sample_name}.bam_QC.alignment.status.tsv
+    printf "alignment\\tFASTQC\\t${sample_id}\\t${role}\\t${sample_name}\\t\${status}\\t\${exit_code}\\t\${started_at}\\t\${completed_at}\\n" >> ${sample_name}.bam_QC.alignment.status.tsv
+    exit 0
+    """
+}
+
+
 process ALIGNMENT_STEP_LOG {
     tag 'alignment'
     publishDir "${params.outdir}/LOGS/ALIGNMENT", mode: 'copy'
@@ -368,6 +428,8 @@ workflow ALIGNMENT {
 
     main:
     alignment_cfg = pipeline_config.alignment ?: [:]
+    enabled_operations = alignment_cfg.workflow ?: []
+    bam_qc_enabled = enabled_operations.contains('bam_QC')
     resolved_cfg = alignment_cfg.resolved ?: [:]
     alignment_step_cfg = alignment_cfg.fastq_alignment ?: [:]
     tool_name = alignment_step_cfg.tool ?: 'BWA v.0.7.17'
@@ -380,6 +442,11 @@ workflow ALIGNMENT {
     algorithm = tool_specific_cfg.algorithm ?: 'mem'
     extra_args = resolved_cfg.fastq_alignment?.resolved_args ?: (tool_specific_cfg.args ?: []).join(' ')
     samtools_path = resolved_cfg.samtools?.path ?: tools_config.SAMTOOLS?.path ?: 'samtools'
+    bam_qc_cfg = alignment_cfg.bam_QC ?: [:]
+    bam_qc_tool_name = bam_qc_cfg.tool ?: 'FASTQC v.0.11.8'
+    bam_qc_tool_cfg = tools_config[bam_qc_tool_name] ?: [:]
+    bam_qc_path = bam_qc_tool_cfg.path ?: 'fastqc'
+    bam_qc_args = (bam_qc_cfg[bam_qc_tool_name]?.args ?: bam_qc_cfg.args ?: []).join(' ')
 
     fastq_samples = samples_ch
         .filter { row -> row.fastq_r1 && row.fastq_r2 }
@@ -402,13 +469,23 @@ workflow ALIGNMENT {
         error "Unsupported aligner: ${tool_name}"
     }
 
-    status_files = aligned_statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
-    ALIGNMENT_STEP_LOG(tool_name, status_files)
+    alignment_statuses = aligned_statuses
+    bam_qc_reports = Channel.empty()
+    if (bam_qc_enabled) {
+        BAM_QC(aligned_bams, align_threads, align_ram, bam_qc_path, bam_qc_args)
+        alignment_statuses = alignment_statuses.mix(BAM_QC.out.statuses)
+        bam_qc_reports = BAM_QC.out.reports
+    }
+
+    status_files = alignment_statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
+    alignment_tool_names = bam_qc_enabled ? "${tool_name},${bam_qc_tool_name}" : tool_name
+    ALIGNMENT_STEP_LOG(alignment_tool_names, status_files)
     ALIGNMENT_ASSERT_SUCCESS(status_files, ALIGNMENT_STEP_LOG.out.log)
 
     emit:
     bams = aligned_bams
-    statuses = aligned_statuses
+    bam_qc_reports = bam_qc_reports
+    statuses = alignment_statuses
     step_log = ALIGNMENT_STEP_LOG.out.log
     ready = ALIGNMENT_ASSERT_SUCCESS.out.ready
 }

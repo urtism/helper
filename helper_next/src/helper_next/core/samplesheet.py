@@ -29,6 +29,8 @@ ORGANIZATION_ROLES = {
     "trio": ["case", "parent1", "parent2"],
 }
 
+ANALYSIS_TYPES = {"only cases", "family", "case-control", "tumor-normal"}
+
 MAX_RESOLVE_MATCHES = 2
 
 
@@ -151,15 +153,21 @@ def is_step_compatible(step, file_type):
 
 def sample_name_from_fastq(path):
     name = Path(path).name
-    sample = re.split(r"_S(\d+)", name)[0]
-    if sample == name:
-        sample = strip_known_suffixes(name, FASTQ_SUFFIXES)
-        sample = re.split(r"([._-](R1|R2|I2)([._-]|$))", sample, flags=re.IGNORECASE)[0]
-    return normalize_sample_name(sample)
+    illumina_name = re.match(
+        r"^(?P<sample>.+)_S\d+(?:_L\d{3})?_(?:R1|R2|I2)(?:_\d+)?\.(?:fastq|fq)(?:\.gz)?$",
+        name,
+        flags=re.IGNORECASE,
+    )
+    if illumina_name:
+        return illumina_name.group("sample").strip()
+
+    sample = strip_known_suffixes(name, FASTQ_SUFFIXES)
+    sample = re.split(r"([._-](R1|R2|I2)([._-]|$))", sample, flags=re.IGNORECASE)[0]
+    return sample.strip()
 
 
 def sample_name_from_bam(path):
-    return normalize_sample_name(strip_known_suffixes(Path(path).name, ALIGNMENT_SUFFIXES))
+    return strip_known_suffixes(Path(path).name, ALIGNMENT_SUFFIXES).strip()
 
 
 def sample_name_from_vcf(path):
@@ -234,6 +242,7 @@ def rows_from_files(step, files):
 def _fastq_rows(files):
     file_set = set(files)
     rows = []
+    warnings = []
     for path in sorted(files):
         name = Path(path).name
         if not is_fastq_read(name, "R1"):
@@ -242,15 +251,18 @@ def _fastq_rows(files):
         sample = sample_name_from_fastq(path)
         r2 = matching_fastq_path(folder, name, "R1", "R2")
         i2 = matching_fastq_path(folder, name, "R1", "I2")
+        r2_exists = r2 in file_set or Path(r2).is_file()
+        i2_exists = i2 in file_set or Path(i2).is_file()
         rows.append(
             {
                 "sample_name": sample,
                 "fastq_R1": path,
-                "fastq_R2": r2 if r2 in file_set else "",
-                "fastq_I2": i2 if i2 in file_set else "",
+                "fastq_R2": r2 if r2_exists else "",
+                "fastq_I2": i2 if i2_exists else "",
             }
         )
-    warnings = []
+        if not r2_exists:
+            warnings.append("R1 without matching R2: {}".format(path))
     r1_samples = {row["sample_name"] for row in rows}
     for path in files:
         if is_fastq_read(Path(path).name, "R2") and sample_name_from_fastq(path) not in r1_samples:
@@ -324,6 +336,9 @@ def _annotation_rows(files):
 
 
 def build_samplesheet(step, organization, rows, organization_rows=None):
+    if organization_rows and any("analysis_type" in row for row in organization_rows):
+        return build_analysis_samplesheet(step, rows, organization_rows)
+
     organization_rows = organization_rows or default_organization_rows(rows, organization)
     sample_list = [row["sample_id"] for row in organization_rows if row.get("sample_id")]
     samples_by_name = {row.get("sample_name"): row for row in rows if row.get("sample_name")}
@@ -346,6 +361,85 @@ def build_samplesheet(step, organization, rows, organization_rows=None):
         "sample_organization": organization,
         step: step_payload,
     }
+
+
+def build_analysis_samplesheet(step, rows, organization_rows):
+    samples_by_name = {row.get("sample_name"): row for row in rows if row.get("sample_name")}
+    sample_list = list(samples_by_name)
+    groups = []
+    groups_by_key = {}
+
+    for organization_row in organization_rows:
+        sample_name = organization_row.get("sample_name", "")
+        if not sample_name or sample_name not in samples_by_name:
+            continue
+        analysis_type = organization_row.get("analysis_type") or "only cases"
+        analysis_id = organization_row.get("analysis_id") or sample_name
+        key = (analysis_type, analysis_id)
+        if key not in groups_by_key:
+            group = {
+                "analysis_id": analysis_id,
+                "analysis_type": analysis_type,
+                "members": [],
+            }
+            groups_by_key[key] = group
+            groups.append(group)
+        groups_by_key[key]["members"].append(analysis_member(organization_row, analysis_type))
+
+    step_payload = {
+        sample_name: _row_payload(step, samples_by_name[sample_name])
+        for sample_name in sample_list
+    }
+    return {
+        "schema_version": 2,
+        "sample_list": sample_list,
+        "sample_organization": "mixed",
+        "analysis_groups": groups,
+        step: step_payload,
+    }
+
+
+def analysis_member(row, analysis_type):
+    member = {
+        "sample_name": row.get("sample_name", ""),
+        "relationship": row.get("relationship") or default_relationship(analysis_type),
+    }
+    if analysis_type == "family":
+        member.update(
+            {
+                "sex": row.get("sex") or "unknown",
+                "father": row.get("father", ""),
+                "mother": row.get("mother", ""),
+                "affected": row.get("affected") or "unknown",
+                "twin_group": row.get("twin_group", ""),
+            }
+        )
+    elif analysis_type == "case-control":
+        member.update(
+            {
+                "sex": row.get("sex") or "unknown",
+                "affected": row.get("affected") or "unknown",
+                "control_relationship": row.get("control_relationship", ""),
+            }
+        )
+    elif analysis_type == "tumor-normal":
+        member.update(
+            {
+                "individual_id": row.get("individual_id") or row.get("sample_name", ""),
+                "sex": row.get("sex") or "unknown",
+                "specimen_type": row.get("specimen_type") or "unknown",
+                "tumor_purity": row.get("tumor_purity", ""),
+            }
+        )
+    return member
+
+
+def default_relationship(analysis_type):
+    if analysis_type == "case-control":
+        return "case"
+    if analysis_type == "tumor-normal":
+        return "tumor"
+    return "proband"
 
 
 def default_organization_rows(rows, organization):
@@ -378,6 +472,8 @@ def load_samplesheet_text(content, selected_step=None):
 
     data = json.loads(content)
     step = selected_step if selected_step in STEP_COLUMNS else next((name for name in STEP_COLUMNS if name in data), "prealignment")
+    if data.get("schema_version") == 2 or "analysis_groups" in data:
+        return load_analysis_samplesheet(data, step)
     organization = data.get("sample_organization", "only cases")
     rows = flatten_samplesheet(data, step)
     return {
@@ -387,6 +483,49 @@ def load_samplesheet_text(content, selected_step=None):
         "organization_rows": organization_rows_from_samplesheet(data, step, organization),
         "samplesheet": data,
     }
+
+
+def load_analysis_samplesheet(data, step):
+    step_data = data.get(step, {})
+    rows = []
+    for sample_name in data.get("sample_list", []):
+        payload = step_data.get(sample_name, {})
+        if payload:
+            row = dict(payload)
+            row["sample_name"] = row.get("sample_name") or sample_name
+            rows.append(row)
+    return {
+        "step": step,
+        "organization": "mixed",
+        "rows": rows,
+        "organization_rows": organization_rows_from_analysis_groups(data),
+        "samplesheet": data,
+    }
+
+
+def organization_rows_from_analysis_groups(data):
+    rows = []
+    for group in data.get("analysis_groups", []):
+        analysis_id = group.get("analysis_id", "")
+        analysis_type = group.get("analysis_type", "only cases")
+        for member in group.get("members", []):
+            row = {
+                "sample_name": member.get("sample_name", ""),
+                "analysis_type": analysis_type,
+                "analysis_id": analysis_id,
+                "relationship": member.get("relationship") or default_relationship(analysis_type),
+                "sex": member.get("sex", "unknown"),
+                "father": member.get("father", ""),
+                "mother": member.get("mother", ""),
+                "affected": member.get("affected", "unknown"),
+                "twin_group": member.get("twin_group", ""),
+                "individual_id": member.get("individual_id") or member.get("sample_name", ""),
+                "control_relationship": member.get("control_relationship", ""),
+                "specimen_type": member.get("specimen_type", "unknown"),
+                "tumor_purity": member.get("tumor_purity", ""),
+            }
+            rows.append(row)
+    return rows
 
 
 def load_tabular_samplesheet(content, selected_step=None):

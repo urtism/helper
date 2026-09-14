@@ -26,6 +26,8 @@ def resolve_pipeline_tools(pipeline_config, tools_config, panel_design=None):
 
 def resolve_step(step, step_config, tools_config, panel_design, reference_info=None):
     reference_info = reference_info or {}
+    if step == "prealignment":
+        return resolve_prealignment(step_config, tools_config, panel_design, reference_info)
     if step == "alignment":
         return resolve_alignment(step_config, tools_config, panel_design, reference_info)
     if step == "preprocessing":
@@ -37,6 +39,27 @@ def resolve_step(step, step_config, tools_config, panel_design, reference_info=N
     if step == "annotation":
         return resolve_annotation(step_config, tools_config, panel_design, reference_info)
     return {}
+
+
+def resolve_prealignment(step_config, tools_config, panel_design=None, reference_info=None):
+    resolved = {}
+    trim_cfg = step_config.get("trim_adapters", {})
+    if "trim_adapters" in step_config.get("workflow", []) and isinstance(trim_cfg, dict):
+        tool_name = trim_cfg.get("tool") or "CUTADAPT"
+        tool_specific = trim_cfg.get(tool_name, {}) if isinstance(trim_cfg.get(tool_name, {}), dict) else {}
+        operation_cfg = with_step_resources(tool_specific, step_config)
+        operation_cfg["adapter1"] = trim_cfg.get("adapter1", "")
+        operation_cfg["adapter2"] = trim_cfg.get("adapter2", "")
+        resolved["trim_adapters"] = operation(
+            "trim_adapters",
+            tool_name,
+            tool_entry(tools_config, tool_name),
+            operation_cfg,
+            panel_design,
+            reference_info,
+            tools_config,
+        )
+    return resolved
 
 
 def resolve_alignment(step_config, tools_config, panel_design=None, reference_info=None):
@@ -136,9 +159,9 @@ def resolve_variantcalling(step_config, tools_config, panel_design=None, referen
     panel_assets = panel_design.get("assets", {}) if isinstance(panel_design, dict) else {}
     if panel_assets.get("target_bed") and "target_intervals" not in operation_cfg:
         operation_cfg["target_intervals"] = panel_assets["target_bed"]
-    return {
-        "caller": operation("caller", tool_name, tool_entry(tools_config, tool_name), operation_cfg, panel_design, reference_info, tools_config),
-    }
+    caller = operation("caller", tool_name, tool_entry(tools_config, tool_name), operation_cfg, panel_design, reference_info, tools_config)
+    caller["target_intervals"] = str(operation_cfg.get("target_intervals", ""))
+    return {"caller": caller}
 
 
 def supported_variantcaller(tool_name):

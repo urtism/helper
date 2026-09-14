@@ -1,6 +1,9 @@
-import {getProject} from "./api.js?v=20260626-2";
-import {initAnalysis} from "./sections/analysis.js?v=20260629-8";
-import {initSampleSheet} from "./sections/samplesheet.js?v=20260518-6";
+import {initAnalysisHistory} from "./sections/analysis_history.js?v=20260911-3";
+import {getProject} from "./api.js?v=20260910-2";
+import {initAnalysis} from "./sections/analysis.js?v=20260911-3";
+import {initPipeline} from "./sections/pipeline.js?v=20260910-2";
+import {initSampleSheet} from "./sections/samplesheet.js?v=20260909-2";
+import {initTools} from "./sections/tools.js?v=20260910-2";
 
 const sectionTitles = {
   samplesheet: "Compile Sample Sheet",
@@ -8,7 +11,27 @@ const sectionTitles = {
   tools: "Tools Settings",
   panels: "Add or Edit Gene Panel Info",
   analysis: "Start Analysis",
+  "analysis-history": "Analysis History",
 };
+
+const sidebarStorageKey = "helper-next.sidebar-collapsed";
+const appShell = document.querySelector(".app-shell");
+const sidebar = document.querySelector("#primary-sidebar");
+const sidebarToggle = document.querySelector("#sidebar-toggle");
+
+function setSidebarCollapsed(collapsed) {
+  appShell.classList.toggle("sidebar-collapsed", collapsed);
+  sidebar.setAttribute("aria-hidden", String(collapsed));
+  sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+  sidebarToggle.setAttribute("aria-label", collapsed ? "Show navigation" : "Hide navigation");
+  sidebarToggle.title = collapsed ? "Show navigation" : "Hide navigation";
+  window.localStorage.setItem(sidebarStorageKey, String(collapsed));
+}
+
+setSidebarCollapsed(window.localStorage.getItem(sidebarStorageKey) === "true");
+sidebarToggle.addEventListener("click", () => {
+  setSidebarCollapsed(!appShell.classList.contains("sidebar-collapsed"));
+});
 
 function showSection(sectionId) {
   document.querySelectorAll(".module").forEach((section) => {
@@ -28,28 +51,25 @@ document.querySelectorAll(".nav-item").forEach((button) => {
 
 initSampleSheet();
 initAnalysis();
+initAnalysisHistory();
+initPipeline();
+initTools();
 
-document.querySelector("#refresh-project").addEventListener("click", loadProject);
 loadProject().catch((error) => {
   document.querySelector("#project-root").textContent = error.message;
 });
 
 async function loadProject() {
   const root = document.querySelector("#project-root");
-  const pipelines = document.querySelector("#pipelines");
-  const toolConfigs = document.querySelector("#tool-configs");
   const scripts = document.querySelector("#scripts");
 
   root.textContent = "Loading...";
-  pipelines.replaceChildren();
-  toolConfigs.replaceChildren();
   scripts.replaceChildren();
 
   const data = await getProject();
 
   root.textContent = data.root;
-  fillList(pipelines, data.pipelines);
-  fillList(toolConfigs, data.tool_configs);
+  window.dispatchEvent(new CustomEvent("helper:project-loaded", {detail: data}));
   fillList(scripts, data.scripts);
 }
 

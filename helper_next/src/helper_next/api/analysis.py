@@ -5,11 +5,16 @@ import signal
 import shutil
 import subprocess
 import csv
+import threading
+import logging
+from uuid import uuid4
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+from helper_next.core import analysis_history as history
 
 from helper_next.core.nextflow import (
     ValidationError,
@@ -28,10 +33,9 @@ from helper_next.core.samplesheet import load_samplesheet_text
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 
-class FakeRunRequest(BaseModel):
+class AnalysisRunRequest(BaseModel):
     run_id: str
     samplesheet_content: str
-    mode: str = ""
     aligner: str = "BWA v.0.7.17"
     workdir: str = "/tmp/helper_next_analysis"
     pipeline_path: str = ""
@@ -42,6 +46,8 @@ class FakeRunRequest(BaseModel):
     execution_profile: str = "local"
     queue: str = ""
     requested_workflow: List[str] = []
+    requested_prealignment_workflow: List[str] = []
+    requested_alignment_workflow: List[str] = []
     requested_preprocessing_workflow: List[str] = []
     requested_postprocessing_workflow: List[str] = []
     requested_annotation_workflow: List[str] = []
@@ -67,68 +73,8 @@ GATK_JAVA_CANDIDATES = [
 ]
 
 
-@router.post("/test-run")
-def test_run(payload: FakeRunRequest):
-    run_id = clean_run_id(payload.run_id)
-    if not payload.samplesheet_content.strip():
-        raise HTTPException(status_code=400, detail="Samplesheet content is required")
-    if payload.aligner not in SUPPORTED_ALIGNERS:
-        raise HTTPException(status_code=400, detail="Unsupported aligner: {}".format(payload.aligner))
-    execution_profile = clean_execution_profile(payload.execution_profile)
-
-    loaded = load_samplesheet_text(payload.samplesheet_content)
-    samplesheet = loaded["samplesheet"]
-    entry_step = loaded["step"]
-    if entry_step not in ("prealignment", "alignment"):
-        raise HTTPException(status_code=400, detail="Fake alignment requires a FASTQ samplesheet")
-    pipeline_config = fake_alignment_pipeline(payload.aligner)
-    tools_config = fake_tools_config(payload.aligner)
-
-    try:
-        validate_nextflow_inputs(samplesheet, pipeline_config, tools_config, entry_step=entry_step)
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=exc.errors)
-
-    run_dir = Path(payload.workdir).expanduser() / run_id
-    manifest_path = run_dir / "manifest.tsv"
-    run_config_path = run_dir / "run_config.json"
-    results = simulate_alignment_run(
-        run_dir,
-        run_id,
-        payload.aligner,
-        manifest_rows(samplesheet, entry_step),
-        keep_intermediates=payload.keep_intermediates,
-    )
-
-    write_manifest(results["manifest_rows"], manifest_path)
-    write_run_config(
-        build_nextflow_run_config(samplesheet, pipeline_config, tools_config, entry_step=entry_step, requested_workflow="alignment"),
-        run_config_path,
-    )
-
-    return {
-        "status": "completed",
-        "mode": "fake",
-        "run_id": run_id,
-        "aligner": payload.aligner,
-        "gene_panel_design": payload.gene_panel_design.strip(),
-        "tools_path": payload.tools_path.strip(),
-        "set_workdir_default": payload.set_workdir_default,
-        "keep_intermediates": payload.keep_intermediates,
-        "execution_profile": execution_profile,
-        "run_dir": str(run_dir),
-        "manifest": str(manifest_path),
-        "run_config": str(run_config_path),
-        "nextflow_trace": results["nextflow_trace"],
-        "workflow_plan": results["logs"]["workflow_plan"],
-        "outputs": results["outputs"],
-        "logs": results["logs"],
-        "message": "Fake alignment workflow completed",
-    }
-
-
 @router.post("/validate-run")
-def validate_run(payload: FakeRunRequest):
+def validate_run(payload: AnalysisRunRequest):
     validation = validate_analysis_payload(payload)
     return {
         "status": "ok",
@@ -142,7 +88,19 @@ def validate_run(payload: FakeRunRequest):
 
 
 @router.post("/real-run")
-def real_run(payload: FakeRunRequest):
+def real_run(payload: AnalysisRunRequest):
+    return launch_run(payload)
+
+
+_launch_lock = threading.Lock()
+
+
+def launch_run(payload, snapshot=None, parent_id=None):
+    with _launch_lock:
+        return _launch_run(payload, snapshot, parent_id)
+
+
+def _launch_run(payload, snapshot=None, parent_id=None):
     run_id = clean_run_id(payload.run_id)
     if not payload.samplesheet_content.strip():
         raise HTTPException(status_code=400, detail="Samplesheet content is required")
@@ -161,27 +119,42 @@ def real_run(payload: FakeRunRequest):
         raise HTTPException(status_code=400, detail="Real Nextflow run requires a FASTQ, BAM, or VCF samplesheet")
 
     paths = get_project_paths()
-    tools_path = resolve_tools_path(payload.tools_path, paths.configs)
-    tools_config = load_json(tools_path)
-    panel_design = resolve_panel_design(payload.gene_panel_design, paths.configs)
-    requested_steps = [step for step in payload.requested_workflow if step]
-    requested_preprocessing_workflow = clean_requested_preprocessing_workflow(payload.requested_preprocessing_workflow)
-    requested_postprocessing_workflow = clean_requested_postprocessing_workflow(payload.requested_postprocessing_workflow)
-    requested_annotation_workflow = clean_requested_annotation_workflow(payload.requested_annotation_workflow)
-    requested_workflow = clean_requested_workflow(payload.requested_workflow, entry_step)
-    pipeline_config = resolve_pipeline_config(
-        payload.pipeline_path,
-        paths.pipelines,
-        payload.aligner,
-        entry_step,
-        requested_steps,
-        requested_workflow,
-        requested_preprocessing_workflow,
-        requested_postprocessing_workflow,
-        requested_annotation_workflow,
-        tools_config,
-    )
-    pipeline_config = resolve_pipeline_tools(pipeline_config, tools_config, panel_design)
+    if snapshot is None:
+        tools_path = resolve_tools_path(payload.tools_path, paths.configs)
+        tools_config = load_json(tools_path)
+        panel_design = resolve_panel_design(payload.gene_panel_design, paths.configs)
+        requested_steps = [step for step in payload.requested_workflow if step]
+        requested_prealignment_workflow = clean_requested_prealignment_workflow(payload.requested_prealignment_workflow)
+        requested_alignment_workflow = clean_requested_alignment_workflow(payload.requested_alignment_workflow)
+        requested_preprocessing_workflow = clean_requested_preprocessing_workflow(payload.requested_preprocessing_workflow)
+        requested_postprocessing_workflow = clean_requested_postprocessing_workflow(payload.requested_postprocessing_workflow)
+        requested_annotation_workflow = clean_requested_annotation_workflow(payload.requested_annotation_workflow)
+        requested_workflow = clean_requested_workflow(payload.requested_workflow, entry_step)
+        pipeline_config = resolve_pipeline_config(
+            payload.pipeline_path,
+            paths.pipelines,
+            payload.aligner,
+            entry_step,
+            requested_steps,
+            requested_workflow,
+            requested_preprocessing_workflow,
+            requested_postprocessing_workflow,
+            requested_annotation_workflow,
+            tools_config,
+            requested_prealignment_workflow,
+            requested_alignment_workflow,
+        )
+        pipeline_config = resolve_pipeline_tools(pipeline_config, tools_config, panel_design)
+    else:
+        tools_path = Path(snapshot["request"]["tools_path"])
+        tools_config = snapshot["tools_config"]
+        panel_design = snapshot["panel_design"]
+        pipeline_config = snapshot["pipeline_config"]
+        requested_workflow = ",".join(snapshot["workflow"])
+        try:
+            validate_samplesheet_file_access(samplesheet, entry_step)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=exc.errors)
     validate_workflow_availability(entry_step, requested_workflow)
     nextflow_profile = container_aware_execution_profile(execution_profile, pipeline_config)
 
@@ -191,7 +164,10 @@ def real_run(payload: FakeRunRequest):
         raise HTTPException(status_code=400, detail=exc.errors)
 
     rows = manifest_rows(samplesheet, entry_step)
-    run_dir = Path(payload.workdir).expanduser() / run_id
+    run_dir = (Path(payload.workdir).expanduser() / run_id).resolve()
+    archive = history.database_path().resolve()
+    if archive == run_dir or run_dir in archive.parents:
+        raise HTTPException(status_code=400, detail="History database must be outside the run directory")
     run_dir.mkdir(parents=True, exist_ok=True)
     nextflow_work_dir = run_dir / "work"
     resume_run = nextflow_work_dir.exists() and any(nextflow_work_dir.iterdir())
@@ -210,20 +186,19 @@ def real_run(payload: FakeRunRequest):
     if existing_pid and is_pid_running(existing_pid):
         raise HTTPException(status_code=409, detail="Run is already running with PID {}".format(existing_pid))
 
+    stop_marker = run_dir / "analysis.stop.requested"
+    stop_marker.unlink(missing_ok=True)
     write_json(samplesheet, samplesheet_path)
     write_json(pipeline_config, pipeline_path)
     write_manifest(rows, manifest_path)
-    write_run_config(
-        build_nextflow_run_config(
-            samplesheet,
-            pipeline_config,
-            tools_config,
-            entry_step=entry_step,
-            requested_workflow=requested_workflow,
-            panel_design=panel_design,
-        ),
-        run_config_path,
+    run_config = snapshot["run_config"] if snapshot else build_nextflow_run_config(
+        samplesheet, pipeline_config, tools_config, entry_step=entry_step,
+        requested_workflow=requested_workflow, panel_design=panel_design,
     )
+    write_run_config(run_config, run_config_path)
+
+    tools_snapshot_path = run_dir / "input.tools.json"
+    write_json(tools_config, tools_snapshot_path)
 
     cmd = [
         nextflow_path,
@@ -240,7 +215,7 @@ def real_run(payload: FakeRunRequest):
         "--pipeline",
         str(pipeline_path),
         "--tools",
-        str(tools_path),
+        str(tools_snapshot_path),
         "--run_config",
         str(run_config_path),
         "--outdir",
@@ -267,19 +242,30 @@ def real_run(payload: FakeRunRequest):
             " ".join(cmd),
         )
     )
-    with nextflow_log.open("w") as log_handle:
-        process = subprocess.Popen(
-            cmd,
-            cwd=str(launch_dir),
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
-    pid_path.write_text(str(process.pid) + "\n")
+    record = history.create({
+        "run_id": run_id, "run_dir": str(run_dir), "status": "launching",
+        "parent_id": parent_id, "request": payload.dict(), "samplesheet": samplesheet,
+        "samples": rows, "entry_step": entry_step, "workflow": requested_workflow.split(","),
+        "pipeline_config": pipeline_config, "panel_design": panel_design,
+        "tools_config": tools_config, "run_config": run_config,
+        "command": cmd, "launch_dir": str(launch_dir), "resume": resume_run,
+    })
+    try:
+        with nextflow_log.open("w") as log_handle:
+            process = subprocess.Popen(
+                cmd, cwd=str(launch_dir), stdout=log_handle,
+                stderr=subprocess.STDOUT, env=env, start_new_session=True,
+            )
+        pid_path.write_text(str(process.pid) + "\n")
+    except Exception as exc:
+        history.update(record["id"], status="failed", error=str(exc), finished_at=history.now())
+        raise
+    history.update(record["id"], status="submitted", pid=process.pid)
+    monitor_run(record["id"], process)
 
     return {
         "status": "submitted",
+        "history_id": record["id"],
         "mode": "real",
         "run_id": run_id,
         "aligner": payload.aligner,
@@ -490,7 +476,6 @@ def nextflow_lock_path(launch_dir, session_id):
 
 def validate_analysis_payload(payload):
     errors = []
-    mode = (payload.mode or "real_alignment").strip()
     run_id = clean_run_id(payload.run_id)
     if not payload.run_id.strip():
         errors.append("Run ID is required")
@@ -534,41 +519,38 @@ def validate_analysis_payload(payload):
     if samplesheet is not None:
         try:
             checked_files = len(sample_file_paths(samplesheet, entry_step))
-            if mode == "fake_alignment":
-                if entry_step not in ("prealignment", "alignment"):
-                    errors.append("Fake alignment requires a FASTQ samplesheet")
-                pipeline_config = fake_alignment_pipeline(payload.aligner)
-                tools_config = fake_tools_config(payload.aligner)
-                workflow = "alignment"
-            else:
-                if shutil.which("nextflow") is None:
-                    errors.append("Nextflow is not installed or not available in PATH")
-                if entry_step not in ("prealignment", "alignment", "preprocessing", "variantcalling", "postprocessing", "annotation"):
-                    errors.append("Real Nextflow run requires a FASTQ, BAM, or VCF samplesheet")
-                paths = get_project_paths()
-                tools_path = resolve_tools_path(payload.tools_path, paths.configs)
-                tools_config = load_json(tools_path)
-                panel_design = resolve_panel_design(payload.gene_panel_design, paths.configs)
-                requested_steps = [step for step in payload.requested_workflow if step]
-                requested_preprocessing_workflow = clean_requested_preprocessing_workflow(payload.requested_preprocessing_workflow)
-                requested_postprocessing_workflow = clean_requested_postprocessing_workflow(payload.requested_postprocessing_workflow)
-                requested_annotation_workflow = clean_requested_annotation_workflow(payload.requested_annotation_workflow)
-                workflow = clean_requested_workflow(payload.requested_workflow, entry_step)
-                pipeline_config = resolve_pipeline_config(
-                    payload.pipeline_path,
-                    paths.pipelines,
-                    payload.aligner,
-                    entry_step,
-                    requested_steps,
-                    workflow,
-                    requested_preprocessing_workflow,
-                    requested_postprocessing_workflow,
-                    requested_annotation_workflow,
-                    tools_config,
-                )
-                pipeline_config = resolve_pipeline_tools(pipeline_config, tools_config, panel_design)
-                validate_workflow_availability(entry_step, workflow)
-                container_aware_execution_profile(execution_profile, pipeline_config)
+            if shutil.which("nextflow") is None:
+                errors.append("Nextflow is not installed or not available in PATH")
+            if entry_step not in ("prealignment", "alignment", "preprocessing", "variantcalling", "postprocessing", "annotation"):
+                errors.append("Real Nextflow run requires a FASTQ, BAM, or VCF samplesheet")
+            paths = get_project_paths()
+            tools_path = resolve_tools_path(payload.tools_path, paths.configs)
+            tools_config = load_json(tools_path)
+            panel_design = resolve_panel_design(payload.gene_panel_design, paths.configs)
+            requested_steps = [step for step in payload.requested_workflow if step]
+            requested_prealignment_workflow = clean_requested_prealignment_workflow(payload.requested_prealignment_workflow)
+            requested_alignment_workflow = clean_requested_alignment_workflow(payload.requested_alignment_workflow)
+            requested_preprocessing_workflow = clean_requested_preprocessing_workflow(payload.requested_preprocessing_workflow)
+            requested_postprocessing_workflow = clean_requested_postprocessing_workflow(payload.requested_postprocessing_workflow)
+            requested_annotation_workflow = clean_requested_annotation_workflow(payload.requested_annotation_workflow)
+            workflow = clean_requested_workflow(payload.requested_workflow, entry_step)
+            pipeline_config = resolve_pipeline_config(
+                payload.pipeline_path,
+                paths.pipelines,
+                payload.aligner,
+                entry_step,
+                requested_steps,
+                workflow,
+                requested_preprocessing_workflow,
+                requested_postprocessing_workflow,
+                requested_annotation_workflow,
+                tools_config,
+                requested_prealignment_workflow,
+                requested_alignment_workflow,
+            )
+            pipeline_config = resolve_pipeline_tools(pipeline_config, tools_config, panel_design)
+            validate_workflow_availability(entry_step, workflow)
+            container_aware_execution_profile(execution_profile, pipeline_config)
             validate_nextflow_inputs(samplesheet, pipeline_config, tools_config, entry_step=entry_step, requested_workflow=workflow)
         except ValidationError as exc:
             errors.extend(exc.errors)
@@ -762,6 +744,18 @@ def clean_requested_preprocessing_workflow(requested_workflow):
     return selected or ["add_readgroups", "mark_pcr_dup"]
 
 
+def clean_requested_prealignment_workflow(requested_workflow):
+    allowed = ["trim_adapters", "fastq_QC"]
+    selected = [step for step in requested_workflow if step in allowed]
+    return selected or ["fastq_QC"]
+
+
+def clean_requested_alignment_workflow(requested_workflow):
+    allowed = ["fastq_alignment", "sam_to_bam", "sortSam", "sort_bam", "index_bam", "bam_QC"]
+    selected = [step for step in requested_workflow if step in allowed]
+    return selected or ["fastq_alignment"]
+
+
 def clean_requested_postprocessing_workflow(requested_workflow):
     allowed = ["vcf_norm", "vcf_filter", "vcf_to_tsv"]
     selected = [step for step in requested_workflow if step in allowed]
@@ -785,6 +779,8 @@ def resolve_pipeline_config(
     postprocessing_workflow,
     annotation_workflow,
     tools_config=None,
+    prealignment_workflow=None,
+    alignment_workflow=None,
 ):
     if selected_pipeline:
         pipeline = normalize_pipeline_for_nextflow(load_json(resolve_pipeline_path(selected_pipeline, pipelines_dir)))
@@ -800,6 +796,8 @@ def resolve_pipeline_config(
             preprocessing_workflow=preprocessing_workflow,
             postprocessing_workflow=postprocessing_workflow,
             annotation_workflow=annotation_workflow,
+            prealignment_workflow=prealignment_workflow,
+            alignment_workflow=alignment_workflow,
         )
 
     selected_steps = [step.strip() for step in requested_workflow.split(",") if step.strip()]
@@ -808,6 +806,10 @@ def resolve_pipeline_config(
     reconcile_preprocessing_databases_with_tools_config(pipeline, tools_config or {})
     if "variantcalling" in pipeline["workflow"] and not pipeline.get("variantcalling", {}).get("tools"):
         pipeline["workflow"] = [step for step in pipeline["workflow"] if step != "variantcalling"]
+    if "prealignment" in pipeline.get("workflow", []) and isinstance(pipeline.get("prealignment"), dict):
+        pipeline["prealignment"]["workflow"] = prealignment_workflow or ["fastq_QC"]
+    if "alignment" in pipeline.get("workflow", []) and isinstance(pipeline.get("alignment"), dict):
+        pipeline["alignment"]["workflow"] = alignment_workflow or ["fastq_alignment"]
     if "preprocessing" in pipeline.get("workflow", []) and isinstance(pipeline.get("preprocessing"), dict):
         pipeline["preprocessing"]["workflow"] = preprocessing_workflow
     if "postprocessing" in pipeline.get("workflow", []) and isinstance(pipeline.get("postprocessing"), dict):
@@ -947,7 +949,7 @@ def normalize_supported_variantcalling(pipeline):
 
 def normalize_supported_workflows(pipeline):
     supported_operations = {
-        "prealignment": {"fastq_QC"},
+        "prealignment": {"trim_adapters", "fastq_QC"},
         "alignment": {"fastq_alignment", "sam_to_bam", "sortSam", "sort_bam", "index_bam", "bam_QC"},
         "preprocessing": {"add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration"},
         "postprocessing": {"vcf_norm", "vcf_filter", "vcf_to_tsv"},
@@ -1248,27 +1250,6 @@ def workflow_matrix_text(matrix):
     return "\n".join(lines)
 
 
-def fake_alignment_pipeline(aligner):
-    tool_config = {"args": []}
-    if aligner.upper().startswith("BWA"):
-        tool_config["algorithm"] = "mem"
-    return {
-        "id": "fake_alignment",
-        "analysis": "Test",
-        "reference_version": "fake_reference",
-        "workflow": ["alignment"],
-        "alignment": {
-            "workflow": ["fastq_alignment"],
-            "threads": "2",
-            "ram": "1g",
-            "fastq_alignment": {
-                "tool": aligner,
-                aligner: tool_config,
-            },
-        },
-    }
-
-
 def real_alignment_pipeline(
     aligner,
     include_prealignment=False,
@@ -1279,18 +1260,43 @@ def real_alignment_pipeline(
     preprocessing_workflow=None,
     postprocessing_workflow=None,
     annotation_workflow=None,
+    prealignment_workflow=None,
+    alignment_workflow=None,
 ):
-    pipeline = fake_alignment_pipeline(aligner)
-    pipeline["id"] = "real_alignment"
-    pipeline["analysis"] = "Germline"
-    pipeline["reference_version"] = "hg19"
-    pipeline["workflow"] = []
+    tool_config = {"args": []}
+    if aligner.upper().startswith("BWA"):
+        tool_config["algorithm"] = "mem"
+    pipeline = {
+        "id": "real_alignment",
+        "analysis": "Germline",
+        "reference_version": "hg19",
+        "workflow": [],
+        "alignment": {
+            "workflow": alignment_workflow or ["fastq_alignment"],
+            "threads": "2",
+            "ram": "1g",
+            "fastq_alignment": {
+                "tool": aligner,
+                aligner: tool_config,
+            },
+            "bam_QC": {
+                "tool": "FASTQC v.0.11.8",
+                "FASTQC v.0.11.8": {"args": []},
+            },
+        },
+    }
     if include_prealignment:
         pipeline["workflow"].append("prealignment")
         pipeline["prealignment"] = {
-            "workflow": ["fastq_QC"],
+            "workflow": prealignment_workflow or ["fastq_QC"],
             "threads": "1",
             "ram": "1g",
+            "trim_adapters": {
+                "tool": "CUTADAPT",
+                "adapter1": "CTGTCTCTTATACACATCT",
+                "adapter2": "CTGTCTCTTATACACATCT",
+                "CUTADAPT": {"args": []},
+            },
             "fastq_QC": {
                 "tool": "FASTQC v.0.11.8",
                 "FASTQC v.0.11.8": {"args": []},
@@ -1402,26 +1408,6 @@ def default_vep_args():
     }
 
 
-def fake_tools_config(aligner):
-    return {
-        "fake_reference": {
-            "fasta": "/tmp/helper_next_fake_reference.fa",
-            "version": "fake",
-            "tags": "reference",
-        },
-        aligner: {
-            "path": aligner.lower().replace(" ", "_"),
-            "version": "fake",
-            "tags": "fastq_alignment",
-        },
-        "SAMTOOLS": {
-            "path": "samtools",
-            "version": "fake",
-            "tags": "",
-        },
-    }
-
-
 def load_json(path):
     with open(str(path)) as handle:
         return json.load(handle)
@@ -1433,113 +1419,127 @@ def write_json(data, path):
         handle.write("\n")
 
 
-def simulate_alignment_run(run_dir, run_id, aligner, rows, keep_intermediates=False):
-    alignment_dir = run_dir / "results" / "ALIGNMENT"
-    intermediates_dir = alignment_dir / "intermediates"
-    sample_log_dir = run_dir / "results" / "LOGS" / "ALIGNMENT" / "samples"
-    step_log_dir = run_dir / "results" / "LOGS" / "ALIGNMENT"
-    root_log_dir = run_dir / "results" / "LOGS"
-    alignment_dir.mkdir(parents=True, exist_ok=True)
-    if keep_intermediates:
-        intermediates_dir.mkdir(parents=True, exist_ok=True)
-    sample_log_dir.mkdir(parents=True, exist_ok=True)
-    step_log_dir.mkdir(parents=True, exist_ok=True)
+class HistoryReplayRequest(BaseModel):
+    mode: str = "rerun"
+    run_id: str = ""
+    workdir: str = ""
 
-    outputs = []
-    sample_logs = []
 
-    for row in rows:
-        sample_name = row["sample_name"]
-        bam = alignment_dir / "{}.sort.bam".format(sample_name)
-        bai = alignment_dir / "{}.sort.bam.bai".format(sample_name)
-        sample_log = sample_log_dir / "{}.alignment.log".format(sample_name)
-        sample_status = sample_log_dir / "{}.alignment.status.tsv".format(sample_name)
-        intermediate_sam = intermediates_dir / "{}.sam".format(sample_name)
-        intermediate_bam = intermediates_dir / "{}.unsorted.bam".format(sample_name)
+def history_record(identifier):
+    record = history.get(identifier)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Archived analysis not found")
+    return record
 
-        bam.write_text("fake BAM placeholder for {} {}\n".format(run_id, sample_name))
-        bai.write_text("fake BAI placeholder for {} {}\n".format(run_id, sample_name))
-        if keep_intermediates:
-            intermediate_sam.write_text("fake SAM placeholder for {} {}\n".format(run_id, sample_name))
-            intermediate_bam.write_text("fake unsorted BAM placeholder for {} {}\n".format(run_id, sample_name))
-        sample_log.write_text(sample_log_text(run_id, aligner, row, bam, bai, keep_intermediates))
-        sample_status.write_text(
-            "step\ttool\tsample_id\trole\tsample_name\tstatus\texit_code\tstarted\tcompleted\n"
-            "alignment\t{tool}\t{sample_id}\t{role}\t{sample_name}\tcompleted\t0\tfake\tfake\n".format(
-                tool=aligner,
-                sample_id=row.get("sample_id", ""),
-                role=row.get("role", ""),
-                sample_name=sample_name,
-            )
-        )
 
-        outputs.append({"sample_name": sample_name, "bam": str(bam), "bai": str(bai)})
-        if keep_intermediates:
-            outputs[-1]["sam"] = str(intermediate_sam)
-            outputs[-1]["unsorted_bam"] = str(intermediate_bam)
-        sample_logs.append(sample_log)
+@router.get("/history")
+def analysis_history():
+    # Only durable data: opening this page never scans old workdirs.
+    return {"runs": [
+        {key: row.get(key) for key in (
+            "id", "run_id", "run_dir", "status", "created_at", "updated_at",
+            "finished_at", "parent_id", "workflow", "request", "samples",
+        )} for row in history.list_runs()
+    ], "database": str(history.database_path())}
 
-    step_log = step_log_dir / "alignment.step.log"
-    workflow_plan = root_log_dir / "workflow.plan.tsv"
-    nextflow_trace = run_dir / "nextflow.trace.tsv"
-    with step_log.open("w") as handle:
-        handle.write("step=alignment\n")
-        handle.write("mode=fake\n")
-        handle.write("run_id={}\n".format(run_id))
-        handle.write("keep_intermediates={}\n".format(str(keep_intermediates).lower()))
-        handle.write("sample_log_count={}\n\n".format(len(sample_logs)))
-        for sample_log in sample_logs:
-            handle.write("===== {} =====\n".format(sample_log.name))
-            handle.write(sample_log.read_text())
-            handle.write("\n")
 
-    with workflow_plan.open("w") as handle:
-        handle.write("order\tstep\tstatus\toutput_dir\tlog_dir\n")
-        handle.write("1\talignment\tplanned\t{}\t{}\n".format(alignment_dir, step_log_dir))
+@router.get("/history/{identifier}")
+def analysis_history_detail(identifier: str):
+    return history_record(identifier)
 
-    with nextflow_trace.open("w") as handle:
-        handle.write("task_id\tprocess\ttag\tstatus\texit\n")
-        for index, row in enumerate(rows, start=1):
-            handle.write("{}\tALIGNMENT:FAKE_ALIGN\t{}\tCOMPLETED\t0\n".format(index, row["sample_name"]))
 
+@router.delete("/history/{identifier}")
+def delete_analysis_history(identifier: str):
+    record = history_record(identifier)
+    if record.get("status") in {"launching", "submitted", "running", "stopping"}:
+        raise HTTPException(status_code=409, detail="Stop the analysis before removing it from history")
+    history.delete(identifier)
     return {
-        "manifest_rows": rows,
-        "outputs": outputs,
-        "logs": {
-            "step": str(step_log),
-            "workflow_plan": str(workflow_plan),
-            "samples": [str(path) for path in sample_logs],
-        },
-        "nextflow_trace": str(nextflow_trace),
+        "status": "deleted",
+        "id": identifier,
+        "run_id": record.get("run_id", ""),
+        "run_files_deleted": False,
     }
 
 
-def sample_log_text(run_id, aligner, row, bam, bai, keep_intermediates=False):
-    command = fake_command(aligner, row)
-    return "\n".join(
-        [
-            "step=alignment",
-            "mode=fake",
-            "run_id={}".format(run_id),
-            "tool={}".format(aligner),
-            "sample_id={}".format(row.get("sample_id", "")),
-            "role={}".format(row.get("role", "")),
-            "sample_name={}".format(row.get("sample_name", "")),
-            "fastq_r1={}".format(row.get("fastq_r1", "")),
-            "fastq_r2={}".format(row.get("fastq_r2", "")),
-            "keep_intermediates={}".format(str(keep_intermediates).lower()),
-            "command={}".format(command),
-            "output_bam={}".format(bam),
-            "output_bai={}".format(bai),
-            "completed=true",
-            "",
-        ]
-    )
+@router.post("/history/{identifier}/replay")
+def replay_analysis(identifier: str, payload: HistoryReplayRequest):
+    record = history_record(identifier)
+    if payload.mode not in ("resume", "rerun"):
+        raise HTTPException(status_code=400, detail="Mode must be resume or rerun")
+    request = AnalysisRunRequest(**record["request"])
+    request.set_workdir_default = False
+    original_dir = Path(record["run_dir"])
+    if payload.mode == "resume":
+        work = original_dir / "work"
+        launch = Path(record["launch_dir"])
+        if not work.is_dir() or not any(work.iterdir()) or not (launch / ".nextflow" / "cache").is_dir():
+            raise HTTPException(status_code=409, detail="Nextflow cache is unavailable. Use Reanalyse to start a new run from archived settings.")
+        latest = next((r for r in history.list_runs() if r["run_dir"] == str(original_dir)), None)
+        if latest and latest["id"] != identifier:
+            raise HTTPException(status_code=409, detail="Resume the most recent attempt for this working directory")
+        request.workdir = str(original_dir.parent)
+        request.run_id = original_dir.name
+    else:
+        request.workdir = payload.workdir.strip() or request.workdir
+        request.run_id = payload.run_id.strip() or record["run_id"] + "_rerun_" + uuid4().hex[:8]
+        destination = (Path(request.workdir).expanduser() / clean_run_id(request.run_id)).resolve()
+        if destination.exists():
+            raise HTTPException(status_code=409, detail="Choose a new run ID: destination already exists")
+    return launch_run(request, snapshot=record, parent_id=identifier)
 
 
-def fake_command(aligner, row):
-    if aligner.upper().startswith("BOWTIE2"):
-        return "bowtie2 -x fake_reference -1 {fastq_r1} -2 {fastq_r2} | samtools sort".format(**row)
-    if aligner.upper().startswith("NOVOALIGN"):
-        return "novoalign -d fake_reference -f {fastq_r1} {fastq_r2} | samtools sort".format(**row)
-    return "bwa mem fake_reference {fastq_r1} {fastq_r2} | samtools sort".format(**row)
+def capture_history_status(identifier, exit_code=None):
+    record = history_record(identifier)
+    try:
+        snapshot = run_status(record["run_dir"])
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        snapshot = record.get("last_status", {})
+    changes = {"last_status": snapshot}
+    if exit_code is not None:
+        changes.update(status="completed" if exit_code == 0 and snapshot.get("status") != "failed" else "failed",
+                       exit_code=exit_code, finished_at=history.now())
+        if Path(record["run_dir"], "analysis.stop.requested").exists():
+            changes["status"] = "stopped"
+    elif snapshot:
+        changes["status"] = snapshot["status"]
+    else:
+        changes["status"] = "unknown"
+    history.update(identifier, **changes)
+
+
+def monitor_run(identifier, process=None):
+    def monitor():
+        try:
+            if process is not None:
+                while True:
+                    try:
+                        code = process.wait(timeout=2)
+                        capture_history_status(identifier, code)
+                        return
+                    except subprocess.TimeoutExpired:
+                        capture_history_status(identifier)
+            else:
+                # Recover monitoring after an API restart; PID alone cannot prove success.
+                while True:
+                    capture_history_status(identifier)
+                    record = history_record(identifier)
+                    if not is_pid_running(record.get("pid")):
+                        if record["status"] in ("running", "submitted", "launching", "created"):
+                            history.update(identifier, status="unknown")
+                        else:
+                            history.update(identifier, finished_at=history.now())
+                        return
+                    threading.Event().wait(2)
+        except Exception:
+            logging.getLogger(__name__).exception("Cannot update analysis history %s", identifier)
+    threading.Thread(target=monitor, daemon=True, name="analysis-history-" + identifier).start()
+
+
+@router.on_event("startup")
+def recover_history_monitors():
+    for record in history.list_runs():
+        if not record.get("finished_at"):
+            monitor_run(record["id"])
