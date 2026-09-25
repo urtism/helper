@@ -16,6 +16,12 @@ def loadJson(String path) {
 }
 
 
+def bamIndexPath(String bamPath) {
+    def candidates = ["${bamPath}.bai", bamPath.replaceFirst(/\.bam$/, '.bai')].unique()
+    return candidates.find { new File(it).isFile() } ?: candidates[0]
+}
+
+
 process INIT_RUN_INFRA {
     tag 'run-infrastructure'
 
@@ -80,6 +86,14 @@ workflow {
     tools_config = loadJson(params.tools)
     run_config = loadJson(params.run_config)
     workflow_steps = run_config.workflow ?: pipeline_config.workflow ?: []
+    restart_from_step = (params.restart_from_step ?: '').toString()
+    forced_restart_steps = (params.restart_steps ?: '').toString().tokenize(',') as Set
+    prealignment_restart_token = forced_restart_steps.contains('prealignment') ? params.restart_token.toString() : ''
+    alignment_restart_token = forced_restart_steps.contains('alignment') ? params.restart_token.toString() : ''
+    preprocessing_restart_token = forced_restart_steps.contains('preprocessing') ? params.restart_token.toString() : ''
+    variantcalling_restart_token = forced_restart_steps.contains('variantcalling') ? params.restart_token.toString() : ''
+    postprocessing_restart_token = forced_restart_steps.contains('postprocessing') ? params.restart_token.toString() : ''
+    annotation_restart_token = forced_restart_steps.contains('annotation') ? params.restart_token.toString() : ''
     reference_version = pipeline_config.reference_version ?: run_config.reference_version
     reference_fasta_path = params.reference_fasta ?: run_config.reference_fasta ?: tools_config[reference_version]?.fasta
 
@@ -97,17 +111,26 @@ workflow {
     INIT_RUN_INFRA(workflow_steps)
 
     if (workflow_steps.contains('prealignment')) {
-        PREALIGNMENT(samples_ch, pipeline_config, tools_config, INIT_RUN_INFRA.out.ready)
+        PREALIGNMENT(samples_ch, pipeline_config, tools_config, INIT_RUN_INFRA.out.ready, prealignment_restart_token)
         PREALIGNMENT.out.statuses.view { item -> "prealigned\t${item[0]}\t${item[1]}\t${item[2]}" }
         alignment_samples = PREALIGNMENT.out.reads
         alignment_ready = PREALIGNMENT.out.ready
+    } else if (restart_from_step == 'alignment' && run_config.entry_step != 'alignment' && (pipeline_config.prealignment?.workflow ?: []).contains('trim_adapters')) {
+        alignment_samples = samples_ch.map { row ->
+            def trimmed_dir = "${params.outdir}/PREALIGNMENT/trimmed"
+            row + [
+                fastq_r1: file("${trimmed_dir}/${row.sample_name}.R1.trim.fastq.gz", checkIfExists: true),
+                fastq_r2: file("${trimmed_dir}/${row.sample_name}.R2.trim.fastq.gz", checkIfExists: true),
+            ]
+        }
+        alignment_ready = INIT_RUN_INFRA.out.ready
     } else {
         alignment_samples = samples_ch
         alignment_ready = INIT_RUN_INFRA.out.ready
     }
 
     if (workflow_steps.contains('alignment')) {
-        ALIGNMENT(alignment_samples, pipeline_config, tools_config, reference_fasta, alignment_ready)
+        ALIGNMENT(alignment_samples, pipeline_config, tools_config, reference_fasta, alignment_ready, alignment_restart_token)
         ALIGNMENT.out.bams.view { item -> "aligned\t${item[0]}\t${item[1]}\t${item[2]}\t${item[3]}" }
         preprocessing_ready = ALIGNMENT.out.ready
     } else {
@@ -117,45 +140,103 @@ workflow {
     if (workflow_steps.contains('preprocessing')) {
         if (workflow_steps.contains('alignment')) {
             preprocessing_input_bams = ALIGNMENT.out.bams
+        } else if (restart_from_step == 'preprocessing' && run_config.entry_step != 'preprocessing') {
+            preprocessing_input_bams = samples_ch.map { row ->
+                def bam_path = "${params.outdir}/ALIGNMENT/${row.sample_name}.sort.bam"
+                tuple(
+                    row.sample_id,
+                    row.role,
+                    row.sample_name,
+                    file(bam_path, checkIfExists: true),
+                    file("${bam_path}.bai", checkIfExists: true),
+                )
+            }
         } else {
             preprocessing_input_bams = samples_ch
                 .filter { row -> row.bam }
                 .map { row -> tuple(row.sample_id, row.role, row.sample_name, file(row.bam), '') }
         }
-        PREPROCESSING(preprocessing_input_bams, pipeline_config, tools_config, reference_fasta, preprocessing_ready)
+        PREPROCESSING(preprocessing_input_bams, pipeline_config, tools_config, reference_fasta, preprocessing_ready, preprocessing_restart_token)
         PREPROCESSING.out.bams.view { item -> "preprocessed\t${item[0]}\t${item[1]}\t${item[2]}\t${item[3]}" }
         variantcalling_input_bams = PREPROCESSING.out.bams
         variantcalling_ready = PREPROCESSING.out.ready
     } else if (workflow_steps.contains('alignment')) {
         variantcalling_input_bams = ALIGNMENT.out.bams
         variantcalling_ready = ALIGNMENT.out.ready
+    } else if (restart_from_step == 'variantcalling' && run_config.entry_step != 'variantcalling') {
+        variantcalling_input_bams = samples_ch.map { row ->
+            def bam_path = "${params.outdir}/PREPROCESSING/${row.sample_name}.preprocessed.bam"
+            tuple(
+                row.sample_id,
+                row.role,
+                row.sample_name,
+                file(bam_path, checkIfExists: true),
+                file("${bam_path}.bai", checkIfExists: true),
+            )
+        }
+        variantcalling_ready = INIT_RUN_INFRA.out.ready
     } else {
         variantcalling_input_bams = samples_ch
             .filter { row -> row.bam }
-            .map { row -> tuple(row.sample_id, row.role, row.sample_name, file(row.bam), '') }
+            .map { row -> tuple(
+                row.sample_id,
+                row.role,
+                row.sample_name,
+                file(row.bam),
+                file(bamIndexPath(row.bam), checkIfExists: true),
+            ) }
         variantcalling_ready = INIT_RUN_INFRA.out.ready
     }
 
     if (workflow_steps.contains('variantcalling')) {
-        VARIANTCALLING(variantcalling_input_bams, pipeline_config, tools_config, run_config, reference_fasta, variantcalling_ready)
+        VARIANTCALLING(variantcalling_input_bams, pipeline_config, tools_config, run_config, reference_fasta, variantcalling_ready, variantcalling_restart_token)
         VARIANTCALLING.out.vcfs.view { item -> "variantcalled\t${item[0]}\t${item[1]}\t${item[2]}\t${item[3]}" }
-        postprocessing_input_variants = VARIANTCALLING.out.vcfs
+        VARIANTCALLING.out.caller_vcfs.view { item -> "caller_vcf\t${item[0]}\t${item[1]}\t${item[2]}\t${item[3]}\t${item[4]}" }
+        postprocessing_input_variants = VARIANTCALLING.out.caller_vcfs
         postprocessing_ready = VARIANTCALLING.out.ready
+    } else if (restart_from_step == 'postprocessing' && run_config.entry_step != 'postprocessing') {
+        configured_callers = (pipeline_config.variantcalling?.tools ?: []).collect { tool ->
+            def upper = tool.toString().toUpperCase()
+            upper.startsWith('GATK') ? 'GATK' : (upper.startsWith('DEEPVARIANT') ? 'DEEPVARIANT' : (upper.startsWith('FREEBAYES') ? 'FREEBAYES' : ''))
+        }.findAll { it } as Set
+        postprocessing_input_variants = Channel
+            .fromPath("${params.outdir}/VARIANTCALLING/*.vcf", checkIfExists: true)
+            .map { vcf ->
+                def match = (vcf.name =~ /^(.*)\.(GATK|DeepVariant|Freebayes|Mutect2)\.vcf$/)
+                if (!match.matches()) {
+                    return null
+                }
+                def sample_name = match[0][1]
+                def caller = match[0][2].toUpperCase()
+                tuple(sample_name, 'input', sample_name, caller, vcf)
+            }
+            .filter { item -> item && (configured_callers.contains(item[3]) || item[3] == 'MUTECT2') }
+        postprocessing_ready = INIT_RUN_INFRA.out.ready
     } else {
         postprocessing_input_variants = samples_ch
             .filter { row -> row.merged_vcf }
-            .map { row -> tuple(row.sample_id, row.role, row.sample_name, file(row.merged_vcf)) }
+            .map { row -> tuple(row.sample_id, row.role, row.sample_name, 'INPUT', file(row.merged_vcf)) }
         postprocessing_ready = INIT_RUN_INFRA.out.ready
     }
 
     if (workflow_steps.contains('postprocessing')) {
-        POSTPROCESSING(postprocessing_input_variants, pipeline_config, tools_config, reference_fasta, postprocessing_ready)
+        POSTPROCESSING(postprocessing_input_variants, pipeline_config, tools_config, reference_fasta, postprocessing_ready, postprocessing_restart_token)
         POSTPROCESSING.out.variants.view { item -> "postprocessed\t${item[0]}\t${item[1]}\t${item[2]}\t${item[3]}\t${item[4]}" }
         annotation_input_variants = POSTPROCESSING.out.variants.map { sample_id, role, sample_name, vcf, tsv -> tuple(sample_id, role, sample_name, vcf) }
         annotation_ready = POSTPROCESSING.out.ready
     } else if (workflow_steps.contains('variantcalling')) {
         annotation_input_variants = VARIANTCALLING.out.vcfs
         annotation_ready = VARIANTCALLING.out.ready
+    } else if (restart_from_step == 'annotation' && run_config.entry_step != 'annotation') {
+        annotation_input_variants = samples_ch.map { row ->
+            tuple(
+                row.sample_id,
+                row.role,
+                row.sample_name,
+                file("${params.outdir}/POSTPROCESSING/${row.sample_name}.postprocessed.vcf", checkIfExists: true),
+            )
+        }
+        annotation_ready = INIT_RUN_INFRA.out.ready
     } else {
         annotation_input_variants = samples_ch
             .filter { row -> row.merged_vcf }
@@ -164,7 +245,7 @@ workflow {
     }
 
     if (workflow_steps.contains('annotation')) {
-        ANNOTATION(annotation_input_variants, pipeline_config, tools_config, run_config, annotation_ready)
+        ANNOTATION(annotation_input_variants, pipeline_config, tools_config, run_config, annotation_ready, annotation_restart_token)
         ANNOTATION.out.variants.view { item -> "annotated\t${item[0]}\t${item[1]}\t${item[2]}\t${item[3]}\t${item[4]}" }
     }
 

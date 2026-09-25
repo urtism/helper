@@ -51,6 +51,65 @@ def test_resume_requires_cache_and_reanalysis_rejects_existing_destination(tmp_p
         assert error.value.status_code == 409
 
 
+def test_restart_from_step_reuses_same_run_and_forces_downstream_steps(tmp_path, monkeypatch):
+    record = archived_run(tmp_path)
+    run_dir = Path(record["run_dir"])
+    (run_dir / "work" / "aa" / "task").mkdir(parents=True)
+    (run_dir / ".nextflow" / "cache").mkdir(parents=True)
+    history.update(record["id"], workflow=["alignment", "preprocessing", "variantcalling", "postprocessing"])
+    calls = []
+    monkeypatch.setattr(analysis, "launch_run", lambda request, **kwargs: calls.append((request, kwargs)) or {"status": "submitted"})
+
+    result = analysis.replay_analysis(
+        record["id"],
+        analysis.HistoryReplayRequest(mode="restart", restart_from_step="variantcalling"),
+    )
+
+    request, kwargs = calls[0]
+    assert result == {"status": "submitted"}
+    assert request.run_id == "run1"
+    assert request.workdir == str(run_dir.parent)
+    assert kwargs["restart_from_step"] == "variantcalling"
+    assert kwargs["reuse_restart_context"] is False
+    assert kwargs["snapshot"]["workflow"] == ["alignment", "preprocessing", "variantcalling", "postprocessing"]
+
+
+def test_resume_preserves_a_previous_restart_context(tmp_path, monkeypatch):
+    record = archived_run(tmp_path)
+    run_dir = Path(record["run_dir"])
+    (run_dir / "work" / "aa" / "task").mkdir(parents=True)
+    (run_dir / ".nextflow" / "cache").mkdir(parents=True)
+    history.update(
+        record["id"],
+        restart_from_step="alignment",
+        forced_steps=["alignment"],
+        restart_token="same-token",
+    )
+    calls = []
+    monkeypatch.setattr(analysis, "launch_run", lambda request, **kwargs: calls.append(kwargs) or {"status": "submitted"})
+
+    analysis.replay_analysis(record["id"], analysis.HistoryReplayRequest(mode="resume"))
+
+    assert calls[0]["restart_from_step"] == ""
+    assert calls[0]["reuse_restart_context"] is True
+
+
+def test_restart_rejects_step_not_configured_in_analysis(tmp_path):
+    record = archived_run(tmp_path)
+    run_dir = Path(record["run_dir"])
+    (run_dir / "work" / "aa" / "task").mkdir(parents=True)
+    (run_dir / ".nextflow" / "cache").mkdir(parents=True)
+
+    with pytest.raises(HTTPException) as error:
+        analysis.replay_analysis(
+            record["id"],
+            analysis.HistoryReplayRequest(mode="restart", restart_from_step="variantcalling"),
+        )
+
+    assert error.value.status_code == 400
+    assert "not part of this analysis" in error.value.detail
+
+
 def test_final_status_and_sample_progress_are_persisted(tmp_path, monkeypatch):
     record = archived_run(tmp_path)
     matrix = [{"step": "alignment", "samples": [{"sample_name": "S1", "status": "completed"}]}]

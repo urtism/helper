@@ -205,3 +205,31 @@ def test_resolver_supports_freebayes_containerized_caller():
     assert "--min-alternate-count" in command_args
     assert "3" in command_args
     assert caller["invocation"]["inputs"][2]["path"] == "/targets/panel.bed"
+
+
+def test_resolver_resolves_each_selected_variantcaller():
+    pipeline = {
+        "workflow": ["variantcalling"],
+        "variantcalling": {
+            "tools": ["FREEBAYES v.1.1", "GATK v.4.3", "DeepVariant v.1.10.0"],
+            "threads": "3",
+            "ram": "6g",
+            "filters": {},
+            "FREEBAYES v.1.1": {"args": []},
+            "GATK v.4.3": {"args": []},
+            "DeepVariant v.1.10.0": {"args": [], "model_type": "WES"},
+        },
+    }
+    tools = {
+        "FREEBAYES v.1.1": {"path": "/tools/freebayes"},
+        "GATK v.4.3": {"path": "/tools/gatk"},
+        "DeepVariant v.1.10.0": {"path": "/tools/run_deepvariant"},
+    }
+
+    resolved = resolve_pipeline_tools(pipeline, tools)
+    variantcalling = resolved["variantcalling"]["resolved"]
+
+    assert list(variantcalling["callers"]) == pipeline["variantcalling"]["tools"]
+    assert variantcalling["caller"] == variantcalling["callers"]["GATK v.4.3"]
+    assert variantcalling["callers"]["GATK v.4.3"]["path"] == "/tools/gatk"
+    assert variantcalling["callers"]["DeepVariant v.1.10.0"]["path"] == "/tools/run_deepvariant"

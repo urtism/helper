@@ -48,6 +48,26 @@ def test_build_vep_args_filters_removed_esp_frequency_flag():
     assert "--af_gnomad" in args
 
 
+def test_build_vep_args_recovers_json_object_pasted_as_lines():
+    malformed = [
+        "{",
+        '"args": [',
+        '"--cache",',
+        '"--cache_version 116",',
+        '"--assembly GRCh37"',
+        "]",
+        "}",
+    ]
+
+    assert build_vep_args(malformed, {}) == [
+        "--cache",
+        "--cache_version",
+        "116",
+        "--assembly",
+        "GRCh37",
+    ]
+
+
 def test_build_vep_args_selects_local_or_container_database_paths():
     legacy_args = {"plugins": {"list": ["GeneSplicer", "dbNSFP"]}}
     tools = {

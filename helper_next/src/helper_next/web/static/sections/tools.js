@@ -394,20 +394,95 @@ async function saveDraft() {
   node("#tools-save").disabled = true;
   try {
     const payload = await saveTools(state.filename, state.config, state.revision);
-    state.config = clone(payload.config);
-    state.original = clone(payload.config);
-    state.revision = payload.revision;
-    state.dependencies = dependencyMap(payload.resources);
-    state.dirty = false;
+    finishSave(payload);
+  } catch (error) {
+    if (error.message.toLowerCase().includes("changed on disk")) {
+      await reconcileAndSave();
+      return;
+    }
+    setStatus(error.message, true);
+    renderSaveState();
+  }
+}
+
+async function reconcileAndSave() {
+  try {
+    const latest = await getTools(state.filename);
+    const {value, conflicts} = mergeDraft(state.original, state.config, latest.config);
+    state.config = value;
+    state.original = clone(latest.config);
+    state.revision = latest.revision;
+    state.dependencies = dependencyMap(latest.resources);
+    state.dirty = true;
     state.formDirty = false;
-    renderAll();
-    renderAudit(payload.audit);
-    setStatus("Configuration saved. The previous version is available as a .bak file.");
-    window.dispatchEvent(new CustomEvent("helper:tools-updated"));
+    if (conflicts.length) {
+      renderAll();
+      renderAudit(latest.audit);
+      setStatus(`The file changed on disk. External changes were merged, but ${conflicts.length} conflicting field(s) keep your draft value. Review the draft and Save again to confirm.`, true);
+      return;
+    }
+    const payload = await saveTools(state.filename, state.config, state.revision);
+    finishSave(payload, "Configuration updated with external changes and saved. The previous version is available as a .bak file.");
   } catch (error) {
     setStatus(error.message, true);
     renderSaveState();
   }
+}
+
+function finishSave(payload, message = "Configuration saved. The previous version is available as a .bak file.") {
+  state.config = clone(payload.config);
+  state.original = clone(payload.config);
+  state.revision = payload.revision;
+  state.dependencies = dependencyMap(payload.resources);
+  state.dirty = false;
+  state.formDirty = false;
+  renderAll();
+  renderAudit(payload.audit);
+  setStatus(message);
+  window.dispatchEvent(new CustomEvent("helper:tools-updated"));
+}
+
+function mergeDraft(base, local, remote) {
+  const missing = Symbol("missing");
+  const conflicts = [];
+  const equal = (left, right) => left === missing || right === missing
+    ? left === right
+    : JSON.stringify(left) === JSON.stringify(right);
+  const merge = (baseValue, localValue, remoteValue, path) => {
+    if (equal(localValue, baseValue)) return remoteValue === missing ? missing : clone(remoteValue);
+    if (equal(remoteValue, baseValue) || equal(localValue, remoteValue)) return localValue === missing ? missing : clone(localValue);
+    const setLikeList = path === "refGenomes_list" || path.startsWith("tools.") || path.startsWith("databases.");
+    if (setLikeList && [baseValue, localValue, remoteValue].every((value) => Array.isArray(value) && value.every((item) => typeof item === "string"))) {
+      const baseSet = new Set(baseValue);
+      const localSet = new Set(localValue);
+      const remoteSet = new Set(remoteValue);
+      const retained = baseValue.filter((item) => localSet.has(item) && remoteSet.has(item));
+      const additions = [...localValue, ...remoteValue].filter((item) => !baseSet.has(item));
+      return [...new Set([...retained, ...additions])];
+    }
+    const objects = [baseValue, localValue, remoteValue].every((value) => value === missing || (value && typeof value === "object" && !Array.isArray(value)));
+    if (objects) {
+      const result = {};
+      const keys = new Set([
+        ...Object.keys(baseValue === missing ? {} : baseValue),
+        ...Object.keys(localValue === missing ? {} : localValue),
+        ...Object.keys(remoteValue === missing ? {} : remoteValue),
+      ]);
+      for (const key of keys) {
+        const merged = merge(
+          baseValue !== missing && Object.hasOwn(baseValue, key) ? baseValue[key] : missing,
+          localValue !== missing && Object.hasOwn(localValue, key) ? localValue[key] : missing,
+          remoteValue !== missing && Object.hasOwn(remoteValue, key) ? remoteValue[key] : missing,
+          path ? `${path}.${key}` : key,
+        );
+        if (merged !== missing) result[key] = merged;
+      }
+      return result;
+    }
+    conflicts.push(path || "configuration");
+    return localValue === missing ? missing : clone(localValue);
+  };
+  return {value: merge(base, local, remote, ""), conflicts};
 }
 
 function discardDraft() {

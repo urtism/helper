@@ -1,3 +1,4 @@
+import json
 import shlex
 
 
@@ -27,7 +28,7 @@ def normalize_vep_annotation_config(annotation_config, tools_config):
 
 def build_vep_args(legacy_args, tools_config, containerized=False):
     if isinstance(legacy_args, list):
-        return filter_supported_vep_args([str(item) for item in legacy_args if str(item)])
+        return filter_supported_vep_args(normalize_vep_arg_list(legacy_args))
     if not isinstance(legacy_args, dict):
         return []
 
@@ -45,6 +46,28 @@ def build_vep_args(legacy_args, tools_config, containerized=False):
 
     args.extend(plugin_args(legacy_args.get("plugins", {}), tools_config, containerized=containerized))
     return filter_supported_vep_args([str(item) for item in args if str(item)])
+
+
+def normalize_vep_arg_list(values):
+    items = [str(item).strip() for item in values if str(item).strip()]
+    if items and items[0] == "{" and items[-1] == "}":
+        try:
+            payload = json.loads("\n".join(items))
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and isinstance(payload.get("args"), list):
+            items = [str(item).strip() for item in payload["args"] if str(item).strip()]
+
+    normalized = []
+    for item in items:
+        if item.startswith("--") and any(character.isspace() for character in item):
+            try:
+                normalized.extend(shlex.split(item))
+            except ValueError:
+                normalized.append(item)
+        else:
+            normalized.append(item)
+    return normalized
 
 
 def filter_supported_vep_args(args):

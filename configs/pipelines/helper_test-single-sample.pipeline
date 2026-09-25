@@ -61,7 +61,7 @@
             "bam_QC"
         ],
         "threads": "2",
-        "ram": "1g",
+        "ram": "6g",
         "merge_UMI": {
             "tool": ""
         },
@@ -93,9 +93,14 @@
             }
         },
         "bam_QC": {
-            "tool": "FASTQC v.0.11.8",
+            "tool": "QUALIMAP v.2.3",
             "FASTQC v.0.11.8": {
                 "args": []
+            },
+            "QUALIMAP v.2.3": {
+                "args": [
+                    "-ip -cl 1000"
+                ]
             }
         },
         "index_bam": {
@@ -109,10 +114,11 @@
         "workflow": [
             "add_readgroups",
             "mark_pcr_dup",
-            "BQ_recalibration"
+            "BQ_recalibration",
+            "bam_QC"
         ],
         "threads": "2",
-        "ram": "1g",
+        "ram": "6g",
         "filter_bam": {
             "tool": ""
         },
@@ -145,15 +151,24 @@
                 "dbsnp": "DBSNP v.138",
                 "mills": "MILLS"
             }
+        },
+        "bam_QC": {
+            "tool": "QUALIMAP v.2.3",
+            "QUALIMAP v.2.3": {
+                "args": [
+                    "-ip -cl 1000"
+                ]
+            }
         }
     },
     "variantcalling": {
         "tools": [
             "FREEBAYES v.1.1",
-            "GATK v.4.5"
+            "GATK v.4.3",
+            "DeepVariant v.1.10.0"
         ],
         "threads": "6",
-        "ram": "2g",
+        "ram": "8g",
         "filters": {
             "min_base_quality_score": "",
             "min_alt_coverage": "3",
@@ -184,6 +199,12 @@
         ],
         "GATK v.4.5": {
             "args": []
+        },
+        "GATK v.4.3": {
+            "args": []
+        },
+        "DeepVariant v.1.10.0": {
+            "args": []
         }
     },
     "cnvcalling": {
@@ -213,8 +234,9 @@
     },
     "postprocessing": {
         "workflow": [
-            "vcf_filter",
             "vcf_norm",
+            "vcf_filter",
+            "multi_vcf_merge",
             "vcf_to_tsv"
         ],
         "threads": "2",
@@ -278,6 +300,19 @@
                     ">",
                     "8.0",
                     "\""
+                ]
+            }
+        },
+        "multi_vcf_merge": {
+            "tool": "merge_consensus_vcfs.py",
+            "merge_consensus_vcfs.py": {
+                "args": [
+                    "--min-pass-callers",
+                    "2",
+                    "--min-alt-depth",
+                    "3",
+                    "--min-af",
+                    "0.1"
                 ]
             }
         }
@@ -388,10 +423,63 @@
             "vep_annotation",
             "ann_vcf_to_tsv"
         ],
+        "threads": "2",
+        "ram": "8g",
         "vep_annotation": {
-            "tool": "VEP v.115",
-            "VEP v.115": {
-                "args": []
+            "tool": "VEP v.116",
+            "VEP v.113": {
+                "args": [
+                    "--vcf_info_field ANN",
+                    "--no_stats",
+                    "--cache",
+                    "--offline",
+                    "--merged",
+                    "--cache_version 113",
+                    "--assembly GRCh37",
+                    "--species homo_sapiens",
+                    "--use_given_ref",
+                    "--canonical",
+                    "--hgvs",
+                    "--af",
+                    "--max_af",
+                    "--af_1kg",
+                    "--af_gnomad",
+                    "--sift b",
+                    "--polyphen b",
+                    "--numbers",
+                    "--transcript_version",
+                    "--symbol",
+                    "--check_existing"
+                ]
+            },
+            "VEP v.116": {
+                "args": [
+                    "{",
+                    "\"args\": [",
+                    "\"--vcf_info_field ANN\",",
+                    "\"--no_stats\",",
+                    "\"--cache\",",
+                    "\"--offline\",",
+                    "\"--merged\",",
+                    "\"--cache_version 116\",",
+                    "\"--assembly GRCh37\",",
+                    "\"--species homo_sapiens\",",
+                    "\"--use_given_ref\",",
+                    "\"--canonical\",",
+                    "\"--hgvs\",",
+                    "\"--af\",",
+                    "\"--max_af\",",
+                    "\"--af_1kg\",",
+                    "\"--af_gnomad\",",
+                    "\"--sift b\",",
+                    "\"--polyphen b\",",
+                    "\"--numbers\",",
+                    "\"--transcript_version\",",
+                    "\"--symbol\",",
+                    "\"--check_existing\"",
+                    "]",
+                    "}"
+                ]
             }
         }
     }

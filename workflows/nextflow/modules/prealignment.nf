@@ -18,6 +18,7 @@ process TRIM_CUTADAPT {
     val cutadapt_container
     val cutadapt_args
     val adapter_args
+    val restart_token
 
     output:
     tuple val(row), path("${row.sample_name}.R1.trim.fastq.gz"), path("${row.sample_name}.R2.trim.fastq.gz"), optional: true, emit: reads
@@ -79,6 +80,7 @@ process TRIM_SURECALL {
     val surecall_path
     val surecall_heap
     val surecall_args
+    val restart_token
 
     output:
     tuple val(row), path("${row.sample_name}.R1.trim.fastq.gz"), path("${row.sample_name}.R2.trim.fastq.gz"), optional: true, emit: reads
@@ -151,6 +153,7 @@ process FASTQ_QC {
     val prealign_ram
     val fastqc_path
     val fastqc_args
+    val restart_token
 
     output:
     tuple val(row.sample_id), val(row.role), val(row.sample_name), path("fastqc_out/*"), optional: true, emit: reports
@@ -258,6 +261,7 @@ workflow PREALIGNMENT {
     pipeline_config
     tools_config
     infra_ready
+    restart_token
 
     main:
     prealignment_cfg = pipeline_config.prealignment ?: [:]
@@ -306,6 +310,7 @@ workflow PREALIGNMENT {
                 (trim_tool_cfg.container instanceof Map ? trim_tool_cfg.container.image : trim_tool_cfg.container) ?: resolved_cfg.trim_adapters?.container?.image ?: '',
                 trim_tool_args.join(' '),
                 adapter_args,
+                restart_token,
             )
             reads_ch = TRIM_CUTADAPT.out.reads.map { row, fastq_r1, fastq_r2 ->
                 row + [fastq_r1: fastq_r1, fastq_r2: fastq_r2]
@@ -320,6 +325,7 @@ workflow PREALIGNMENT {
                 trim_tool_cfg.path,
                 surecall_heap,
                 trim_tool_args.join(' '),
+                restart_token,
             )
             reads_ch = TRIM_SURECALL.out.reads.map { row, fastq_r1, fastq_r2 ->
                 row + [fastq_r1: fastq_r1, fastq_r2: fastq_r2]
@@ -329,7 +335,7 @@ workflow PREALIGNMENT {
     }
 
     if (fastq_qc_enabled) {
-        FASTQ_QC(reads_ch, prealign_threads, prealign_ram, fastqc_path, fastqc_args)
+        FASTQ_QC(reads_ch, prealign_threads, prealign_ram, fastqc_path, fastqc_args, restart_token)
         operation_statuses = operation_statuses.mix(FASTQ_QC.out.statuses)
         reports_ch = FASTQ_QC.out.reports
     }

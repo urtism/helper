@@ -1,8 +1,16 @@
-import {loadArchivedAnalysis} from "./analysis.js?v=20260911-3";
+import {loadArchivedAnalysis, monitorAnalysisRun} from "./analysis.js?v=20260922-1";
 
 let records = [];
 let selectedId = null;
 let busy = false;
+const workflowLabels = {
+  prealignment: "Pre-alignment",
+  alignment: "Alignment",
+  preprocessing: "Pre-processing",
+  variantcalling: "Variant calling",
+  postprocessing: "Post-processing",
+  annotation: "Annotation",
+};
 
 async function api(path = "", payload, method = "POST") {
   const response = await fetch(`/api/analysis/history${path}`, payload ? {
@@ -119,27 +127,61 @@ async function select(id) {
   const rerun = element("button", "Reanalyse");
   const modify = element("button", "Modify & reanalyse", "ghost-button");
   const resume = element("button", "Resume from cache", "ghost-button");
+  const viewConsole = element("button", "View live console", "ghost-button");
+  const restartPanel = element("div", undefined, "history-restart-panel");
+  const restartLabel = element("label", "Restart from completed step");
+  const restartStep = element("select");
+  restartStep.setAttribute("aria-label", "Step to restart");
+  for (const step of record.workflow || []) {
+    restartStep.add(new Option(workflowLabels[step] || step, step));
+  }
+  const restart = element("button", "Restart from step", "ghost-button");
+  restart.disabled = !restartStep.options.length;
+  restartLabel.append(restartStep);
+  restartPanel.append(restartLabel, restart);
+  function showConsole(runDir, runId) {
+    monitorAnalysisRun(runDir, runId);
+    document.querySelector('[data-section="analysis"]')?.click();
+    window.requestAnimationFrame(() => {
+      document.querySelector(".analysis-console-panel")?.scrollIntoView({behavior: "smooth", block: "start"});
+    });
+  }
   async function replay(mode) {
     if (busy) return;
     busy = true;
-    rerun.disabled = modify.disabled = resume.disabled = true;
-    status("Submitting analysis from archived settings…");
+    rerun.disabled = modify.disabled = resume.disabled = restart.disabled = restartStep.disabled = viewConsole.disabled = true;
+    status(mode === "restart" ? `Restarting from ${workflowLabels[restartStep.value] || restartStep.value}…` : "Submitting analysis from archived settings…");
     try {
-      const result = await api(`/${id}/replay`, {mode, run_id: runId.value, workdir: workdir.value});
+      const result = await api(`/${id}/replay`, {
+        mode,
+        run_id: runId.value,
+        workdir: workdir.value,
+        restart_from_step: mode === "restart" ? restartStep.value : "",
+      });
       status(`Submitted ${result.run_id}`);
       await refresh();
-      await select(result.history_id);
+      showConsole(result.run_dir, result.run_id);
     } catch (error) { status(error.message); }
-    finally { busy = false; rerun.disabled = modify.disabled = resume.disabled = false; }
+    finally {
+      busy = false;
+      rerun.disabled = modify.disabled = resume.disabled = restartStep.disabled = viewConsole.disabled = false;
+      restart.disabled = !restartStep.options.length;
+    }
   }
   rerun.onclick = () => replay("rerun");
   modify.onclick = () => {
-    loadArchivedAnalysis(record, {runId: runId.value, workdir: workdir.value});
+    loadArchivedAnalysis(record, {runId: runId.value || record.run_id, workdir: workdir.value});
     document.querySelector('[data-section="analysis"]')?.click();
   };
   resume.onclick = () => replay("resume");
-  actions.append(runId, workdir, rerun, modify, resume);
-  detail.append(actions, element("p", "Reanalysis uses the archived samples and settings and requires the original input/reference files. Resume also requires the existing Nextflow cache. Large input and result files are not copied into the archive.", "muted"));
+  restart.onclick = () => replay("restart");
+  viewConsole.onclick = () => showConsole(record.run_dir, record.run_id);
+  actions.append(runId, workdir, rerun, modify, resume, viewConsole);
+  detail.append(
+    actions,
+    restartPanel,
+    element("p", "Restart from step keeps the same run: earlier steps are restored from cache, while the selected step and every following configured step are executed again. Resume uses every valid cached result. Reanalyse creates a new run without cache. Existing input/reference files and the Nextflow cache are required.", "muted"),
+  );
   detail.append(element("h4", "Samples"));
   const columns = [...new Set(record.samples.flatMap(row => Object.keys(row)))];
   detail.append(table(columns, record.samples.map(row => columns.map(key => row[key]))));

@@ -28,6 +28,7 @@
             "VCFTOOLS",
             "SAMTOOLS",
             "CUTADAPT",
+            "QUALIMAP v.2.3",
             "GATK v.4.3"
         ],
         "trim_adapters": [
@@ -54,7 +55,8 @@
             "PICARD v.2.7.1"
         ],
         "bam_QC": [
-            "FASTQC v.0.11.8"
+            "FASTQC v.0.11.8",
+            "QUALIMAP v.2.3"
         ],
         "merge_UMI": [
             "LOCATIT v.3.5.1.46"
@@ -151,7 +153,7 @@
         "hg38"
     ],
     "CUTADAPT": {
-        "version": "1.13",
+        "version": "5.2",
         "path": "cutadapt",
         "tags": "filter_fastq,trim_adapters",
         "container": {
@@ -163,6 +165,15 @@
         "path": "/home/jarvis/NGS_TOOLS/FastQC/v1.11.8/fastqc",
         "version": "0.11.8",
         "tags": "fastq_qc,bam_qc"
+    },
+    "QUALIMAP v.2.3": {
+        "path": "qualimap",
+        "version": "2.3",
+        "tags": "bam_qc",
+        "container": {
+            "engine": "docker",
+            "image": "staphb/qualimap:latest"
+        }
     },
     "SURECALLTRIMMER v.3.5.1.46": {
         "path": "/home/jarvis/NGS_TOOLS/AGeNT/SurecallTrimmer_v3.5.1.46.jar",
@@ -314,12 +325,14 @@
     "hg19": {
         "fasta": "/home/jarvis/NGS_TOOLS/hg19/ucsc.hg19.fasta",
         "dict": "/home/jarvis/NGS_TOOLS/hg19/ucsc.hg19.dict",
+        "bowtie2_index": "/home/jarvis/NGS_TOOLS/hg19/bowtie2-index/ucsc.hg19",
         "version": "hg19",
         "tags": "reference"
     },
     "GRch37": {
         "fasta": "/home/jarvis/NGS_TOOLS/hg19/ucsc.hg19.fasta",
         "dict": "/home/jarvis/NGS_TOOLS/hg19/ucsc.hg19.dict",
+        "bowtie2_index": "/home/jarvis/NGS_TOOLS/hg19/bowtie2-index/ucsc.hg19",
         "version": "37",
         "tags": "database"
     },
@@ -330,12 +343,14 @@
         "tags": "reference"
     },
     "BOWTIE2": {
+        "container_path": "bowtie2",
+        "minimum_ram": "6g",
         "version": "2.3.5.1",
         "path": "/home/jarvis/NGS_TOOLS/ALIGNMENT/bowtie2-2.3.5.1/bowtie2",
         "tags": "fastq_alignment",
         "container": {
             "engine": "docker",
-            "image": "biocontainers/bowtie2"
+            "image": "biocontainers/bowtie2:v2.4.1_cv1"
         }
     },
     "BWA v.0.7.17": {
@@ -390,7 +405,7 @@
         "cache_dir": "/home/jarvis/.vep",
         "container": {
             "engine": "docker",
-            "image": "ensemblorg/ensembl-vep:latest"
+            "image": "ensemblorg/ensembl-vep:release_113.4"
         },
         "version": "113",
         "tags": "variant_ann"
@@ -400,7 +415,7 @@
         "cache_dir": "/home/jarvis/.vep",
         "container": {
             "engine": "docker",
-            "image": "ensemblorg/ensembl-vep:latest"
+            "image": "ensemblorg/ensembl-vep:release_115.2"
         },
         "version": "115",
         "tags": "variant_ann"

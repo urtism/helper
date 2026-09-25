@@ -20,7 +20,7 @@ def test_variant_callers_receive_panel_target_intervals():
     deepvariant = module.split("process DEEPVARIANT_CALLER", 1)[1].split("process FREEBAYES_CALLER", 1)[0]
     freebayes = module.split("process FREEBAYES_CALLER", 1)[1].split("process VARIANTCALLING_STEP_LOG", 1)[0]
 
-    assert "resolved_cfg.caller?.target_intervals ?: run_config.panel_design?.assets?.target_bed" in module
+    assert "resolved_callers.values().find { caller -> caller?.target_intervals }?.target_intervals" in module
     assert 'def target_arg = target_intervals ? "-L \\"${target_intervals}\\"" : \'\'' in haplotype
     assert "${target_arg}" in haplotype
     assert 'def target_arg = target_intervals ? "-L \\"${target_intervals}\\"" : \'\'' in joint
@@ -31,6 +31,51 @@ def test_variant_callers_receive_panel_target_intervals():
     assert "${regions_arg}" in deepvariant
     assert 'def target_arg = target_intervals ? "-t \\"${target_intervals}\\"" : \'\'' in freebayes
     assert "${target_arg}" in freebayes
+
+
+def test_variant_callers_run_in_parallel_and_keep_gatk_as_primary_output():
+    module = (Path(__file__).resolve().parents[2] / "workflows/nextflow/modules/variantcalling.nf").read_text()
+
+    assert "def configuredContainer(config)" in module
+    assert "configuredContainer(deepvariant_cfg) ?: configuredContainer(deepvariant_resolved)" in module
+    assert "configuredContainer(freebayes_cfg) ?: configuredContainer(freebayes_resolved)" in module
+    assert "freebayes_resolved.container?.image" not in module
+    assert "deepvariant_min_ram = deepvariant_cfg.minimum_ram ?: '8 GB'" in module
+    assert "MemoryUnit.of(deepvariant_min_ram)" in module
+    assert "path(input_bam), path(input_bai)" in module
+    assert "path(input_bams), path(input_bais), val(use_bam_list)" in module
+    assert "tuple(sample_id, role, sample_name, bam, bai)" in module
+    assert 'grep -q "Failed to load index"' in module
+    assert "if (gatk_tool) {" in module
+    assert "if (deepvariant_tool) {" in module
+    assert "if (freebayes_tool) {" in module
+    assert "} else if (tool_upper.startsWith('FREEBAYES')) {" not in module
+    assert "germline_statuses = gatk_statuses.mix(deepvariant_statuses).mix(freebayes_statuses)" in module
+    assert "germline_vcfs = gatk_tool ? gatk_vcfs" in module
+    assert "${sample_name}.GATK.variantcalling.status.tsv" in module
+    assert "${sample_name}.DeepVariant.variantcalling.status.tsv" in module
+    assert "${sample_name}.Freebayes.variantcalling.status.tsv" in module
+
+
+def test_multi_caller_vcfs_are_merged_after_per_caller_filtering():
+    root = Path(__file__).resolve().parents[2]
+    variantcalling = (root / "workflows/nextflow/modules/variantcalling.nf").read_text()
+    postprocessing = (root / "workflows/nextflow/modules/postprocessing.nf").read_text()
+    main = (root / "workflows/nextflow/main.nf").read_text()
+
+    assert "caller_vcfs = output_caller_vcfs" in variantcalling
+    assert "'GATK', vcf" in variantcalling
+    assert "'DEEPVARIANT', vcf" in variantcalling
+    assert "'FREEBAYES', vcf" in variantcalling
+    assert "postprocessing_input_variants = VARIANTCALLING.out.caller_vcfs" in main
+    assert "process POSTPROCESS_CALLER_VCF" in postprocessing
+    assert "process FINALIZE_POSTPROCESSING" in postprocessing
+    assert "bcftools_path} norm -m -any" in postprocessing
+    assert "bcftools_path} norm -d exact" in postprocessing
+    assert "do_gatk_filter = do_filter && caller.toString().toUpperCase() == 'GATK'" in postprocessing
+    assert "operations.contains('multi_vcf_merge')" in postprocessing
+    assert "merge_consensus_vcfs.py" in postprocessing
+    assert "variants = FINALIZE_POSTPROCESSING.out.variants" in postprocessing
 
 
 def mixed_variant_samplesheet():
@@ -515,6 +560,86 @@ def test_alignment_module_runs_selected_bam_qc_on_sorted_bams():
     assert "BAM_QC(aligned_bams" in module
     assert 'publishDir "${params.outdir}/ALIGNMENT/bam_qc"' in module
     assert "alignment_statuses.mix(BAM_QC.out.statuses)" in module
+    assert "process QUALIMAP_BAM_QC" in module
+    assert "container { qualimap_container ?: null }" in module
+    assert "QUALIMAP_BAM_QC(aligned_bams" in module
+    assert "qualimap_path} bamqc" in module
+    assert "--java-mem-size=${javaMemMb}M" in module
+    assert "bam_qc_resolved_container_cfg instanceof Map" in module
+    assert "bam_qc_resolved_container_cfg['image']" in module
+
+
+def test_alignment_module_uses_explicit_bowtie2_reference_index():
+    module = (Path(__file__).resolve().parents[2] / "workflows/nextflow/modules/alignment.nf").read_text()
+
+    assert "reference_cfg.bowtie2_index" in module
+    assert "container { bowtie2_container ?: null }" in module
+    assert "tool_cfg.container_path ?: 'bowtie2'" in module
+    assert "bowtie2_min_ram = tool_cfg.minimum_ram ?: '6 GB'" in module
+    assert "MemoryUnit.of(bowtie2_min_ram)" in module
+    assert "tuple val(row), path(fastq_r1), path(fastq_r2)" in module
+    assert "tuple(row, file(row.fastq_r1), file(row.fastq_r2))" in module
+    assert "ALIGN_BOWTIE2(bowtie2_fastq_samples, align_threads, align_ram, bowtie2_min_ram, bowtie2_path, bowtie2_container, extra_args, bowtie2_index, restart_token)" in module
+    assert "ALIGN_BOWTIE2_FINALIZE(ALIGN_BOWTIE2.out.sams, align_threads, align_ram, samtools_path)" in module
+    assert "aligned_bams = ALIGN_BOWTIE2_FINALIZE.out.bams" in module
+
+
+def test_restart_token_is_applied_only_to_forced_step_roots():
+    root = Path(__file__).resolve().parents[2]
+    main = (root / "workflows/nextflow/main.nf").read_text()
+    modules = {
+        name: (root / "workflows/nextflow/modules" / f"{name}.nf").read_text()
+        for name in ("prealignment", "alignment", "preprocessing", "variantcalling", "postprocessing", "annotation")
+    }
+
+    assert "forced_restart_steps" in main
+    assert "variantcalling_restart_token = forced_restart_steps.contains('variantcalling')" in main
+    assert "val restart_token" in modules["prealignment"]
+    assert "val restart_token" in modules["alignment"]
+    assert "INIT_PREPROCESSING_SAMPLE(ready_bams, restart_token)" in modules["preprocessing"]
+    assert "GATK_HAPLOTYPECALLER" in modules["variantcalling"] and "calling_mode, restart_token)" in modules["variantcalling"]
+    assert "POSTPROCESS_CALLER_VCF" in modules["postprocessing"] and "reference_fasta, restart_token)" in modules["postprocessing"]
+    assert "ANNOTATE_VARIANTS" in modules["annotation"] and "transcripts_list, restart_token)" in modules["annotation"]
+
+
+def test_restart_from_step_uses_published_upstream_results_without_running_upstream_modules():
+    main = (Path(__file__).resolve().parents[2] / "workflows/nextflow/main.nf").read_text()
+
+    assert "restart_from_step == 'alignment'" in main
+    assert 'def trimmed_dir = "${params.outdir}/PREALIGNMENT/trimmed"' in main
+    assert '${trimmed_dir}/${row.sample_name}.R1.trim.fastq.gz' in main
+    assert "restart_from_step == 'preprocessing'" in main
+    assert 'ALIGNMENT/${row.sample_name}.sort.bam' in main
+    assert "restart_from_step == 'variantcalling'" in main
+    assert 'PREPROCESSING/${row.sample_name}.preprocessed.bam' in main
+    assert "restart_from_step == 'postprocessing'" in main
+    assert 'fromPath("${params.outdir}/VARIANTCALLING/*.vcf"' in main
+    assert "restart_from_step == 'annotation'" in main
+    assert 'POSTPROCESSING/${row.sample_name}.postprocessed.vcf' in main
+
+
+def test_postprocessing_uses_gatk_java_and_safely_logs_filter_expressions():
+    module = (Path(__file__).resolve().parents[2] / "workflows/nextflow/modules/postprocessing.nf").read_text()
+
+    assert "System.getenv('GATK_JAVA_HOME')" in module
+    assert "System.getenv('GATK_JAVA_CMD')" in module
+    assert 'export JAVA_HOME="${gatk_java_home}"' in module
+    assert "<<HELPER_FILTER_COMMAND" in module
+    assert 'optional: true, emit: variants' in module
+
+
+def test_preprocessing_module_runs_selected_bam_qc_on_final_bams():
+    module = (Path(__file__).resolve().parents[2] / "workflows/nextflow/modules/preprocessing.nf").read_text()
+
+    assert "process PREPROCESSING_FASTQC_BAM_QC" in module
+    assert "process PREPROCESSING_QUALIMAP_BAM_QC" in module
+    assert "FINALIZE_PREPROCESSING.out.bams" in module
+    assert "operations.contains('bam_QC')" in module
+    assert "PREPROCESSING_QUALIMAP_BAM_QC(FINALIZE_PREPROCESSING.out.bams" in module
+    assert "PREPROCESSING_FASTQC_BAM_QC(FINALIZE_PREPROCESSING.out.bams" in module
+    assert 'publishDir "${params.outdir}/PREPROCESSING/bam_qc"' in module
+    assert "preprocessing_statuses.mix(PREPROCESSING_QUALIMAP_BAM_QC.out.statuses)" in module
+    assert "bam_qc_resolved_container_cfg instanceof Map" in module
 
 
 def test_validate_nextflow_inputs_accepts_gatk3_preprocessing_databases():

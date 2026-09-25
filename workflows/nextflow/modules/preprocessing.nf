@@ -6,6 +6,7 @@ process INIT_PREPROCESSING_SAMPLE {
 
     input:
     tuple val(sample_id), val(role), val(sample_name), path(input_bam)
+    val restart_token
 
     output:
     tuple val(sample_id), val(role), val(sample_name), path(input_bam), path("${sample_name}.preprocessing.partial.log"), emit: initialized
@@ -380,6 +381,131 @@ process FINALIZE_PREPROCESSING {
 }
 
 
+process PREPROCESSING_FASTQC_BAM_QC {
+    tag "${sample_name}"
+    cpus { preprocess_threads }
+    memory { preprocess_ram }
+    publishDir "${params.outdir}/PREPROCESSING/bam_qc", mode: 'copy', pattern: 'preprocessing_bam_fastqc_out/*'
+    publishDir "${params.outdir}/LOGS/PREPROCESSING/samples", mode: 'copy', pattern: '*.bam_QC.preprocessing.log'
+    publishDir "${params.outdir}/LOGS/PREPROCESSING/samples", mode: 'copy', pattern: '*.bam_QC.preprocessing.status.tsv'
+
+    input:
+    tuple val(sample_id), val(role), val(sample_name), path(bam), path(bai)
+    val preprocess_threads
+    val preprocess_ram
+    val fastqc_path
+    val fastqc_args
+
+    output:
+    tuple val(sample_id), val(role), val(sample_name), path('preprocessing_bam_fastqc_out/*'), optional: true, emit: reports
+    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.bam_QC.preprocessing.log"), path("${sample_name}.bam_QC.preprocessing.status.tsv"), emit: statuses
+
+    script:
+    """
+    set +e
+    mkdir -p preprocessing_bam_fastqc_out
+    if [ -x "${fastqc_path}" ]; then
+        fastqc_cmd="${fastqc_path}"
+    else
+        fastqc_cmd="perl ${fastqc_path}"
+    fi
+    {
+        echo "step=preprocessing"
+        echo "operation=bam_QC"
+        echo "tool=FASTQC"
+        echo "sample_id=${sample_id}"
+        echo "role=${role}"
+        echo "sample_name=${sample_name}"
+        echo "threads=${task.cpus}"
+        echo "bam=${bam}"
+        echo "started=\$(date -Is)"
+        echo "command=\${fastqc_cmd} -t ${task.cpus} -o preprocessing_bam_fastqc_out ${fastqc_args} ${bam}"
+        echo
+    } > ${sample_name}.bam_QC.preprocessing.log
+    started_at=\$(date -Is)
+    \${fastqc_cmd} -t ${task.cpus} -o preprocessing_bam_fastqc_out ${fastqc_args} ${bam} >> ${sample_name}.bam_QC.preprocessing.log 2>&1
+    exit_code=\$?
+    completed_at=\$(date -Is)
+    if [ "\${exit_code}" -eq 0 ]; then
+        status=completed
+        echo "completed=\${completed_at}" >> ${sample_name}.bam_QC.preprocessing.log
+    else
+        status=failed
+        echo "failed=\${completed_at}" >> ${sample_name}.bam_QC.preprocessing.log
+        echo "exit_code=\${exit_code}" >> ${sample_name}.bam_QC.preprocessing.log
+    fi
+    printf "step\\ttool\\tsample_id\\trole\\tsample_name\\tstatus\\texit_code\\tstarted\\tcompleted\\n" > ${sample_name}.bam_QC.preprocessing.status.tsv
+    printf "preprocessing\\tFASTQC\\t${sample_id}\\t${role}\\t${sample_name}\\t\${status}\\t\${exit_code}\\t\${started_at}\\t\${completed_at}\\n" >> ${sample_name}.bam_QC.preprocessing.status.tsv
+    exit 0
+    """
+}
+
+
+process PREPROCESSING_QUALIMAP_BAM_QC {
+    tag "${sample_name}"
+    cpus { preprocess_threads }
+    memory { preprocess_ram }
+    container { qualimap_container ?: null }
+    publishDir "${params.outdir}/PREPROCESSING/bam_qc", mode: 'copy', pattern: '*.qualimap'
+    publishDir "${params.outdir}/LOGS/PREPROCESSING/samples", mode: 'copy', pattern: '*.bam_QC.preprocessing.log'
+    publishDir "${params.outdir}/LOGS/PREPROCESSING/samples", mode: 'copy', pattern: '*.bam_QC.preprocessing.status.tsv'
+
+    input:
+    tuple val(sample_id), val(role), val(sample_name), path(bam), path(bai)
+    val preprocess_threads
+    val preprocess_ram
+    val qualimap_path
+    val qualimap_container
+    val qualimap_args
+
+    output:
+    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.qualimap"), emit: reports
+    tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.bam_QC.preprocessing.log"), path("${sample_name}.bam_QC.preprocessing.status.tsv"), emit: statuses
+
+    script:
+    def javaMemMb = Math.max(256, task.memory.toMega() - 256)
+    def javaMemoryArg = qualimap_args.contains('--java-mem-size') ? '' : "--java-mem-size=${javaMemMb}M"
+    """
+    set +e
+    unset DISPLAY
+    {
+        echo "step=preprocessing"
+        echo "operation=bam_QC"
+        echo "tool=QUALIMAP"
+        echo "sample_id=${sample_id}"
+        echo "role=${role}"
+        echo "sample_name=${sample_name}"
+        echo "threads=${task.cpus}"
+        echo "bam=${bam}"
+        echo "container=${qualimap_container}"
+        echo "started=\$(date -Is)"
+        echo "command=${qualimap_path} bamqc -bam ${bam} -nt ${task.cpus} ${javaMemoryArg} -outdir ${sample_name}.qualimap ${qualimap_args}"
+        echo
+    } > ${sample_name}.bam_QC.preprocessing.log
+    started_at=\$(date -Is)
+    ${qualimap_path} bamqc \
+        -bam ${bam} \
+        -nt ${task.cpus} \
+        ${javaMemoryArg} \
+        -outdir ${sample_name}.qualimap \
+        ${qualimap_args} >> ${sample_name}.bam_QC.preprocessing.log 2>&1
+    exit_code=\$?
+    completed_at=\$(date -Is)
+    if [ "\${exit_code}" -eq 0 ]; then
+        status=completed
+        echo "completed=\${completed_at}" >> ${sample_name}.bam_QC.preprocessing.log
+    else
+        status=failed
+        echo "failed=\${completed_at}" >> ${sample_name}.bam_QC.preprocessing.log
+        echo "exit_code=\${exit_code}" >> ${sample_name}.bam_QC.preprocessing.log
+    fi
+    printf "step\\ttool\\tsample_id\\trole\\tsample_name\\tstatus\\texit_code\\tstarted\\tcompleted\\n" > ${sample_name}.bam_QC.preprocessing.status.tsv
+    printf "preprocessing\\tQUALIMAP\\t${sample_id}\\t${role}\\t${sample_name}\\t\${status}\\t\${exit_code}\\t\${started_at}\\t\${completed_at}\\n" >> ${sample_name}.bam_QC.preprocessing.status.tsv
+    exit 0
+    """
+}
+
+
 process PREPROCESSING_STEP_LOG {
     tag 'preprocessing'
     publishDir "${params.outdir}/LOGS/PREPROCESSING", mode: 'copy'
@@ -440,6 +566,7 @@ workflow PREPROCESSING {
     tools_config
     reference_fasta
     infra_ready
+    restart_token
 
     main:
     preprocessing_cfg = pipeline_config.preprocessing ?: [:]
@@ -452,6 +579,8 @@ workflow PREPROCESSING {
     markdup_cfg = preprocessing_cfg.mark_pcr_dup ?: [:]
     indel_cfg = preprocessing_cfg.indel_realignment ?: [:]
     bqsr_cfg = preprocessing_cfg.BQ_recalibration ?: [:]
+    bam_qc_enabled = operations.contains('bam_QC')
+    bam_qc_cfg = preprocessing_cfg.bam_QC ?: [:]
     tool_name = add_cfg.tool ?: markdup_cfg.tool ?: 'PICARD v.2.7.1'
     picard_path = resolved_cfg.picard?.path ?: tools_config[tool_name]?.path ?: tool_name
     samtools_path = resolved_cfg.samtools?.path ?: tools_config.SAMTOOLS?.path ?: 'samtools'
@@ -474,12 +603,22 @@ workflow PREPROCESSING {
     indel_mills_path = resolved_cfg.databases?.indel_mills?.path ?: tools_config[indel_mills_key]?.path ?: tools_config[indel_mills_key?.toString()?.toLowerCase()]?.path ?: ''
     bqsr_mills_path = resolved_cfg.databases?.bqsr_mills?.path ?: tools_config[bqsr_mills_key]?.path ?: tools_config[bqsr_mills_key?.toString()?.toLowerCase()]?.path ?: ''
     bqsr_dbsnp_path = resolved_cfg.databases?.bqsr_dbsnp?.path ?: tools_config[bqsr_dbsnp_key]?.path ?: tools_config[bqsr_dbsnp_key?.toString()?.toLowerCase()]?.path ?: ''
+    bam_qc_tool_name = bam_qc_cfg.tool ?: 'FASTQC v.0.11.8'
+    bam_qc_tool_cfg = tools_config[bam_qc_tool_name] ?: [:]
+    bam_qc_tool_upper = bam_qc_tool_name.toUpperCase()
+    bam_qc_tool_container_cfg = bam_qc_tool_cfg.container
+    bam_qc_resolved_container_cfg = resolved_cfg.bam_QC?.container
+    bam_qc_tool_container = bam_qc_tool_container_cfg instanceof Map ? bam_qc_tool_container_cfg['image'] : bam_qc_tool_container_cfg
+    bam_qc_resolved_container = bam_qc_resolved_container_cfg instanceof Map ? bam_qc_resolved_container_cfg['image'] : bam_qc_resolved_container_cfg
+    bam_qc_container = bam_qc_tool_container ?: bam_qc_resolved_container ?: ''
+    bam_qc_path = bam_qc_container ? (bam_qc_tool_cfg.path ?: resolved_cfg.bam_QC?.path ?: bam_qc_tool_name) : (resolved_cfg.bam_QC?.path ?: bam_qc_tool_cfg.path ?: 'fastqc')
+    bam_qc_args = resolved_cfg.bam_QC?.resolved_args ?: (bam_qc_cfg[bam_qc_tool_name]?.args ?: bam_qc_cfg.args ?: []).join(' ')
 
     ready_bams = bam_ch
         .combine(infra_ready)
         .map { sample_id, role, sample_name, bam, bai, ready -> tuple(sample_id, role, sample_name, bam) }
 
-    INIT_PREPROCESSING_SAMPLE(ready_bams)
+    INIT_PREPROCESSING_SAMPLE(ready_bams, restart_token)
     current_bams = INIT_PREPROCESSING_SAMPLE.out.initialized
 
     if (operations.contains('add_readgroups')) {
@@ -503,13 +642,30 @@ workflow PREPROCESSING {
     }
 
     FINALIZE_PREPROCESSING(current_bams, preprocess_threads, preprocess_ram, samtools_path, operations)
-    status_files = FINALIZE_PREPROCESSING.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
-    PREPROCESSING_STEP_LOG(tool_name, status_files)
+    preprocessing_statuses = FINALIZE_PREPROCESSING.out.statuses
+    bam_qc_reports = Channel.empty()
+    if (bam_qc_enabled) {
+        if (bam_qc_tool_upper.startsWith('QUALIMAP')) {
+            PREPROCESSING_QUALIMAP_BAM_QC(FINALIZE_PREPROCESSING.out.bams, preprocess_threads, preprocess_ram, bam_qc_path, bam_qc_container, bam_qc_args)
+            preprocessing_statuses = preprocessing_statuses.mix(PREPROCESSING_QUALIMAP_BAM_QC.out.statuses)
+            bam_qc_reports = PREPROCESSING_QUALIMAP_BAM_QC.out.reports
+        } else if (bam_qc_tool_upper.startsWith('FASTQC')) {
+            PREPROCESSING_FASTQC_BAM_QC(FINALIZE_PREPROCESSING.out.bams, preprocess_threads, preprocess_ram, bam_qc_path, bam_qc_args)
+            preprocessing_statuses = preprocessing_statuses.mix(PREPROCESSING_FASTQC_BAM_QC.out.statuses)
+            bam_qc_reports = PREPROCESSING_FASTQC_BAM_QC.out.reports
+        } else {
+            error "Unsupported preprocessing BAM QC tool: ${bam_qc_tool_name}"
+        }
+    }
+    status_files = preprocessing_statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
+    preprocessing_tool_names = bam_qc_enabled ? "${tool_name},${bam_qc_tool_name}" : tool_name
+    PREPROCESSING_STEP_LOG(preprocessing_tool_names, status_files)
     PREPROCESSING_ASSERT_SUCCESS(status_files, PREPROCESSING_STEP_LOG.out.log)
 
     emit:
     bams = FINALIZE_PREPROCESSING.out.bams
-    statuses = FINALIZE_PREPROCESSING.out.statuses
+    bam_qc_reports = bam_qc_reports
+    statuses = preprocessing_statuses
     step_log = PREPROCESSING_STEP_LOG.out.log
     ready = PREPROCESSING_ASSERT_SUCCESS.out.ready
 }

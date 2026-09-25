@@ -1,9 +1,9 @@
-import {initAnalysisHistory} from "./sections/analysis_history.js?v=20260911-3";
+import {initAnalysisHistory} from "./sections/analysis_history.js?v=20260922-1";
 import {getProject} from "./api.js?v=20260910-2";
-import {initAnalysis} from "./sections/analysis.js?v=20260911-3";
-import {initPipeline} from "./sections/pipeline.js?v=20260910-2";
+import {initAnalysis} from "./sections/analysis.js?v=20260922-1";
+import {initPipeline} from "./sections/pipeline.js?v=20260921-1";
 import {initSampleSheet} from "./sections/samplesheet.js?v=20260909-2";
-import {initTools} from "./sections/tools.js?v=20260910-2";
+import {initTools} from "./sections/tools.js?v=20260915-2";
 
 const sectionTitles = {
   samplesheet: "Compile Sample Sheet",

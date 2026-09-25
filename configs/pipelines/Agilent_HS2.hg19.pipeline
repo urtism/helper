@@ -20,7 +20,7 @@
             "fastq_QC"
         ],
         "threads": "1",
-        "ram": "1g",
+        "ram": "4g",
         "trim_adapters": {
             "tool": "SURECALLTRIMMER v.3.5.1.46",
             "adapter1": "CTGTCTCTTATACACATCT",
@@ -66,7 +66,7 @@
             "bam_QC"
         ],
         "threads": "6",
-        "ram": "1g",
+        "ram": "4g",
         "merge_UMI": {
             "tool": ""
         },
@@ -92,8 +92,11 @@
             }
         },
         "bam_QC": {
-            "tool": "FASTQC v.0.11.8",
+            "tool": "QUALIMAP v.2.3",
             "FASTQC v.0.11.8": {
+                "args": []
+            },
+            "QUALIMAP v.2.3": {
                 "args": []
             }
         }
@@ -360,10 +363,40 @@
             "vep_annotation",
             "ann_vcf_to_tsv"
         ],
+        "threads": "2",
+        "ram": "12g",
         "vep_annotation": {
-            "tool": "VEP v.115",
-            "VEP v.115": {
-                "args": []
+            "tool": "VEP v.113",
+            "VEP v.113": {
+                "args": [
+                    "--vcf_info_field",
+                    "ANN",
+                    "--no_stats",
+                    "--cache",
+                    "--offline",
+                    "--merged",
+                    "--cache_version",
+                    "113",
+                    "--assembly",
+                    "GRCh37",
+                    "--species",
+                    "homo_sapiens",
+                    "--use_given_ref",
+                    "--canonical",
+                    "--hgvs",
+                    "--af",
+                    "--max_af",
+                    "--af_1kg",
+                    "--af_gnomad",
+                    "--sift",
+                    "b",
+                    "--polyphen",
+                    "b",
+                    "--numbers",
+                    "--transcript_version",
+                    "--symbol",
+                    "--check_existing"
+                ]
             },
             "VEP v.95": {
                 "args": []

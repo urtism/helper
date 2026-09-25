@@ -1,7 +1,10 @@
 import json
+import shlex
+from pathlib import Path
 
 import pytest
 
+from helper_next.api.analysis import normalize_pipeline_for_nextflow
 from helper_next.core.pipelines import (
     PIPELINE_CATALOG,
     PipelineError,
@@ -14,6 +17,7 @@ from helper_next.core.pipelines import (
     save_pipeline,
     validate_pipeline,
 )
+from helper_next.core.tool_resolver import resolve_pipeline_tools
 
 
 def valid_pipeline():
@@ -112,6 +116,19 @@ def test_pipeline_catalog_exposes_adapter_trimming_before_fastq_qc():
     assert [operation["id"] for operation in prealignment["operations"]] == ["trim_adapters", "fastq_QC"]
 
 
+def test_pipeline_catalog_exposes_bam_qc_as_last_preprocessing_operation():
+    preprocessing = next(step for step in PIPELINE_CATALOG if step["id"] == "preprocessing")
+
+    assert preprocessing["operations"][-1] == {"id": "bam_QC", "label": "BAM quality control"}
+
+
+def test_pipeline_catalog_exposes_multi_vcf_merge_after_filtering():
+    postprocessing = next(step for step in PIPELINE_CATALOG if step["id"] == "postprocessing")
+
+    operation_ids = [operation["id"] for operation in postprocessing["operations"]]
+    assert operation_ids.index("multi_vcf_merge") == operation_ids.index("vcf_filter") + 1
+
+
 def test_variant_calling_catalog_exposes_all_variant_classes():
     variantcalling = next(step for step in PIPELINE_CATALOG if step["id"] == "variantcalling")
     assert [operation["id"] for operation in variantcalling["operations"]] == [
@@ -167,3 +184,37 @@ def test_tool_choices_and_parameters_survive_pipeline_round_trip(tmp_path):
     assert loaded["variantcalling"]["tools"] == ["GATK v.4.3", "FREEBAYES v.1.1"]
     assert loaded["cnvcalling"]["CNVKIT"]["args"] == ["--method", "hybrid"]
     assert loaded["methylation"]["CustomMethyl"]["args"] == ["--preset", "cpg"]
+
+
+def test_legacy_annotation_presets_resolve_with_matching_vep_cache_and_container():
+    repository = Path(__file__).resolve().parents[2]
+    tools = json.loads((repository / "configs/tools_cfg/tools.cfg").read_text())
+
+    for path in sorted((repository / "configs/pipelines").glob("*.pipeline")):
+        original = json.loads(path.read_text())
+        pipeline = normalize_pipeline_for_nextflow(original)
+        if "annotation" not in pipeline["workflow"]:
+            continue
+
+        resolved = resolve_pipeline_tools(pipeline, tools)
+        vep = resolved["annotation"]["vep_annotation"]
+        tool_name = vep["tool"]
+        args = shlex.split(vep[tool_name]["resolved_args"])
+        version = tools[tool_name]["version"]
+        assembly = "GRCh38" if pipeline["reference_version"] == "hg38" else "GRCh37"
+
+        assert tools[tool_name]["container"]["image"].startswith(f"ensemblorg/ensembl-vep:release_{version}.")
+        assert args[args.index("--cache_version") + 1] == version
+        assert args[args.index("--assembly") + 1] == assembly
+        assert args.count("--cache") == args.count("--offline") == args.count("--merged") == 1
+        assert args.count("--vcf_info_field") == 1
+        assert args[args.index("--vcf_info_field") + 1] == "ANN"
+        assert "--af_esp" not in args
+        assert "--plugin" not in args
+        legacy = original["variant_annotation"]
+        legacy_args = legacy[legacy["tool"]]["args"]
+        if isinstance(legacy_args, dict):
+            legacy_args = legacy_args["args"]
+        for flag in legacy_args:
+            if str(flag).startswith("--") and flag not in {"--af_esp", "--force_overwrite"}:
+                assert flag in args, (path.name, flag)

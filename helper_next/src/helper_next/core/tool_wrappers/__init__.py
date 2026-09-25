@@ -11,6 +11,7 @@ from helper_next.core.tool_wrappers.wrappers import (
     BwaAlignmentWrapper,
     CutadaptTrimmingWrapper,
     PicardMarkDuplicatesWrapper,
+    QualimapBamQcWrapper,
     SurecallTrimmingWrapper,
     VepAnnotationWrapper,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "BwaAlignmentWrapper",
     "CutadaptTrimmingWrapper",
     "PicardMarkDuplicatesWrapper",
+    "QualimapBamQcWrapper",
     "SurecallTrimmingWrapper",
     "VepAnnotationWrapper",
     "all_catalog_operations",

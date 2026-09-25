@@ -87,9 +87,14 @@
             }
         },
         "bam_QC": {
-            "tool": "FASTQC v.0.11.8",
+            "tool": "QUALIMAP v.2.3",
             "FASTQC v.0.11.8": {
                 "args": []
+            },
+            "QUALIMAP v.2.3": {
+                "args": [
+                    "-os,-cl,1000"
+                ]
             }
         }
     },
@@ -98,7 +103,8 @@
             "add_readgroups",
             "mark_pcr_dup",
             "indel_realignment",
-            "BQ_recalibration"
+            "BQ_recalibration",
+            "bam_QC"
         ],
         "threads": "2",
         "ram": "1g",
@@ -133,6 +139,14 @@
                 "args": [],
                 "dbsnp": "DBSNP v.138",
                 "mills": "MILLS"
+            }
+        },
+        "bam_QC": {
+            "tool": "QUALIMAP v.2.3",
+            "QUALIMAP v.2.3": {
+                "args": [
+                    "-os,-cl,1000"
+                ]
             }
         }
     },
@@ -364,6 +378,18 @@
         },
         "ann_vcf_to_tsv": {
             "tool": ""
+        }
+    },
+    "design": "single-sample",
+    "annotation": {
+        "workflow": ["vep_annotation", "ann_vcf_to_tsv"],
+        "threads": "2",
+        "ram": "8g",
+        "vep_annotation": {
+            "tool": "VEP v.113",
+            "VEP v.113": {
+                "args": ["--vcf_info_field", "ANN", "--no_stats", "--cache", "--offline", "--merged", "--cache_version", "113", "--assembly", "GRCh37", "--species", "homo_sapiens", "--use_given_ref", "--canonical", "--hgvs", "--af", "--max_af", "--af_1kg", "--af_gnomad", "--sift", "b", "--polyphen", "b", "--numbers", "--transcript_version", "--symbol", "--check_existing"]
+            }
         }
     }
 }

@@ -67,7 +67,7 @@ def resolve_alignment(step_config, tools_config, panel_design=None, reference_in
     tool_name = fastq_cfg.get("tool", "BWA v.0.7.17")
     tool_cfg = tool_entry(tools_config, tool_name)
     samtools_cfg = tool_entry(tools_config, "SAMTOOLS")
-    return {
+    resolved = {
         "fastq_alignment": operation(
             "fastq_alignment",
             tool_name,
@@ -79,6 +79,51 @@ def resolve_alignment(step_config, tools_config, panel_design=None, reference_in
         ),
         "samtools": operation("samtools", "SAMTOOLS", samtools_cfg, {}, panel_design, reference_info, tools_config),
     }
+    bam_qc_cfg = step_config.get("bam_QC", {})
+    if "bam_QC" in step_config.get("workflow", []) or bam_qc_cfg:
+        bam_qc_name = bam_qc_cfg.get("tool") or "FASTQC v.0.11.8"
+        bam_qc_tool_cfg = tool_entry(tools_config, bam_qc_name)
+        tool_specific = bam_qc_cfg.get(bam_qc_name, {}) if isinstance(bam_qc_cfg.get(bam_qc_name, {}), dict) else {}
+        operation_cfg = with_step_resources(tool_specific, step_config)
+        if str(bam_qc_name).upper().startswith("QUALIMAP"):
+            operation_cfg = with_qualimap_target(operation_cfg, panel_design)
+        resolved["bam_QC"] = operation(
+            "bam_QC",
+            bam_qc_name,
+            bam_qc_tool_cfg,
+            operation_cfg,
+            panel_design,
+            reference_info,
+            tools_config,
+        )
+    return resolved
+
+
+def with_qualimap_target(operation_cfg, panel_design):
+    result = dict(operation_cfg) if isinstance(operation_cfg, dict) else {}
+    raw_args = result.get("resolved_args", result.get("args", []))
+    if isinstance(raw_args, str):
+        args = shlex.split(raw_args)
+    elif isinstance(raw_args, (list, tuple)):
+        args = []
+        for item in raw_args:
+            if str(item).strip():
+                args.extend(shlex.split(str(item)))
+    else:
+        args = []
+    has_feature_file = any(
+        arg in ("-gff", "--feature-file")
+        or arg.startswith("-gff=")
+        or arg.startswith("--feature-file=")
+        for arg in args
+    )
+    assets = panel_design.get("assets", {}) if isinstance(panel_design, dict) else {}
+    target_bed = assets.get("target_bed") if isinstance(assets, dict) else ""
+    if target_bed and not has_feature_file:
+        args.extend(["-gff", str(target_bed)])
+    result["args"] = args
+    result["resolved_args"] = shell_join(args)
+    return result
 
 
 def resolve_preprocessing(step_config, tools_config, panel_design, reference_info=None):
@@ -86,6 +131,7 @@ def resolve_preprocessing(step_config, tools_config, panel_design, reference_inf
     mark_cfg = step_config.get("mark_pcr_dup", {})
     indel_cfg = step_config.get("indel_realignment", {})
     bqsr_cfg = step_config.get("BQ_recalibration", {})
+    bam_qc_cfg = step_config.get("bam_QC", {})
     picard_name = add_cfg.get("tool") or mark_cfg.get("tool") or "PICARD v.2.7.1"
     gatk3_name = indel_cfg.get("tool") or bqsr_cfg.get("tool") or "GATK v.3.7"
 
@@ -148,20 +194,44 @@ def resolve_preprocessing(step_config, tools_config, panel_design, reference_inf
         resolved["indel_realignment"] = operation("indel_realignment", gatk3_name, gatk3_cfg, indel_operation_cfg, panel_design, reference_info, tools_config)
     if "BQ_recalibration" in step_config.get("workflow", []) or bqsr_cfg:
         resolved["BQ_recalibration"] = operation("BQ_recalibration", gatk3_name, gatk3_cfg, bqsr_operation_cfg, panel_design, reference_info, tools_config)
+    if "bam_QC" in step_config.get("workflow", []) or bam_qc_cfg:
+        bam_qc_name = bam_qc_cfg.get("tool") or "FASTQC v.0.11.8"
+        bam_qc_tool_cfg = tool_entry(tools_config, bam_qc_name)
+        tool_specific = bam_qc_cfg.get(bam_qc_name, {}) if isinstance(bam_qc_cfg.get(bam_qc_name, {}), dict) else {}
+        operation_cfg = with_step_resources(tool_specific, step_config)
+        if str(bam_qc_name).upper().startswith("QUALIMAP"):
+            operation_cfg = with_qualimap_target(operation_cfg, panel_design)
+        resolved["bam_QC"] = operation(
+            "bam_QC",
+            bam_qc_name,
+            bam_qc_tool_cfg,
+            operation_cfg,
+            panel_design,
+            reference_info,
+            tools_config,
+        )
     return resolved
 
 
 def resolve_variantcalling(step_config, tools_config, panel_design=None, reference_info=None):
-    tool_name = next((tool for tool in step_config.get("tools", []) if supported_variantcaller(tool)), "GATK v.4.3")
-    operation_cfg = with_step_resources(step_config.get(tool_name, {}), step_config)
-    if isinstance(step_config.get("filters"), dict) and "filters" not in operation_cfg:
-        operation_cfg["filters"] = step_config["filters"]
-    panel_assets = panel_design.get("assets", {}) if isinstance(panel_design, dict) else {}
-    if panel_assets.get("target_bed") and "target_intervals" not in operation_cfg:
-        operation_cfg["target_intervals"] = panel_assets["target_bed"]
-    caller = operation("caller", tool_name, tool_entry(tools_config, tool_name), operation_cfg, panel_design, reference_info, tools_config)
-    caller["target_intervals"] = str(operation_cfg.get("target_intervals", ""))
-    return {"caller": caller}
+    tool_names = [tool for tool in step_config.get("tools", []) if supported_variantcaller(tool)]
+    if not tool_names:
+        tool_names = ["GATK v.4.3"]
+    callers = {}
+    for tool_name in tool_names:
+        operation_cfg = with_step_resources(step_config.get(tool_name, {}), step_config)
+        if isinstance(step_config.get("filters"), dict) and "filters" not in operation_cfg:
+            operation_cfg["filters"] = step_config["filters"]
+        panel_assets = panel_design.get("assets", {}) if isinstance(panel_design, dict) else {}
+        if panel_assets.get("target_bed") and "target_intervals" not in operation_cfg:
+            operation_cfg["target_intervals"] = panel_assets["target_bed"]
+        caller = operation("caller", tool_name, tool_entry(tools_config, tool_name), operation_cfg, panel_design, reference_info, tools_config)
+        caller["target_intervals"] = str(operation_cfg.get("target_intervals", ""))
+        callers[tool_name] = caller
+    primary_tool = next((tool for tool in tool_names if str(tool).upper().startswith("GATK")), None)
+    primary_tool = primary_tool or next((tool for tool in tool_names if str(tool).upper().startswith("DEEPVARIANT")), None)
+    primary_tool = primary_tool or tool_names[0]
+    return {"caller": callers[primary_tool], "callers": callers}
 
 
 def supported_variantcaller(tool_name):

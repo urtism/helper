@@ -229,5 +229,16 @@
 		"tool":""
 	}
 
+},
+"annotation": {
+	"workflow": ["vep_annotation", "ann_vcf_to_tsv"],
+	"threads": "2",
+	"ram": "8g",
+	"vep_annotation": {
+		"tool": "VEP v.113",
+		"VEP v.113": {
+			"args": ["--vcf_info_field", "ANN", "--no_stats", "--cache", "--offline", "--merged", "--cache_version", "113", "--assembly", "GRCh37", "--species", "homo_sapiens", "--use_given_ref", "--canonical"]
+		}
+	}
 }
 }

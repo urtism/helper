@@ -188,9 +188,25 @@ function renderWorkflow() {
         const row = document.createElement("div");
         row.className = "pipeline-operation-row";
         row.classList.toggle("selected", state.activeSelection?.step === step.id && state.activeSelection.operation === operation.id);
-        row.innerHTML = `<label><input type="checkbox" data-step="${step.id}" data-operation="${operation.id}" ${selected.includes(operation.id) ? "checked" : ""} ${enabled ? "" : "disabled"}><span>${operation.label}</span><code>${operation.id}</code></label><button class="compact-button" type="button" data-configure-step="${step.id}" data-configure-operation="${operation.id}">Configure</button>`;
+        row.innerHTML = `<label><input type="checkbox" data-step="${step.id}" data-operation="${operation.id}" ${selected.includes(operation.id) ? "checked" : ""} ${enabled ? "" : "disabled"}><span>${operation.label}</span><code>${operation.id}</code></label>`;
+        const actions = document.createElement("div");
+        actions.className = "pipeline-operation-actions";
+        for (const toolLabel of selectedToolLabels(step.id, operation.id)) {
+          const badge = document.createElement("span");
+          badge.className = "pipeline-selected-tool";
+          badge.textContent = toolLabel;
+          actions.appendChild(badge);
+        }
+        const configure = document.createElement("button");
+        configure.className = "compact-button";
+        configure.type = "button";
+        configure.dataset.configureStep = step.id;
+        configure.dataset.configureOperation = operation.id;
+        configure.textContent = "Configure";
+        actions.appendChild(configure);
+        row.appendChild(actions);
         row.querySelector("input").addEventListener("change", toggleOperation);
-        row.querySelector("button").addEventListener("click", selectSettings);
+        configure.addEventListener("click", selectSettings);
         operations.appendChild(row);
       }
       group.appendChild(operations);
@@ -417,6 +433,7 @@ function renderToolSelector(panel, operation, targetInfo) {
         event.target.checked ? tools.add(tool.name) : tools.delete(tool.name);
         editable.tools = [...tools];
         if (event.target.checked && !editable[tool.name]) editable[tool.name] = {args: []};
+        renderWorkflow();
         changed(false);
       });
       options.appendChild(label);
@@ -433,6 +450,7 @@ function renderToolSelector(panel, operation, targetInfo) {
       const editable = targetInfo.ensure();
       editable.tool = select.value;
       if (select.value && !editable[select.value]) editable[select.value] = {args: []};
+      renderWorkflow();
       changed(false);
     });
     label.appendChild(select);
@@ -452,6 +470,7 @@ function renderToolSelector(panel, operation, targetInfo) {
       editable.tool = name;
     }
     if (!editable[name]) editable[name] = {args: []};
+    renderWorkflow();
     changed(false);
   });
   section.appendChild(customRow);
@@ -461,6 +480,18 @@ function renderToolSelector(panel, operation, targetInfo) {
 function selectedToolNames(target, multiple) {
   if (multiple) return Array.isArray(target.tools) ? target.tools.filter(Boolean) : [];
   return target.tool ? [target.tool] : [];
+}
+
+function selectedToolLabels(step, operation) {
+  const targetInfo = configurationTarget(step, operation, false);
+  const selected = selectedToolNames(targetInfo.value, targetInfo.multiple);
+  const available = state.index.tool_catalog?.[operation] || [];
+  return selected.map(name => {
+    const tool = available.find(item => item.name === name);
+    const version = tool?.version?.trim();
+    if (!version || name.toLowerCase().includes(version.toLowerCase())) return name;
+    return `${name} v${version}`;
+  });
 }
 
 function toolDescription(tool) {

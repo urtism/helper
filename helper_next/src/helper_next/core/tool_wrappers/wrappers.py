@@ -151,6 +151,42 @@ class SamtoolsWrapper(ToolWrapper):
         ]
 
 
+class QualimapBamQcWrapper(ToolWrapper):
+    default_operation = "bam_QC"
+
+    def command_args(self, operation):
+        threads = self.operation_config.get("threads", self.tool_config.get("threads", "{threads}"))
+        extra_args = config_args(self.operation_config)
+        target_bed = self.panel_assets().get("target_bed")
+        has_feature_file = any(
+            arg in ("-gff", "--feature-file")
+            or arg.startswith("-gff=")
+            or arg.startswith("--feature-file=")
+            for arg in extra_args
+        )
+        if target_bed and not has_feature_file:
+            extra_args.extend(["-gff", str(target_bed)])
+        return [
+            "bamqc",
+            "-bam",
+            "{bam}",
+            "-nt",
+            str(threads),
+            "-outdir",
+            "{sample_name}.qualimap",
+        ] + extra_args
+
+    def inputs(self, operation):
+        return [
+            ToolInput("bam", "{bam}"),
+            ToolInput("bai", "{bam}.bai", optional=True),
+            ToolInput("target_bed", str(self.panel_assets().get("target_bed", "")), optional=True),
+        ]
+
+    def outputs(self, operation):
+        return [ToolOutput("report", "{sample_name}.qualimap", kind="directory")]
+
+
 class PicardAddOrReplaceReadGroupsWrapper(ToolWrapper):
     default_operation = "add_readgroups"
 
@@ -467,12 +503,18 @@ class GatkVariantFiltrationWrapper(ToolWrapper):
 class VepAnnotationWrapper(ToolWrapper):
     default_operation = "vep_annotation"
 
+    def executable(self, tool_name):
+        if self.tool_config.get("container") or self.tool_config.get("image"):
+            return str(self.tool_config.get("container_path") or "vep")
+        return super().executable(tool_name)
+
     def command_args(self, operation):
         raw_args = self.operation_config.get("args", [])
-        if isinstance(raw_args, dict):
-            args = build_vep_args(raw_args, self.tools_config, containerized=bool(self.tool_config.get("container") or self.tool_config.get("image")))
-        else:
-            args = config_args(self.operation_config)
+        args = build_vep_args(
+            raw_args,
+            self.tools_config,
+            containerized=bool(self.tool_config.get("container") or self.tool_config.get("image")),
+        )
         if self.reference_fasta() and "--fasta" not in args:
             args.extend(["--fasta", self.reference_fasta()])
         transcripts = self.panel_assets().get("transcripts_list")

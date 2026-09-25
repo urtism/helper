@@ -21,7 +21,7 @@ const baseWorkflowTree = [
     children: [
       {id: "fastq_alignment", label: "fastq_alignment", detail: "BWA, Bowtie2, Novoalign"},
       {id: "sam_to_bam", label: "sam_to_bam", detail: "samtools view"},
-      {id: "sort_bam", label: "sort_bam", detail: "samtools sort"},
+      {id: "sort_bam", operation: "sortSam", label: "sort_bam", detail: "samtools sort"},
       {id: "index_bam", label: "index_bam", detail: "samtools index"},
       {id: "bam_QC", label: "BAM QC", detail: "FastQC report on the sorted BAM", defaultChecked: false},
     ],
@@ -39,6 +39,7 @@ const baseWorkflowTree = [
       {id: "mark_pcr_dup", label: "mark_pcr_dup", detail: "Picard MarkDuplicates"},
       {id: "indel_realignment", label: "indel_realignment", detail: "GATK3 RealignerTargetCreator + IndelRealigner", defaultChecked: false},
       {id: "BQ_recalibration", label: "BQ_recalibration", detail: "GATK3 BaseRecalibrator + PrintReads", defaultChecked: false},
+      {id: "preprocessing_bam_QC", operation: "bam_QC", label: "BAM QC", detail: "Qualimap or FastQC report on the final preprocessed BAM", defaultChecked: false},
     ],
   },
   {
@@ -63,6 +64,7 @@ const baseWorkflowTree = [
     children: [
       {id: "vcf_norm", label: "vcf_norm", detail: "Normalize VCF records with bcftools", defaultChecked: false},
       {id: "vcf_filter", label: "vcf_filter", detail: "Apply configured VCF filters", defaultChecked: false},
+      {id: "multi_vcf_merge", label: "multi_vcf_merge", detail: "Merge caller-specific VCFs into one consensus VCF", defaultChecked: false},
       {id: "vcf_to_tsv", label: "vcf_to_tsv", detail: "Export core VCF fields to TSV"},
     ],
   },
@@ -168,6 +170,17 @@ export function loadArchivedAnalysis(record, overrides = {}) {
   renderConsoleText(`Archived settings loaded from ${record?.run_id || "analysis"}. Review and modify them before starting.`);
   const status = document.querySelector("#analysis-status");
   if (status) status.textContent = "Archived parameters loaded. Changes will create a new analysis.";
+}
+
+export function monitorAnalysisRun(runDir, runId = "") {
+  if (!runDir) return;
+  const panel = document.querySelector(".analysis-console-panel");
+  if (panel) panel.open = true;
+  const status = document.querySelector("#analysis-status");
+  if (status) status.textContent = runId ? `Monitoring ${runId}` : "Monitoring analysis";
+  setConsoleState("Loading");
+  renderConsoleText(`Loading workflow progress…\nrun_dir=${runDir}`);
+  startConsolePolling(runDir, true);
 }
 
 function setControlValue(selector, value) {
@@ -453,37 +466,37 @@ function applyPipelineToWorkflowTree(config) {
     }
     const configuredSubsteps = Array.isArray(stepConfig.workflow) ? stepConfig.workflow : [];
     node.children.forEach((child) => {
-      if (configuredSubsteps.includes(child.id) && !child.disabled) {
+      const operationId = child.operation || child.id;
+      if (configuredSubsteps.includes(operationId) && !child.disabled) {
         analysisState.workflowChecked.add(child.id);
       }
-      const childConfig = stepConfig[child.id] || {};
-      if (childConfig.tool) {
-        child.detail = `${child.detail}. Tool: ${childConfig.tool}`;
+      const tools = configuredToolsForOperation(config, node.id, operationId);
+      if (tools.length) {
+        child.detail = `${child.detail}. ${tools.length === 1 ? "Tool" : "Tools"}: ${tools.join(", ")}`;
       }
     });
     if (node.id === "variantcalling" && Array.isArray(stepConfig.tools) && stepConfig.tools.length) {
-      node.children = [
-        {
-          id: "short_variants",
-          label: "Short Variants",
-          detail: `SNV and small InDel calling. Tools: ${stepConfig.tools.join(", ")}`,
-        },
-        {id: "cnv_calling", label: "CNV Calling", detail: "Copy-number variant calling module pending", disabled: true},
-        {id: "sv_calling", label: "SV Calling", detail: "Structural variant calling module pending", disabled: true},
-        {id: "methylation", label: "Methylation", detail: "Methylation calling module pending", disabled: true},
-      ];
-      if (workflow.includes(node.id)) {
+      if (workflow.includes(node.id) && !configuredSubsteps.length) {
         analysisState.workflowChecked.add("short_variants");
       }
     }
-    if (node.id === "annotation") {
-      const vepTool = stepConfig.vep_annotation?.tool;
-      if (vepTool) {
-        const vep = node.children.find((child) => child.id === "vep_annotation");
-        if (vep) vep.detail = `Annotate variants with Ensembl VEP. Tool: ${vepTool}`;
-      }
-    }
   });
+}
+
+function configuredToolsForOperation(config, step, operation) {
+  const variantTargets = {
+    short_variants: "variantcalling",
+    cnv_calling: "cnvcalling",
+    sv_calling: "svcalling",
+    methylation: "methylation",
+  };
+  const target = variantTargets[operation]
+    ? config?.[variantTargets[operation]]
+    : config?.[step]?.[operation];
+  if (!target || typeof target !== "object" || Array.isArray(target)) return [];
+  const tools = Array.isArray(target.tools) ? [...target.tools] : [];
+  if (target.tool) tools.push(target.tool);
+  return [...new Set(tools.filter(Boolean))];
 }
 
 function selectedWorkflowSteps() {
@@ -500,7 +513,7 @@ function selectedPreprocessingSubsteps() {
   if (!preprocessing) return [];
   return preprocessing.children
     .filter((child) => !child.disabled && analysisState.workflowChecked.has(child.id))
-    .map((child) => child.id);
+    .map((child) => child.operation || child.id);
 }
 
 function selectedAlignmentSubsteps() {
@@ -511,7 +524,7 @@ function selectedAlignmentSubsteps() {
   if (!alignment) return [];
   return alignment.children
     .filter((child) => !child.disabled && analysisState.workflowChecked.has(child.id))
-    .map((child) => child.id);
+    .map((child) => child.operation || child.id);
 }
 
 function selectedPrealignmentSubsteps() {
@@ -862,10 +875,10 @@ function renderResult(result) {
 
 function startConsolePolling(runDir, keepPolling) {
   if (!runDir) return;
+  stopConsolePolling();
   analysisState.activeRunDir = runDir;
   refreshConsole();
   if (!keepPolling) return;
-  stopConsolePolling();
   analysisState.pollTimer = window.setInterval(refreshConsole, 2000);
 }
 

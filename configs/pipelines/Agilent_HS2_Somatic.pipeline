@@ -343,5 +343,16 @@
                 "tags_file": "/home/jarvis/git/Powercall2/configs/lista_features_annotazione.list"
             }
         }
+    },
+    "annotation": {
+        "workflow": ["vep_annotation", "ann_vcf_to_tsv"],
+        "threads": "2",
+        "ram": "8g",
+        "vep_annotation": {
+            "tool": "VEP v.113",
+            "VEP v.113": {
+                "args": ["--vcf_info_field", "ANN", "--no_stats", "--cache", "--offline", "--merged", "--cache_version", "113", "--assembly", "GRCh37", "--species", "homo_sapiens", "--use_given_ref", "--canonical", "--hgvs", "--af", "--max_af", "--af_1kg", "--af_gnomad", "--sift", "b", "--polyphen", "b", "--numbers", "--transcript_version", "--symbol", "--check_existing"]
+            }
+        }
     }
 }

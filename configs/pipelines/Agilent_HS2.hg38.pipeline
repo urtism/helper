@@ -345,5 +345,16 @@
                 "tags_file": "/home/jarvis/git/Helper/files/lista_features_annotazione.list"
             }
         }
+    },
+    "annotation": {
+        "workflow": ["vep_annotation", "ann_vcf_to_tsv"],
+        "threads": "2",
+        "ram": "12g",
+        "vep_annotation": {
+            "tool": "VEP v.115",
+            "VEP v.115": {
+                "args": ["--vcf_info_field", "ANN", "--no_stats", "--cache", "--offline", "--merged", "--cache_version", "115", "--assembly", "GRCh38", "--species", "homo_sapiens", "--use_given_ref", "--canonical", "--hgvs", "--af", "--max_af", "--af_1kg", "--af_gnomad", "--sift", "b", "--polyphen", "b", "--numbers", "--transcript_version", "--symbol", "--check_existing"]
+            }
+        }
     }
 }

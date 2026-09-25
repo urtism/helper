@@ -35,6 +35,7 @@ SCRIPT_NAMES = [
     "header_fix.py",
     "make_gatk_CNV_calls_model.py",
     "merge_vcf.py",
+    "merge_consensus_vcfs.py",
     "merge_vcfs.py",
     "samplesheet_writer.py",
     "statsvcf_vs_test.py",

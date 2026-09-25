@@ -519,9 +519,11 @@ vcf_to_tsv
 ```
 
 `vcf_to_tsv` is implemented directly in the Nextflow process as a compact core
-field export. `vcf_norm` uses `BCFTOOLS` when selected, and `vcf_filter` either
-uses a configured GATK `VariantFiltration` command or passes the current VCF
-through when no filter tool is configured.
+field export. `vcf_norm` uses `BCFTOOLS` when selected: it first splits and
+left-aligns multiallelic records, then removes duplicate normalized alleles
+(including duplicates produced by overlapping target intervals). `vcf_filter`
+either uses a configured GATK `VariantFiltration` command or passes the current
+VCF through when no filter tool is configured.
 
 When run after variant calling, postprocessing consumes every VCF emitted by
 the selected branch: the run-wide germline VCF and each filtered tumor-normal
@@ -619,3 +621,14 @@ the most recent attempt for that directory. Every launch also writes
 `input.tools.json` in the run directory and passes that tool snapshot to Nextflow.
 Deleting a workdir therefore preserves history and reanalysis settings, but
 removes its cached execution/results.
+
+**Restart from step** also keeps the original run directory and uses `-resume`,
+but builds the execution graph from the selected step onward. The selected step
+reads the published result of the preceding step (or the original samplesheet
+input when it is already the analysis entry step), so earlier modules are not
+instantiated and cannot be rerun. A new restart token changes the task hashes of
+the selected and downstream steps without deleting cache entries. Their
+replacement outputs are published in the same result directories. The selected
+step, effective downstream-step list, and token are recorded in
+`nextflow.command.txt` and in the history record; a subsequent normal resume of
+that attempt preserves the same restart graph and token.

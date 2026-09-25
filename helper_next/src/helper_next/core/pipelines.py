@@ -46,6 +46,7 @@ PIPELINE_CATALOG = [
             {"id": "mark_pcr_dup", "label": "Mark PCR duplicates"},
             {"id": "indel_realignment", "label": "Indel realignment"},
             {"id": "BQ_recalibration", "label": "Base-quality recalibration"},
+            {"id": "bam_QC", "label": "BAM quality control"},
         ],
     },
     {
@@ -64,6 +65,7 @@ PIPELINE_CATALOG = [
         "operations": [
             {"id": "vcf_norm", "label": "VCF normalization"},
             {"id": "vcf_filter", "label": "VCF filtering"},
+            {"id": "multi_vcf_merge", "label": "Multi-VCF consensus merge"},
             {"id": "vcf_to_tsv", "label": "VCF to TSV conversion"},
         ],
     },

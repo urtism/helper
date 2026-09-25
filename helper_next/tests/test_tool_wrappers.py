@@ -8,6 +8,7 @@ from helper_next.core.tool_wrappers import (
     ContainerSpec,
     CutadaptTrimmingWrapper,
     PicardMarkDuplicatesWrapper,
+    QualimapBamQcWrapper,
     SurecallTrimmingWrapper,
     VepAnnotationWrapper,
     operation_spec,
@@ -102,6 +103,119 @@ def test_picard_mark_duplicates_wrapper_declares_outputs_without_subprocess():
     assert "subprocess" not in " ".join(invocation["command_args"])
 
 
+def test_qualimap_bam_qc_wrapper_declares_container_ready_invocation():
+    invocation = QualimapBamQcWrapper(
+        {"threads": "6", "args": ["-gff", "/panel/targets.bed", "-os"]},
+        {
+            "path": "qualimap",
+            "version": "2.3",
+            "container": {"engine": "docker", "image": "staphb/qualimap:latest"},
+        },
+        panel_design={"assets": {"target_bed": "/panel/automatic.bed"}},
+    ).build("QUALIMAP v.2.3", "bam_QC").to_dict()
+
+    assert invocation["command_args"][:5] == ["bamqc", "-bam", "{bam}", "-nt", "6"]
+    assert ["-outdir", "{sample_name}.qualimap"] == invocation["command_args"][5:7]
+    assert invocation["command_args"][-3:] == ["-gff", "/panel/targets.bed", "-os"]
+    assert invocation["command_args"].count("-gff") == 1
+    assert invocation["container"]["image"] == "staphb/qualimap:latest"
+    assert invocation["outputs"][0]["kind"] == "directory"
+
+
+def test_resolver_embeds_selected_qualimap_bam_qc_invocation():
+    pipeline = {
+        "workflow": ["alignment"],
+        "reference_version": "hg19",
+        "alignment": {
+            "workflow": ["fastq_alignment", "bam_QC"],
+            "threads": "4",
+            "ram": "6g",
+            "fastq_alignment": {"tool": "BWA v.0.7.17"},
+            "bam_QC": {
+                "tool": "QUALIMAP v.2.3",
+                "QUALIMAP v.2.3": {"args": ["-nr", "2000"]},
+            },
+        },
+    }
+    tools = {
+        "hg19": {"fasta": "/refs/hg19.fa"},
+        "BWA v.0.7.17": {"path": "bwa"},
+        "SAMTOOLS": {"path": "samtools"},
+        "QUALIMAP v.2.3": {
+            "path": "qualimap",
+            "container": {"engine": "docker", "image": "staphb/qualimap:latest"},
+        },
+    }
+
+    panel = {"assets": {"target_bed": "/targets/analysis-panel.bed"}}
+    resolved = resolve_pipeline_tools(pipeline, tools, panel)["alignment"]["resolved"]["bam_QC"]
+
+    assert resolved["resolved_args"] == "-nr 2000 -gff /targets/analysis-panel.bed"
+    assert resolved["container"]["image"] == "staphb/qualimap:latest"
+    assert resolved["invocation"]["resources"] == {"threads": "4", "ram": "6g"}
+    assert resolved["invocation"]["command_args"][:5] == ["bamqc", "-bam", "{bam}", "-nt", "4"]
+    assert resolved["invocation"]["inputs"][2]["path"] == "/targets/analysis-panel.bed"
+
+
+def test_resolver_parses_each_qualimap_setting_row_as_one_option():
+    pipeline = {
+        "workflow": ["alignment"],
+        "reference_version": "hg19",
+        "alignment": {
+            "workflow": ["fastq_alignment", "bam_QC"],
+            "threads": "2",
+            "ram": "4g",
+            "fastq_alignment": {"tool": "BWA v.0.7.17"},
+            "bam_QC": {
+                "tool": "QUALIMAP v.2.3",
+                "QUALIMAP v.2.3": {"args": ["-os", "-ip", "-cl 1000"]},
+            },
+        },
+    }
+    tools = {
+        "hg19": {"fasta": "/refs/hg19.fa"},
+        "BWA v.0.7.17": {"path": "bwa"},
+        "SAMTOOLS": {"path": "samtools"},
+        "QUALIMAP v.2.3": {"path": "qualimap"},
+    }
+
+    resolved = resolve_pipeline_tools(pipeline, tools)["alignment"]["resolved"]["bam_QC"]
+
+    assert resolved["args"] == ["-os", "-ip", "-cl", "1000"]
+    assert resolved["resolved_args"] == "-os -ip -cl 1000"
+
+
+def test_resolver_embeds_qualimap_after_preprocessing_with_analysis_bed():
+    pipeline = {
+        "workflow": ["preprocessing"],
+        "reference_version": "hg19",
+        "preprocessing": {
+            "workflow": ["mark_pcr_dup", "bam_QC"],
+            "threads": "6",
+            "ram": "8g",
+            "mark_pcr_dup": {"tool": "PICARD v.2.7.1"},
+            "bam_QC": {"tool": "QUALIMAP v.2.3", "QUALIMAP v.2.3": {"args": ["-os"]}},
+        },
+    }
+    tools = {
+        "hg19": {"fasta": "/refs/hg19.fa"},
+        "SAMTOOLS": {"path": "samtools"},
+        "PICARD v.2.7.1": {"path": "/tools/picard.jar"},
+        "GATK v.3.7": {"path": "/tools/gatk3.jar"},
+        "QUALIMAP v.2.3": {
+            "path": "qualimap",
+            "container": {"engine": "docker", "image": "staphb/qualimap:latest"},
+        },
+    }
+    panel = {"assets": {"target_bed": "/targets/analysis-panel.bed"}}
+
+    resolved = resolve_pipeline_tools(pipeline, tools, panel)["preprocessing"]["resolved"]["bam_QC"]
+
+    assert resolved["resolved_args"] == "-os -gff /targets/analysis-panel.bed"
+    assert resolved["invocation"]["metadata"]["operation"] == "bam_QC"
+    assert resolved["invocation"]["container"]["image"] == "staphb/qualimap:latest"
+
+
 def test_vep_wrapper_reuses_legacy_args_and_tools_cfg_plugin_paths():
     wrapper = VepAnnotationWrapper(
         {
@@ -129,10 +243,21 @@ def test_vep_wrapper_reuses_legacy_args_and_tools_cfg_plugin_paths():
     assert "/panels/transcripts.txt" in invocation["command_args"]
 
 
+def test_containerized_vep_wrapper_uses_container_executable_and_normalized_args():
+    invocation = VepAnnotationWrapper(
+        {"args": ["--cache", "--cache_version 116", "--assembly GRCh37"]},
+        {"version": "116", "container": {"engine": "docker", "image": "ensemblorg/ensembl-vep:release_116.0"}},
+    ).build("VEP v.116", "vep_annotation")
+
+    assert invocation.executable == "vep"
+    assert invocation.command_args[-5:] == ["--cache", "--cache_version", "116", "--assembly", "GRCh37"]
+
+
 def test_registry_covers_initial_ngs_wrappers():
     cases = [
         ("fastq_alignment", "BWA v.0.7.17"),
         ("fastq_alignment", "BOWTIE2 v.2.3.5.1"),
+        ("bam_QC", "QUALIMAP v.2.3"),
         ("samtools", "SAMTOOLS"),
         ("add_readgroups", "PICARD v.2.7.1"),
         ("mark_pcr_dup", "PICARD v.2.7.1"),

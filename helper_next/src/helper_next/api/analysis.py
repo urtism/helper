@@ -59,6 +59,7 @@ class StopRunRequest(BaseModel):
 
 SUPPORTED_ALIGNERS = ["BWA v.0.7.17", "BOWTIE2", "NOVOALIGN"]
 SUPPORTED_EXECUTION_PROFILES = ["local", "slurm"]
+WORKFLOW_STEP_ORDER = ["prealignment", "alignment", "preprocessing", "variantcalling", "postprocessing", "annotation"]
 TAIL_BYTES = 24000
 JAVA_CANDIDATES = [
     Path("/usr/lib/jvm/java-21-openjdk-amd64"),
@@ -95,12 +96,12 @@ def real_run(payload: AnalysisRunRequest):
 _launch_lock = threading.Lock()
 
 
-def launch_run(payload, snapshot=None, parent_id=None):
+def launch_run(payload, snapshot=None, parent_id=None, restart_from_step="", reuse_restart_context=False):
     with _launch_lock:
-        return _launch_run(payload, snapshot, parent_id)
+        return _launch_run(payload, snapshot, parent_id, restart_from_step, reuse_restart_context)
 
 
-def _launch_run(payload, snapshot=None, parent_id=None):
+def _launch_run(payload, snapshot=None, parent_id=None, restart_from_step="", reuse_restart_context=False):
     run_id = clean_run_id(payload.run_id)
     if not payload.samplesheet_content.strip():
         raise HTTPException(status_code=400, detail="Samplesheet content is required")
@@ -155,6 +156,22 @@ def _launch_run(payload, snapshot=None, parent_id=None):
             validate_samplesheet_file_access(samplesheet, entry_step)
         except ValidationError as exc:
             raise HTTPException(status_code=400, detail=exc.errors)
+    active_workflow = [step for step in requested_workflow.split(",") if step]
+    archived_restart_from_step = (
+        str(snapshot.get("restart_from_step") or "")
+        if snapshot and reuse_restart_context
+        else ""
+    )
+    execution_restart_from_step = restart_from_step or archived_restart_from_step
+    if restart_from_step:
+        forced_steps = restart_steps_from(active_workflow, restart_from_step)
+    elif execution_restart_from_step:
+        forced_steps = [
+            step for step in (snapshot.get("forced_steps") or [])
+            if step in active_workflow
+        ] or restart_steps_from(active_workflow, execution_restart_from_step)
+    else:
+        forced_steps = []
     validate_workflow_availability(entry_step, requested_workflow)
     nextflow_profile = container_aware_execution_profile(execution_profile, pipeline_config)
 
@@ -171,6 +188,8 @@ def _launch_run(payload, snapshot=None, parent_id=None):
     run_dir.mkdir(parents=True, exist_ok=True)
     nextflow_work_dir = run_dir / "work"
     resume_run = nextflow_work_dir.exists() and any(nextflow_work_dir.iterdir())
+    if execution_restart_from_step and not resume_run:
+        raise HTTPException(status_code=409, detail="Restart from step requires the existing Nextflow work directory and cache")
     nextflow_work_dir.mkdir(parents=True, exist_ok=True)
 
     samplesheet_path = run_dir / "input.samplesheet.json"
@@ -191,10 +210,20 @@ def _launch_run(payload, snapshot=None, parent_id=None):
     write_json(samplesheet, samplesheet_path)
     write_json(pipeline_config, pipeline_path)
     write_manifest(rows, manifest_path)
-    run_config = snapshot["run_config"] if snapshot else build_nextflow_run_config(
-        samplesheet, pipeline_config, tools_config, entry_step=entry_step,
-        requested_workflow=requested_workflow, panel_design=panel_design,
-    )
+    if snapshot and (restart_from_step or reuse_restart_context):
+        run_config = json.loads(json.dumps(snapshot["run_config"]))
+    else:
+        run_config = build_nextflow_run_config(
+            samplesheet, pipeline_config, tools_config, entry_step=entry_step,
+            requested_workflow=requested_workflow, panel_design=panel_design,
+        )
+    if execution_restart_from_step:
+        run_config["workflow"] = forced_steps
+        run_config["steps"] = [
+            step for step in run_config.get("steps", [])
+            if step.get("step") in forced_steps
+        ]
+        run_config["restart_from_step"] = execution_restart_from_step
     write_run_config(run_config, run_config_path)
 
     tools_snapshot_path = run_dir / "input.tools.json"
@@ -227,6 +256,18 @@ def _launch_run(payload, snapshot=None, parent_id=None):
     ]
     if resume_run:
         cmd.append("-resume")
+    archived_restart_token = (
+        snapshot_option(snapshot, "restart_token", "--restart_token")
+        if reuse_restart_context
+        else ""
+    )
+    restart_token = uuid4().hex if restart_from_step else archived_restart_token
+    if execution_restart_from_step:
+        cmd.extend([
+            "--restart_from_step", execution_restart_from_step,
+            "--restart_steps", ",".join(forced_steps),
+            "--restart_token", restart_token,
+        ])
     if payload.queue.strip():
         cmd.extend(["--queue", payload.queue.strip()])
 
@@ -249,6 +290,8 @@ def _launch_run(payload, snapshot=None, parent_id=None):
         "pipeline_config": pipeline_config, "panel_design": panel_design,
         "tools_config": tools_config, "run_config": run_config,
         "command": cmd, "launch_dir": str(launch_dir), "resume": resume_run,
+        "restart_from_step": execution_restart_from_step, "forced_steps": forced_steps,
+        "restart_token": restart_token,
     })
     try:
         with nextflow_log.open("w") as log_handle:
@@ -279,6 +322,8 @@ def _launch_run(payload, snapshot=None, parent_id=None):
         "nextflow_profile": nextflow_profile,
         "queue": payload.queue.strip(),
         "resume": resume_run,
+        "restart_from_step": execution_restart_from_step,
+        "forced_steps": forced_steps,
         "pid": process.pid,
         "run_dir": str(run_dir),
         "work_dir": str(nextflow_work_dir),
@@ -737,9 +782,36 @@ def clean_requested_workflow(requested_workflow, entry_step):
     return ",".join(selected)
 
 
+def restart_steps_from(workflow, restart_from_step):
+    """Return the selected step and configured downstream steps in execution order."""
+    selected = [step for step in workflow if step in WORKFLOW_STEP_ORDER]
+    if restart_from_step not in selected:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot restart from '{}': step is not part of this analysis".format(restart_from_step),
+        )
+    start_index = WORKFLOW_STEP_ORDER.index(restart_from_step)
+    return [step for step in WORKFLOW_STEP_ORDER[start_index:] if step in selected]
+
+
+def snapshot_option(snapshot, field, command_flag):
+    """Read replay metadata, including records made before the field was stored."""
+    if not snapshot:
+        return ""
+    value = str(snapshot.get(field) or "")
+    if value:
+        return value
+    command = snapshot.get("command") or []
+    if isinstance(command, list) and command_flag in command:
+        index = command.index(command_flag) + 1
+        if index < len(command):
+            return str(command[index])
+    return ""
+
+
 def clean_requested_preprocessing_workflow(requested_workflow):
-    allowed = ["filter_bam", "merge_UMI", "add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration"]
-    implemented = {"add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration"}
+    allowed = ["filter_bam", "merge_UMI", "add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration", "bam_QC"]
+    implemented = {"add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration", "bam_QC"}
     selected = [step for step in requested_workflow if step in allowed and step in implemented]
     return selected or ["add_readgroups", "mark_pcr_dup"]
 
@@ -757,7 +829,7 @@ def clean_requested_alignment_workflow(requested_workflow):
 
 
 def clean_requested_postprocessing_workflow(requested_workflow):
-    allowed = ["vcf_norm", "vcf_filter", "vcf_to_tsv"]
+    allowed = ["vcf_norm", "vcf_filter", "multi_vcf_merge", "vcf_to_tsv"]
     selected = [step for step in requested_workflow if step in allowed]
     return selected or ["vcf_to_tsv"]
 
@@ -828,7 +900,7 @@ def reconcile_variantcalling_tools_with_tools_config(pipeline, tools_config):
         tools = []
     configured = [tool for tool in tools if tool in tools_config]
     if configured:
-        variantcalling["tools"] = configured[:1]
+        variantcalling["tools"] = configured
         return
     configured_callers = [
         tool
@@ -929,13 +1001,15 @@ def normalize_supported_variantcalling(pipeline):
     tools = variantcalling.get("tools", [])
     if not isinstance(tools, list):
         tools = []
-    gatk_tools = [tool for tool in tools if str(tool).upper().startswith("GATK")]
-    deepvariant_tools = [tool for tool in tools if str(tool).upper().startswith("DEEPVARIANT")]
-    freebayes_tools = [tool for tool in tools if str(tool).upper().startswith("FREEBAYES")]
-    supported_tools = gatk_tools or deepvariant_tools or freebayes_tools
+    supported_tools = [
+        tool
+        for tool in tools
+        if str(tool).upper().startswith("GATK")
+        or str(tool).upper().startswith("DEEPVARIANT")
+        or str(tool).upper().startswith("FREEBAYES")
+    ]
     if supported_tools:
-        selected = supported_tools[0]
-        variantcalling["tools"] = [selected]
+        variantcalling["tools"] = supported_tools
         if not variantcalling.get("ram"):
             variantcalling["ram"] = "8g"
         if not variantcalling.get("threads"):
@@ -951,8 +1025,8 @@ def normalize_supported_workflows(pipeline):
     supported_operations = {
         "prealignment": {"trim_adapters", "fastq_QC"},
         "alignment": {"fastq_alignment", "sam_to_bam", "sortSam", "sort_bam", "index_bam", "bam_QC"},
-        "preprocessing": {"add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration"},
-        "postprocessing": {"vcf_norm", "vcf_filter", "vcf_to_tsv"},
+        "preprocessing": {"add_readgroups", "mark_pcr_dup", "indel_realignment", "BQ_recalibration", "bam_QC"},
+        "postprocessing": {"vcf_norm", "vcf_filter", "multi_vcf_merge", "vcf_to_tsv"},
         "annotation": {"vep_annotation", "ann_vcf_to_tsv"},
     }
     for step, allowed in supported_operations.items():
@@ -1326,6 +1400,10 @@ def real_alignment_pipeline(
             "tool": "GATK v.3.7",
             "GATK v.3.7": {"args": [], "dbsnp": "dbsnp", "mills": "mills"},
         },
+        "bam_QC": {
+            "tool": "FASTQC v.0.11.8",
+            "FASTQC v.0.11.8": {"args": []},
+        },
     }
     if include_variantcalling:
         pipeline["workflow"].append("variantcalling")
@@ -1351,6 +1429,10 @@ def real_alignment_pipeline(
             "ram": "2g",
             "vcf_norm": {"tool": "BCFTOOLS", "BCFTOOLS": {"args": []}},
             "vcf_filter": {"tool": "", "GATK v.4.1": {"args": []}},
+            "multi_vcf_merge": {
+                "tool": "merge_consensus_vcfs.py",
+                "merge_consensus_vcfs.py": {"args": ["--min-pass-callers", "2"]},
+            },
             "vcf_to_tsv": {"tool": "", "args": {"tags_file": "", "format_tags": "", "info_tags": ""}},
         }
     if include_annotation:
@@ -1423,6 +1505,7 @@ class HistoryReplayRequest(BaseModel):
     mode: str = "rerun"
     run_id: str = ""
     workdir: str = ""
+    restart_from_step: str = ""
 
 
 def history_record(identifier):
@@ -1465,12 +1548,13 @@ def delete_analysis_history(identifier: str):
 @router.post("/history/{identifier}/replay")
 def replay_analysis(identifier: str, payload: HistoryReplayRequest):
     record = history_record(identifier)
-    if payload.mode not in ("resume", "rerun"):
-        raise HTTPException(status_code=400, detail="Mode must be resume or rerun")
+    if payload.mode not in ("resume", "rerun", "restart"):
+        raise HTTPException(status_code=400, detail="Mode must be resume, rerun, or restart")
     request = AnalysisRunRequest(**record["request"])
     request.set_workdir_default = False
     original_dir = Path(record["run_dir"])
-    if payload.mode == "resume":
+    restart_from_step = ""
+    if payload.mode in ("resume", "restart"):
         work = original_dir / "work"
         launch = Path(record["launch_dir"])
         if not work.is_dir() or not any(work.iterdir()) or not (launch / ".nextflow" / "cache").is_dir():
@@ -1480,13 +1564,24 @@ def replay_analysis(identifier: str, payload: HistoryReplayRequest):
             raise HTTPException(status_code=409, detail="Resume the most recent attempt for this working directory")
         request.workdir = str(original_dir.parent)
         request.run_id = original_dir.name
+        if payload.mode == "restart":
+            restart_from_step = payload.restart_from_step.strip()
+            if not restart_from_step:
+                raise HTTPException(status_code=400, detail="Select the step to restart")
+            restart_steps_from(record.get("workflow", []), restart_from_step)
     else:
         request.workdir = payload.workdir.strip() or request.workdir
         request.run_id = payload.run_id.strip() or record["run_id"] + "_rerun_" + uuid4().hex[:8]
         destination = (Path(request.workdir).expanduser() / clean_run_id(request.run_id)).resolve()
         if destination.exists():
             raise HTTPException(status_code=409, detail="Choose a new run ID: destination already exists")
-    return launch_run(request, snapshot=record, parent_id=identifier)
+    return launch_run(
+        request,
+        snapshot=record,
+        parent_id=identifier,
+        restart_from_step=restart_from_step,
+        reuse_restart_context=payload.mode == "resume",
+    )
 
 
 def capture_history_status(identifier, exit_code=None):

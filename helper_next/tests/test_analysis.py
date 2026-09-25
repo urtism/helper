@@ -8,7 +8,9 @@ from helper_next.api.analysis import (
     AnalysisRunRequest as FakeRunRequest,
     clean_requested_prealignment_workflow,
     clean_requested_alignment_workflow,
+    clean_requested_preprocessing_workflow,
     container_aware_execution_profile,
+    launch_run,
     nextflow_environment,
     normalize_pipeline_for_nextflow,
     real_run,
@@ -63,6 +65,44 @@ def test_clean_requested_alignment_workflow_includes_bam_qc():
         "fastq_alignment",
         "bam_QC",
     ]
+
+
+def test_clean_requested_preprocessing_workflow_includes_final_bam_qc():
+    assert clean_requested_preprocessing_workflow(["mark_pcr_dup", "bam_QC"]) == [
+        "mark_pcr_dup",
+        "bam_QC",
+    ]
+
+
+def test_analysis_ui_scopes_preprocessing_bam_qc_separately_from_alignment():
+    source = (Path(__file__).resolve().parents[1] / "src/helper_next/web/static/sections/analysis.js").read_text()
+
+    assert 'id: "preprocessing_bam_QC", operation: "bam_QC"' in source
+    assert ".map((child) => child.operation || child.id);" in source
+
+
+def test_analysis_ui_exposes_multi_vcf_merge_in_postprocessing():
+    source = (Path(__file__).resolve().parents[1] / "src/helper_next/web/static/sections/analysis.js").read_text()
+
+    assert 'id: "multi_vcf_merge", label: "multi_vcf_merge"' in source
+
+
+def test_analysis_history_reuses_single_analysis_module_and_same_run_for_modify():
+    static = Path(__file__).resolve().parents[1] / "src/helper_next/web/static"
+    app = (static / "app.js").read_text()
+    history_source = (static / "sections/analysis_history.js").read_text()
+
+    assert 'analysis.js?v=20260922-1' in app
+    assert 'analysis.js?v=20260922-1' in history_source
+    assert "runId.value || record.run_id" in history_source
+
+
+def test_analysis_history_exposes_restart_from_step_control():
+    source = (Path(__file__).resolve().parents[1] / "src/helper_next/web/static/sections/analysis_history.js").read_text()
+
+    assert 'element("button", "Restart from step"' in source
+    assert 'restart_from_step: mode === "restart" ? restartStep.value : ""' in source
+    assert 'restart.onclick = () => replay("restart")' in source
 
 
 def test_resolve_pipeline_config_applies_selected_prealignment_substeps(tmp_path):
@@ -294,7 +334,7 @@ def test_normalize_pipeline_maps_legacy_variant_annotation_to_annotation():
     assert normalized["annotation"]["vep_annotation"]["VEP v.95"]["args"]["args"] == ["--cache"]
 
 
-def test_normalize_pipeline_keeps_only_supported_gatk_variantcaller():
+def test_normalize_pipeline_keeps_all_supported_variantcallers_in_pipeline_order():
     pipeline = {
         "workflow": ["variantcalling"],
         "variantcalling": {
@@ -309,7 +349,7 @@ def test_normalize_pipeline_keeps_only_supported_gatk_variantcaller():
     normalized = normalize_pipeline_for_nextflow(pipeline)
 
     assert normalized["workflow"] == ["variantcalling"]
-    assert normalized["variantcalling"]["tools"] == ["GATK v.4.3"]
+    assert normalized["variantcalling"]["tools"] == ["FREEBAYES v.1.1", "GATK v.4.3"]
 
 
 def test_normalize_pipeline_keeps_supported_deepvariant_caller():
@@ -327,7 +367,7 @@ def test_normalize_pipeline_keeps_supported_deepvariant_caller():
     normalized = normalize_pipeline_for_nextflow(pipeline)
 
     assert normalized["workflow"] == ["variantcalling"]
-    assert normalized["variantcalling"]["tools"] == ["DeepVariant v.1.10.0"]
+    assert normalized["variantcalling"]["tools"] == ["FREEBAYES v.1.1", "DeepVariant v.1.10.0"]
 
 
 def test_normalize_pipeline_keeps_supported_freebayes_caller():
@@ -731,7 +771,7 @@ def test_real_analysis_default_prealignment_run_uses_full_stable_slice(monkeypat
     assert popen_calls[0]["kwargs"]["cwd"] == str(tmp_path / "default_slice")
 
 
-def test_real_analysis_resumes_existing_run_workdir(monkeypatch, tmp_path):
+def test_real_analysis_can_force_restart_from_completed_step(monkeypatch, tmp_path):
     samplesheet = """
     {
       "sample_list": ["S1"],
@@ -774,17 +814,25 @@ def test_real_analysis_resumes_existing_run_workdir(monkeypatch, tmp_path):
 
     monkeypatch.setattr("helper_next.api.analysis.subprocess.Popen", fake_popen)
 
-    result = real_run(
+    result = launch_run(
         FakeRunRequest(
             run_id="resume_me",
             samplesheet_content=samplesheet,
             workdir=str(tmp_path),
-        )
+        ),
+        restart_from_step="preprocessing",
     )
 
     assert result["resume"] is True
-    assert "-resume" in result["command"].split()
+    command = result["command"].split()
+    assert "-resume" in command
     assert "-resume" in popen_calls[0]["args"][0]
+    assert command[command.index("--restart_from_step") + 1] == "preprocessing"
+    assert command[command.index("--restart_steps") + 1] == "preprocessing"
+    assert command[command.index("--restart_token") + 1]
+    assert result["restart_from_step"] == "preprocessing"
+    assert result["forced_steps"] == ["preprocessing"]
+    assert json.loads(Path(result["run_config"]).read_text())["workflow"] == ["preprocessing"]
     assert popen_calls[0]["kwargs"]["cwd"] == str(run_dir)
     assert "CWD={}".format(run_dir) in Path(result["command_file"]).read_text()
     assert "-resume" in Path(result["command_file"]).read_text().split()

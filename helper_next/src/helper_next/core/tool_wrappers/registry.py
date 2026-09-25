@@ -12,6 +12,7 @@ from helper_next.core.tool_wrappers.wrappers import (
     GatkVariantFiltrationWrapper,
     PicardAddOrReplaceReadGroupsWrapper,
     PicardMarkDuplicatesWrapper,
+    QualimapBamQcWrapper,
     SamtoolsWrapper,
     SurecallTrimmingWrapper,
     VepAnnotationWrapper,
@@ -31,6 +32,8 @@ def wrapper_for(operation_name, tool_name):
         return BwaAlignmentWrapper
     if operation == "fastq_alignment" and tool_upper.startswith("BOWTIE2"):
         return Bowtie2AlignmentWrapper
+    if operation == "bam_QC" and tool_upper.startswith("QUALIMAP"):
+        return QualimapBamQcWrapper
     if tool_upper.startswith("SAMTOOLS"):
         return SamtoolsWrapper
     if operation == "add_readgroups" and tool_upper.startswith("PICARD"):

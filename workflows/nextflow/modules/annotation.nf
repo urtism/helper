@@ -1,6 +1,29 @@
 nextflow.enable.dsl = 2
 
 
+def shellQuoteVepArg(value) {
+    def escaped = value.toString().replace("'", "'\"'\"'")
+    return "'${escaped}'"
+}
+
+
+def normalizedVepArgs(toolConfig) {
+    def rawArgs = toolConfig.args
+    if (rawArgs instanceof List && rawArgs && rawArgs.first().toString().trim() == '{') {
+        try {
+            def parsed = new groovy.json.JsonSlurper().parseText(rawArgs.collect { it.toString() }.join('\n'))
+            if (parsed instanceof Map && parsed.args instanceof List) {
+                def tokens = parsed.args.collectMany { item -> item.toString().trim().tokenize() }
+                return tokens.collect { shellQuoteVepArg(it) }.join(' ')
+            }
+        } catch (Exception ignored) {
+            // Fall through to the resolved arguments so the task reports the original configuration error.
+        }
+    }
+    return toolConfig.resolved_args ?: ((rawArgs instanceof List ? rawArgs : []).join(' '))
+}
+
+
 process ANNOTATE_VARIANTS {
     tag "${sample_name}"
     cpus { ann_threads }
@@ -25,6 +48,7 @@ process ANNOTATE_VARIANTS {
     val target_bed
     val gene_list
     val transcripts_list
+    val restart_token
 
     output:
     tuple val(sample_id), val(role), val(sample_name), path("${sample_name}.annotated.vcf"), path("${sample_name}.annotated.tsv"), emit: variants
@@ -159,6 +183,7 @@ workflow ANNOTATION {
     tools_config
     run_config
     infra_ready
+    restart_token
 
     main:
     ann_cfg = pipeline_config.annotation ?: [:]
@@ -170,10 +195,10 @@ workflow ANNOTATION {
     vep_tool_name = vep_cfg.tool ?: 'VEP v.95'
     vep_runtime_cfg = tools_config[vep_tool_name] ?: [:]
     vep_container = (vep_runtime_cfg.container instanceof Map ? vep_runtime_cfg.container.image : vep_runtime_cfg.container) ?: resolved_cfg.vep_annotation?.container?.image ?: ''
-    vep_path = vep_container ? (vep_runtime_cfg.path ?: resolved_cfg.vep_annotation?.path ?: 'vep') : (resolved_cfg.vep_annotation?.path ?: vep_runtime_cfg.path ?: '')
+    vep_path = vep_container ? (vep_runtime_cfg.container_path ?: resolved_cfg.vep_annotation?.container_path ?: 'vep') : (resolved_cfg.vep_annotation?.path ?: vep_runtime_cfg.path ?: '')
     vep_cache_dir = vep_runtime_cfg.cache_dir ?: resolved_cfg.vep_annotation?.cache_dir ?: ''
     vep_tool_cfg = vep_cfg[vep_tool_name] ?: [:]
-    vep_args = vep_tool_cfg.resolved_args ?: ((vep_tool_cfg.args instanceof List ? vep_tool_cfg.args : vep_cfg.args ?: []).join(' '))
+    vep_args = normalizedVepArgs(vep_tool_cfg ?: [args: vep_cfg.args ?: []])
     panel_design = run_config.panel_design ?: [:]
     panel_assets = resolved_cfg.panel_assets ?: panel_design.assets ?: [:]
     target_bed = panel_assets.target_bed ?: ''
@@ -186,7 +211,7 @@ workflow ANNOTATION {
 
     reference_fasta = run_config.reference_fasta ?: tools_config[pipeline_config.reference_version ?: run_config.reference_version]?.fasta ?: ''
 
-    ANNOTATE_VARIANTS(ready_variants, ann_threads, ann_ram, operations, vep_path, vep_container, vep_cache_dir, vep_args, reference_fasta, target_bed, gene_list, transcripts_list)
+    ANNOTATE_VARIANTS(ready_variants, ann_threads, ann_ram, operations, vep_path, vep_container, vep_cache_dir, vep_args, reference_fasta, target_bed, gene_list, transcripts_list, restart_token)
     status_files = ANNOTATE_VARIANTS.out.statuses.map { sample_id, role, sample_name, log_file, status_file -> status_file }.collect()
     ANNOTATION_STEP_LOG(status_files)
     ANNOTATION_ASSERT_SUCCESS(status_files, ANNOTATION_STEP_LOG.out.log)
