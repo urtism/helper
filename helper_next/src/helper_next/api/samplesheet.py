@@ -158,8 +158,12 @@ def save_picker_selection(picker_id: str, payload: PickerSelectionRequest):
 
 @router.get("/picker-selection/{picker_id}")
 def get_picker_selection(picker_id: str):
-    files = PICKER_SELECTIONS.pop(picker_id, [])
+    files = consume_picker_selection(picker_id)
     return {"files": files}
+
+
+def consume_picker_selection(picker_id):
+    return PICKER_SELECTIONS.pop(picker_id, [])
 
 
 def other_locations():

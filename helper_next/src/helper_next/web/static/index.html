@@ -24,6 +24,7 @@
           <button class="nav-item" type="button" data-section="panels">Gene Panels</button>
           <button class="nav-item" type="button" data-section="analysis">Analysis</button>
           <button class="nav-item" type="button" data-section="analysis-history">Analysis History</button>
+          <button class="nav-item" type="button" data-section="variants">Variants</button>
         </nav>
 
         <div class="repo-status">
@@ -440,9 +441,13 @@
           </div>
           <div id="history-detail" class="collapsible-panel" hidden></div>
         </section>
+        <section class="module" id="variants" aria-labelledby="section-title">
+          <variant-browser api-base="/api/variants"></variant-browser>
+        </section>
       </main>
     </div>
 
-    <script type="module" src="/static/app.js?v=20260922-1"></script>
+    <script type="module" src="/variant-module/variant-browser.js?v=20261006-37"></script>
+    <script type="module" src="/static/app.js?v=20260925-1"></script>
   </body>
 </html>

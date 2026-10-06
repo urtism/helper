@@ -7,7 +7,10 @@ setup(
     description="Local web interface prototype for Helper",
     packages=find_packages("src"),
     package_dir={"": "src"},
-    package_data={"helper_next": ["web/static/*"]},
+    package_data={
+        "helper_next": ["web/static/*"],
+        "helper_variants": ["web/static/*"],
+    },
     install_requires=[
         "fastapi>=0.83,<0.84",
         "uvicorn>=0.16,<0.17",

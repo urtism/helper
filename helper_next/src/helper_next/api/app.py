@@ -8,8 +8,10 @@ from helper_next.api.analysis import router as analysis_router
 from helper_next.api.pipelines import router as pipelines_router
 from helper_next.api.samplesheet import router as samplesheet_router
 from helper_next.api.tools import router as tools_router
+from helper_next.api.variants import router as variants_router
 from helper_next.core.panels import load_panel_registry
 from helper_next.core.project import get_project_paths, list_named_files
+import helper_variants
 
 
 def create_app():
@@ -18,9 +20,12 @@ def create_app():
     app.include_router(analysis_router)
     app.include_router(pipelines_router)
     app.include_router(tools_router)
+    app.include_router(variants_router)
 
     static_dir = Path(__file__).resolve().parents[1] / "web" / "static"
+    variant_static_dir = Path(helper_variants.__file__).resolve().parent / "web" / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.mount("/variant-module", StaticFiles(directory=str(variant_static_dir)), name="variant-module")
 
     @app.get("/")
     def index():

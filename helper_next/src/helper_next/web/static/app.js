@@ -12,6 +12,7 @@ const sectionTitles = {
   panels: "Add or Edit Gene Panel Info",
   analysis: "Start Analysis",
   "analysis-history": "Analysis History",
+  variants: "Variant Browser",
 };
 
 const sidebarStorageKey = "helper-next.sidebar-collapsed";
@@ -33,7 +34,8 @@ sidebarToggle.addEventListener("click", () => {
   setSidebarCollapsed(!appShell.classList.contains("sidebar-collapsed"));
 });
 
-function showSection(sectionId) {
+function showSection(sectionId, updateHash = true) {
+  if (!sectionTitles[sectionId]) sectionId = "samplesheet";
   document.querySelectorAll(".module").forEach((section) => {
     section.classList.toggle("active", section.id === sectionId);
   });
@@ -43,11 +45,21 @@ function showSection(sectionId) {
   });
 
   document.querySelector("#section-title").textContent = sectionTitles[sectionId];
+  if (updateHash && !window.location.hash.startsWith(`#${sectionId}`)) {
+    window.history.replaceState(null, "", `#${sectionId}`);
+  }
 }
 
 document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => showSection(button.dataset.section));
 });
+
+function sectionFromHash() {
+  return window.location.hash.slice(1).split("?")[0] || "samplesheet";
+}
+
+window.addEventListener("hashchange", () => showSection(sectionFromHash(), false));
+showSection(sectionFromHash(), false);
 
 initSampleSheet();
 initAnalysis();
