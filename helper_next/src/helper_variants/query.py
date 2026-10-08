@@ -1,14 +1,31 @@
 """Read-only, keyset-paginated queries for a run-local variant database."""
 import base64
 import binascii
+from collections import OrderedDict
 import json
+import os
 import re
+import threading
 
-from helper_variants import store
+from helper_prioritization import RULESET_VERSION, score_variant
+from helper_variants import gene_phenotype, gnomad_frequency, store
 
 
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
+DEFAULT_FILTER_STATUSES = (
+    "LOW_DEPTH", "LOW_VAF", "LOW_ALTERNATE_DEPTH", "LOW_QUAL", "LOW_MAPQ",
+    "LOW_CALLER_SUPP", "LOW_GQ", "LOW_QD", "STRAND_BIAS", "READ_POSITION_BIAS",
+    "GT_CONFLICT", "LOW_CALLER_SUPPORT",
+)
+FILTER_STATUS_ALIASES = {
+    "LOW_DEPTH": ("LOW_DEPTH", "LOW_DP"),
+    "LOW_ALTERNATE_DEPTH": ("LOW_ALTERNATE_DEPTH", "LOW_AD"),
+    "LOW_QUAL": ("LOW_QUAL", "LOWQUAL"),
+}
+_PRIORITY_ORDER_CACHE = OrderedDict()
+_PRIORITY_ORDER_CACHE_LOCK = threading.Lock()
+_PRIORITY_ORDER_CACHE_SIZE = 4
 
 
 class VariantQueryError(ValueError):
@@ -78,11 +95,15 @@ def list_samples(database):
 
 
 def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gene="",
+                  variant_id=None,
                   genes="", max_af=None, population_frequency="MAX_AF",
                   include_missing_af=True, consequences="",
-                  clinical_significances="", inheritance_candidates="",
+                  clinical_significances="", inheritance_candidates="", family_evidence="",
+                  family_pattern="",
+                  priority_classes="", min_priority=None, max_priority=None,
                   filter_mode="all", filter_statuses="", zygosities="", min_depth=None,
-                  min_vaf=None, min_quality=None, possible_compound=False):
+                  min_vaf=None, min_quality=None, possible_compound=False,
+                  sort_by="priority", sort_direction=""):
     limit = _page_size(limit)
     gene = str(gene or "").strip()
     if len(gene) > 100:
@@ -91,12 +112,51 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
         gene=gene, genes=genes, max_af=max_af, population_frequency=population_frequency,
         include_missing_af=include_missing_af,
         consequences=consequences, clinical_significances=clinical_significances,
-        inheritance_candidates=inheritance_candidates, filter_mode=filter_mode,
+        inheritance_candidates=inheritance_candidates, family_evidence=family_evidence,
+        family_pattern=family_pattern,
+        priority_classes=priority_classes, min_priority=min_priority,
+        max_priority=max_priority,
+        filter_mode=filter_mode,
         filter_statuses=filter_statuses, zygosities=zygosities, min_depth=min_depth,
         min_vaf=min_vaf, min_quality=min_quality, possible_compound=possible_compound,
     )
-    signature = json.dumps(filters, sort_keys=True, separators=(",", ":"))
-    after_variant_id = _decode_cursor(cursor, int(sample_id), signature) if cursor else 0
+    sort_by, sort_direction = _variant_sort(sort_by, sort_direction)
+    if variant_id not in (None, ""):
+        try:
+            variant_id = int(variant_id)
+        except (TypeError, ValueError):
+            raise VariantQueryError("variant id must be an integer")
+        if variant_id < 1:
+            raise VariantQueryError("variant id must be positive")
+    else:
+        variant_id = None
+    signature = json.dumps(
+        {
+            "filters": filters, "variant_id": variant_id,
+            "sort_by": sort_by, "sort_direction": sort_direction,
+        },
+        sort_keys=True, separators=(",", ":"),
+    )
+    if sort_by:
+        page_offset = _decode_offset_cursor(cursor, int(sample_id), signature) if cursor else 0
+        after_variant_id = 0
+    else:
+        page_offset = 0
+        after_variant_id = _decode_cursor(cursor, int(sample_id), signature) if cursor else 0
+    computed_priority = sort_by == "priority" or bool(
+        filters["priority_classes"] or filters["min_priority"] is not None
+        or filters["max_priority"] is not None
+    )
+    priority_cache_key = _priority_order_cache_key(
+        database, sample_id, signature
+    ) if computed_priority else None
+    cached_priority_ids = (
+        _priority_order_cache_get(priority_cache_key) if priority_cache_key else None
+    )
+    cached_page_ids = (
+        cached_priority_ids[page_offset:page_offset + limit]
+        if cached_priority_ids is not None else None
+    )
 
     annotation_clauses = []
     annotation_parameters = []
@@ -141,6 +201,9 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             "AND trim(COALESCE(clinical_any.clinical_significance, '')) NOT IN ('', '.')))"
         )
     result_parameters = []
+    if variant_id is not None:
+        result_clauses.append("v.id = ?")
+        result_parameters.append(variant_id)
     if filters["max_af"] is not None:
         if filters["population_frequency"] == "MAX_AF":
             expression = "an.population_af"
@@ -155,6 +218,12 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             result_clauses.append("({} <= ?)".format(expression))
             result_parameters.extend(expression_parameters)
         result_parameters.append(filters["max_af"])
+    if cached_page_ids is not None:
+        if cached_page_ids:
+            result_clauses.append("v.id IN (SELECT value FROM json_each(?))")
+            result_parameters.append(json.dumps(cached_page_ids))
+        else:
+            result_clauses.append("0")
     inheritance_clauses = []
     for candidate in filters["inheritance_candidates"]:
         if candidate == "compound":
@@ -185,8 +254,38 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             chromosome = "X" if candidate == "x_linked" else "Y"
             inheritance_clauses.append("replace(upper(v.chromosome), 'CHR', '') = ?")
             result_parameters.append(chromosome)
+        elif candidate == "mitochondrial":
+            inheritance_clauses.append(
+                "replace(upper(v.chromosome), 'CHR', '') IN ('M', 'MT')"
+            )
     if inheritance_clauses:
         result_clauses.append("(" + " OR ".join(inheritance_clauses) + ")")
+    if filters["family_evidence"]:
+        father_id, mother_id = _family_parent_ids(database, sample_id)
+        family_clauses = []
+        family_parameters = []
+        if father_id is not None and mother_id is not None:
+            for evidence in filters["family_evidence"]:
+                clause, parameters = _family_evidence_clause(
+                    evidence, int(sample_id), father_id, mother_id
+                )
+                family_clauses.append(clause)
+                family_parameters.extend(parameters)
+        result_clauses.append(
+            "(" + " OR ".join(family_clauses) + ")" if family_clauses else "0"
+        )
+        result_parameters.extend(family_parameters)
+    if filters["family_pattern"]:
+        available_members = _family_member_ids(database, sample_id)
+        requested_members = {member_id for member_id, _ in filters["family_pattern"]}
+        if not requested_members.issubset(available_members):
+            raise VariantQueryError("family pattern contains a sample outside the current family")
+        pattern_clauses = []
+        for index, (member_id, state) in enumerate(filters["family_pattern"]):
+            carried = _family_call_exists("family_pattern_{}".format(index), "v.id")
+            pattern_clauses.append(carried if state == "present" else "NOT " + carried)
+            result_parameters.append(member_id)
+        result_clauses.append("(" + " AND ".join(pattern_clauses) + ")")
     result_filter = "".join(" AND " + clause for clause in result_clauses)
 
     call_clauses = []
@@ -198,15 +297,18 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             "ON filtered_analysis.id = filtered.analysis_id WHERE filtered.variant_id = v.id "
             "AND filtered_analysis.sample_id = a.sample_id AND " + pass_expression + ")"
         )
-    elif filters["filter_mode"] == "selected":
+    elif filters["filter_mode"] in {"selected", "exclude"}:
         status_matches = []
         for status in filters["filter_statuses"]:
-            status_matches.append(
-                "instr(',' || replace(upper(filtered.filter_status), ';', ',') || ',', ?) > 0"
-            )
-            call_parameters.append(",{},".format(status.upper()))
+            aliases = FILTER_STATUS_ALIASES.get(status.upper(), (status,))
+            for alias in aliases:
+                status_matches.append(
+                    "instr(',' || replace(upper(filtered.filter_status), ';', ',') || ',', ?) > 0"
+                )
+                call_parameters.append(",{},".format(alias.upper()))
+        existence = "EXISTS" if filters["filter_mode"] == "selected" else "NOT EXISTS"
         call_clauses.append(
-            "EXISTS (SELECT 1 FROM calls filtered JOIN analyses filtered_analysis "
+            existence + " (SELECT 1 FROM calls filtered JOIN analyses filtered_analysis "
             "ON filtered_analysis.id = filtered.analysis_id WHERE filtered.variant_id = v.id "
             "AND filtered_analysis.sample_id = a.sample_id AND (" + " OR ".join(status_matches) + "))"
         )
@@ -229,14 +331,23 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             having_clauses.append("MAX({}) >= ?".format(column))
             having_parameters.append(filters[key])
     having_filter = " HAVING " + " AND ".join(having_clauses) if having_clauses else ""
-    parameters = (annotation_parameters + [int(sample_id), after_variant_id] + result_parameters
-                  + call_parameters + having_parameters + [limit + 1])
+    variant_cursor_filter = "" if sort_by or computed_priority else " AND v.id > ?"
+    order_by = _variant_order(sort_by, sort_direction)
+    pagination = "" if computed_priority else " LIMIT ? OFFSET ?" if sort_by else " LIMIT ?"
+    cursor_parameters = [] if sort_by or computed_priority else [after_variant_id]
+    pagination_parameters = [] if computed_priority else (
+        [limit + 1, page_offset] if sort_by else [limit + 1]
+    )
+    parameters = (annotation_parameters + [int(sample_id)] + cursor_parameters
+                  + result_parameters + call_parameters + having_parameters
+                  + pagination_parameters)
     with store.connect(database) as db:
         _require_sample(db, sample_id)
         rows = db.execute(
             "SELECT v.id AS variant_id, v.reference_build, v.chromosome, v.position, v.reference, "
             "v.alternate, v.variant_type, GROUP_CONCAT(DISTINCT NULLIF(c.caller, '')) AS callers, "
             "GROUP_CONCAT(DISTINCT NULLIF(c.genotype, '')) AS genotypes, MAX(c.depth) AS depth, "
+            "GROUP_CONCAT(DISTINCT NULLIF(c.zygosity, '')) AS zygosities, "
             "MAX(c.alternate_depth) AS alternate_depth, MAX(c.allele_fraction) AS allele_fraction, "
             "MAX(c.genotype_quality) AS genotype_quality, MAX(c.quality) AS quality, "
             "GROUP_CONCAT(DISTINCT NULLIF(c.filter_status, '')) AS filter_status, "
@@ -251,15 +362,62 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             "  CASE selected.impact WHEN 'HIGH' THEN 0 WHEN 'MODERATE' THEN 1 "
             "       WHEN 'LOW' THEN 2 WHEN 'MODIFIER' THEN 3 ELSE 4 END, "
             "  selected.release_id DESC, selected.id LIMIT 1"
-            ") WHERE a.sample_id = ? AND v.id > ? " + result_filter + call_filter +
-            " GROUP BY v.id" + having_filter + " ORDER BY v.id LIMIT ?",
+            ") WHERE a.sample_id = ?" + variant_cursor_filter + " " + result_filter + call_filter +
+            " GROUP BY v.id" + having_filter + " ORDER BY " + order_by + pagination,
             parameters,
         ).fetchall()
-        has_more = len(rows) > limit
-        page = rows[:limit]
-        items = [_compact_variant(row) for row in page]
-        next_cursor = _encode_cursor(int(sample_id), page[-1]["variant_id"], signature) if has_more else None
-        return {"items": items, "next_cursor": next_cursor, "limit": limit}
+        score_rows = rows if computed_priority else rows[:limit]
+        gene_context = gene_phenotype.priority_contexts(row["gene"] for row in score_rows)
+        frequency_contexts = gnomad_frequency.cached_contexts((
+            (
+                row["reference_build"], row["chromosome"], row["position"],
+                row["reference"], row["alternate"],
+            )
+            for row in score_rows
+        ))
+        compound_genes = _possible_compound_genes(db, sample_id)
+        parental_evidence = _parental_evidence(
+            database, db, sample_id, [row["variant_id"] for row in score_rows]
+        )
+        scored_items = [
+            _compact_variant(
+                row,
+                gene_context.get(str(row["gene"] or "").strip().upper(), {}),
+                str(row["gene"] or "").strip().upper() in compound_genes
+                and _compound_eligible(row),
+                parental_evidence.get(row["variant_id"], {}),
+                frequency_contexts[index],
+            )
+            for index, row in enumerate(score_rows)
+        ]
+        if cached_priority_ids is not None:
+            position = {variant_id: index for index, variant_id in enumerate(cached_page_ids)}
+            items = sorted(scored_items, key=lambda item: position[item["variant_id"]])
+            has_more = len(cached_priority_ids) > page_offset + limit
+        elif computed_priority:
+            scored_items = _filter_priority(scored_items, filters)
+            if sort_by == "priority":
+                scored_items = _sort_priority(scored_items, sort_direction)
+            _priority_order_cache_put(
+                priority_cache_key, [item["variant_id"] for item in scored_items]
+            )
+            has_more = len(scored_items) > page_offset + limit
+            items = scored_items[page_offset:page_offset + limit]
+        else:
+            has_more = len(rows) > limit
+            items = scored_items
+        if has_more and (sort_by or computed_priority):
+            next_cursor = _encode_offset_cursor(
+                int(sample_id), page_offset + limit, signature
+            )
+        elif has_more:
+            next_cursor = _encode_cursor(int(sample_id), items[-1]["variant_id"], signature)
+        else:
+            next_cursor = None
+        return {
+            "items": items, "next_cursor": next_cursor, "limit": limit,
+            "sort_by": sort_by, "sort_direction": sort_direction,
+        }
 
 
 def variant_filter_options(database, sample_id):
@@ -291,12 +449,7 @@ def variant_filter_options(database, sample_id):
             (int(sample_id),),
         ):
             population_frequencies.add(row[0])
-        statuses = set()
-        for row in db.execute(
-            "SELECT DISTINCT c.filter_status FROM calls c JOIN analyses a ON a.id = c.analysis_id "
-            "WHERE a.sample_id = ? AND c.filter_status NOT IN ('', '.', 'PASS')", (int(sample_id),),
-        ):
-            statuses.update(part for part in re.split(r"[;,]", row[0]) if part)
+        statuses = set(DEFAULT_FILTER_STATUSES)
         zygosities = [row[0] for row in db.execute(
             "SELECT DISTINCT lower(c.zygosity) FROM calls c JOIN analyses a ON a.id = c.analysis_id "
             "WHERE a.sample_id = ? AND c.zygosity != '' ORDER BY c.zygosity", (int(sample_id),),
@@ -316,7 +469,14 @@ def variant_filter_options(database, sample_id):
                     population_frequencies,
                     key=lambda item: (0 if item == "MAX_AF" else 1 if item.upper() == "AF" else 2, item.casefold()),
                 ),
-                "filter_statuses": sorted(statuses, key=str.casefold), "zygosities": zygosities}
+                "filter_statuses": sorted(
+                    statuses,
+                    key=lambda item: (
+                        DEFAULT_FILTER_STATUSES.index(item)
+                        if item in DEFAULT_FILTER_STATUSES else len(DEFAULT_FILTER_STATUSES),
+                        item.casefold(),
+                    ),
+                ), "zygosities": zygosities}
 
 
 def variant_detail(database, sample_id, variant_id):
@@ -372,7 +532,7 @@ def variant_carriers(database, reference_build, chromosome, position, reference,
     """Return samples carrying one exact normalized allele in a run store."""
     with store.connect(database) as db:
         rows = db.execute(
-            "SELECT s.id AS sample_id, s.sample_key, s.display_name, s.specimen_type, "
+            "SELECT v.id AS variant_id, s.id AS sample_id, s.sample_key, s.display_name, s.specimen_type, "
             "s.metadata_json, GROUP_CONCAT(DISTINCT NULLIF(a.role, '')) AS roles, "
             "GROUP_CONCAT(DISTINCT NULLIF(c.genotype, '')) AS genotypes, "
             "MAX(c.depth) AS depth, MAX(c.allele_fraction) AS allele_fraction "
@@ -387,6 +547,7 @@ def variant_carriers(database, reference_build, chromosome, position, reference,
             ),
         ).fetchall()
         return [{
+            "variant_id": row["variant_id"],
             "sample_id": row["sample_id"], "sample_key": row["sample_key"],
             "display_name": row["display_name"], "specimen_type": row["specimen_type"],
             "metadata": _json_value(row["metadata_json"]), "roles": _csv(row["roles"]),
@@ -395,14 +556,25 @@ def variant_carriers(database, reference_build, chromosome, position, reference,
         } for row in rows]
 
 
-def _compact_variant(row):
+def _compact_variant(row, gene_context=None, compound_candidate=False, family_context=None,
+                     population_context=None):
     metadata = _json_value(row["metadata_json"])
-    return {
+    fields = (metadata or {}).get("fields") or {}
+    zygosities = _csv(row["zygosities"])
+    review_values = _metadata_values(fields, "CLNREVSTAT", "ClinVar_CLNREVSTAT")
+    conflict_values = _metadata_values(fields, "CLNSIGCONF", "ClinVar_CLNSIGCONF")
+    population_context = dict(population_context or {})
+    population_values = [row["population_af"], population_context.get("population_af")]
+    population_af = max(
+        (float(value) for value in population_values if value is not None), default=None
+    )
+    item = {
         "variant_id": row["variant_id"], "reference_build": row["reference_build"],
         "chromosome": row["chromosome"], "position": row["position"],
         "reference": row["reference"], "alternate": row["alternate"],
         "variant_type": row["variant_type"], "callers": _csv(row["callers"]),
-        "genotypes": _csv(row["genotypes"]), "depth": row["depth"],
+        "genotypes": _csv(row["genotypes"]), "zygosities": zygosities,
+        "depth": row["depth"],
         "alternate_depth": row["alternate_depth"], "allele_fraction": row["allele_fraction"],
         "genotype_quality": row["genotype_quality"], "quality": row["quality"],
         "filter_status": _csv(row["filter_status"]), "gene": row["gene"] or "",
@@ -410,8 +582,119 @@ def _compact_variant(row):
         "exon_intron": _annotation_exon_intron(metadata, row["consequence"]),
         "impact": row["impact"] or "", "hgvsc": row["hgvsc"] or "",
         "hgvsp": row["hgvsp"] or "", "clinical_significance": row["clinical_significance"] or "",
-        "population_af": row["population_af"], "canonical": bool(row["canonical"] or 0),
+        "population_af": population_af, "canonical": bool(row["canonical"] or 0),
+        "population_frequency_status": population_context.get("population_frequency_status", ""),
+        "population_frequency_source": population_context.get("population_frequency_source", ""),
     }
+    context = dict(gene_context or {})
+    family_context = dict(family_context or {})
+    item["priority"] = score_variant({
+        "chromosome": row["chromosome"],
+        "population_af": population_af,
+        "consequence": row["consequence"] or "",
+        "clinical_significance": row["clinical_significance"] or "",
+        "clinvar_stars": max(
+            [_clinvar_review_stars(review) for review in review_values] or [0]
+        ),
+        "clinvar_conflict": bool(conflict_values) or any(
+            _clinvar_has_conflict_text(value)
+            for value in review_values + [row["clinical_significance"] or ""]
+        ),
+        "clinvar_condition_match": "unknown",
+        "prediction_fields": fields,
+        "zygosities": zygosities,
+        "compound_status": "phase_unknown" if compound_candidate else "",
+        "de_novo_status": family_context.get("de_novo_status", ""),
+        "filter_status": item["filter_status"],
+        "depth": row["depth"],
+        "quality": row["quality"],
+        **context,
+        **population_context,
+    })
+    return item
+
+
+def _metadata_values(fields, *names):
+    wanted = {_clinvar_field_key(name) for name in names}
+    return [
+        value for key, raw in (fields or {}).items()
+        if _clinvar_field_key(key) in wanted
+        for value in _clinvar_display_values([raw])
+    ]
+
+
+def _possible_compound_genes(db, sample_id):
+    rows = db.execute(
+        "SELECT upper(an.gene) AS gene FROM calls c "
+        "JOIN analyses a ON a.id = c.analysis_id "
+        "JOIN annotations an ON an.variant_id = c.variant_id "
+        "WHERE a.sample_id = ? AND lower(c.zygosity) IN ('het', 'heterozygous') "
+        "AND an.gene != '' AND (an.population_af IS NULL OR an.population_af <= 0.01) "
+        "AND lower(an.consequence) NOT IN ('', 'intergenic_variant', 'intron_variant', "
+        "'upstream_gene_variant', 'downstream_gene_variant', 'synonymous_variant') "
+        "GROUP BY upper(an.gene) "
+        "HAVING COUNT(DISTINCT c.variant_id) >= 2",
+        (int(sample_id),),
+    ).fetchall()
+    return {row["gene"] for row in rows if row["gene"]}
+
+
+def _compound_eligible(row):
+    af = row["population_af"]
+    if af is not None and float(af) > 0.01:
+        return False
+    excluded = {
+        "", "intergenic_variant", "intron_variant", "upstream_gene_variant",
+        "downstream_gene_variant", "synonymous_variant",
+    }
+    consequences = {
+        value.strip().casefold() for value in re.split(r"[&,|]", row["consequence"] or "")
+    }
+    return bool(consequences - excluded)
+
+
+def _parental_evidence(database, db, sample_id, variant_ids):
+    if not variant_ids:
+        return {}
+    father_id, mother_id = _family_parent_ids(database, sample_id)
+    if father_id is None or mother_id is None:
+        return {}
+    rows = []
+    for offset in range(0, len(variant_ids), 500):
+        batch = variant_ids[offset:offset + 500]
+        placeholders = ",".join("?" for _ in batch)
+        rows.extend(db.execute(
+            "SELECT c.variant_id, a.sample_id, c.genotype, c.zygosity FROM calls c "
+            "JOIN analyses a ON a.id = c.analysis_id "
+            "WHERE a.sample_id IN (?, ?) AND c.variant_id IN ({})".format(placeholders),
+            [father_id, mother_id] + list(batch),
+        ).fetchall())
+    carried = {}
+    for row in rows:
+        if _call_carries_alternate(row["genotype"], row["zygosity"]):
+            carried.setdefault(row["variant_id"], set()).add(row["sample_id"])
+    result = {}
+    for variant_id in variant_ids:
+        parents = carried.get(variant_id, set())
+        if not parents:
+            result[variant_id] = {
+                "de_novo_status": "candidate", "parental_origin": "neither",
+            }
+        elif parents == {father_id}:
+            result[variant_id] = {"parental_origin": "father"}
+        elif parents == {mother_id}:
+            result[variant_id] = {"parental_origin": "mother"}
+        else:
+            result[variant_id] = {"parental_origin": "both"}
+    return result
+
+
+def _call_carries_alternate(genotype, zygosity):
+    normalized = str(zygosity or "").strip().casefold()
+    if normalized in {"het", "heterozygous", "hom_alt", "homozygous", "hemizygous", "hemi"}:
+        return True
+    alleles = str(genotype or "").replace("|", "/").split("/")
+    return any(allele.strip() not in {"", ".", "0"} for allele in alleles)
 
 
 def _annotation_exon_intron(metadata, consequence=""):
@@ -593,6 +876,214 @@ def _require_sample(db, sample_id):
         raise VariantQueryError("sample not found in this variant database")
 
 
+def _family_parent_ids(database, sample_id):
+    """Resolve the indexed father and mother for one family sample."""
+    with store.connect(database) as db:
+        current = db.execute(
+            "SELECT s.metadata_json, a.run_id FROM samples s "
+            "JOIN analyses a ON a.sample_id = s.id WHERE s.id = ? ORDER BY a.id LIMIT 1",
+            (int(sample_id),),
+        ).fetchone()
+        if current is None:
+            return None, None
+        metadata = _json_value(current["metadata_json"])
+        family_id = str(metadata.get("analysis_id") or "").strip().casefold()
+        expected = {
+            "father": str(metadata.get("father") or "").strip().casefold(),
+            "mother": str(metadata.get("mother") or "").strip().casefold(),
+        }
+        rows = db.execute(
+            "SELECT s.id, s.display_name, s.metadata_json, a.role FROM samples s "
+            "JOIN analyses a ON a.sample_id = s.id "
+            "WHERE a.run_id = ? AND s.id != ? ORDER BY a.id",
+            (current["run_id"], int(sample_id)),
+        ).fetchall()
+
+    candidates = []
+    for row in rows:
+        candidate_metadata = _json_value(row["metadata_json"])
+        identifiers = {
+            str(row["display_name"] or "").strip().casefold(),
+            str(candidate_metadata.get("sample_name") or "").strip().casefold(),
+            str(candidate_metadata.get("individual_id") or "").strip().casefold(),
+        }
+        identifiers.discard("")
+        candidates.append({
+            "id": int(row["id"]), "identifiers": identifiers,
+            "family_id": str(candidate_metadata.get("analysis_id") or "").strip().casefold(),
+            "relationship": str(
+                candidate_metadata.get("relationship") or row["role"] or ""
+            ).strip().casefold(),
+        })
+
+    resolved = {}
+    for relationship in ("father", "mother"):
+        named = expected[relationship]
+        match = next(
+            (item for item in candidates if named and named in item["identifiers"]), None
+        )
+        if match is None:
+            match = next((
+                item for item in candidates
+                if item["relationship"] == relationship
+                and (not family_id or not item["family_id"] or item["family_id"] == family_id)
+            ), None)
+        resolved[relationship] = match["id"] if match else None
+    return resolved["father"], resolved["mother"]
+
+
+def _family_member_ids(database, sample_id):
+    """Return sample ids belonging to the proband family in the indexed run."""
+    with store.connect(database) as db:
+        current = db.execute(
+            "SELECT s.metadata_json, a.run_id FROM samples s "
+            "JOIN analyses a ON a.sample_id = s.id WHERE s.id = ? ORDER BY a.id LIMIT 1",
+            (int(sample_id),),
+        ).fetchone()
+        if current is None:
+            return set()
+        metadata = _json_value(current["metadata_json"])
+        family_id = str(metadata.get("analysis_id") or "").strip().casefold()
+        expected = {
+            str(metadata.get("father") or "").strip().casefold(),
+            str(metadata.get("mother") or "").strip().casefold(),
+        }
+        expected.discard("")
+        rows = db.execute(
+            "SELECT s.id, s.display_name, s.metadata_json FROM samples s "
+            "JOIN analyses a ON a.sample_id = s.id WHERE a.run_id = ? ORDER BY a.id",
+            (current["run_id"],),
+        ).fetchall()
+    members = {int(sample_id)}
+    for row in rows:
+        candidate = _json_value(row["metadata_json"])
+        candidate_family = str(candidate.get("analysis_id") or "").strip().casefold()
+        identifiers = {
+            str(row["display_name"] or "").strip().casefold(),
+            str(candidate.get("sample_name") or "").strip().casefold(),
+            str(candidate.get("individual_id") or "").strip().casefold(),
+        }
+        identifiers.discard("")
+        if (family_id and candidate_family == family_id) or identifiers.intersection(expected):
+            members.add(int(row["id"]))
+    return members
+
+
+def _family_call_exists(prefix, variant_expression, heterozygous=False):
+    call = "{}_call".format(prefix)
+    analysis = "{}_analysis".format(prefix)
+    genotype = "replace(trim(COALESCE({}.genotype, '')), '|', '/')".format(call)
+    if heterozygous:
+        carried = (
+            "(lower(COALESCE({0}.zygosity, '')) = 'het' OR "
+            "(({1} LIKE '0/%' OR {1} LIKE '%/0') "
+            "AND {1} != '0/0' AND instr({1}, '.') = 0))"
+        ).format(call, genotype)
+    else:
+        carried = (
+            "(lower(COALESCE({0}.zygosity, '')) IN "
+            "('het', 'hom_alt', 'hemi', 'hemizygous', 'compound_het') OR "
+            "({1} NOT IN ('', '.', './.', '0', '0/0') AND instr({1}, '.') = 0))"
+        ).format(call, genotype)
+    return (
+        "EXISTS (SELECT 1 FROM calls {0} JOIN analyses {1} "
+        "ON {1}.id = {0}.analysis_id WHERE {0}.variant_id = {2} "
+        "AND {1}.sample_id = ? AND {3})"
+    ).format(call, analysis, variant_expression, carried)
+
+
+def _family_evidence_clause(evidence, sample_id, father_id, mother_id):
+    father = _family_call_exists("family_father", "v.id")
+    mother = _family_call_exists("family_mother", "v.id")
+    if evidence == "de_novo":
+        proband = _family_call_exists("family_de_novo_proband", "v.id")
+        return (
+            "({} AND NOT {} AND NOT {})".format(proband, father, mother),
+            [sample_id, father_id, mother_id],
+        )
+    if evidence == "father_only":
+        return "({} AND NOT {})".format(father, mother), [father_id, mother_id]
+    if evidence == "mother_only":
+        return "({} AND NOT {})".format(mother, father), [mother_id, father_id]
+    if evidence == "both_parents":
+        return "({} AND {})".format(father, mother), [father_id, mother_id]
+
+    proband = _family_call_exists("family_proband", "v.id", heterozygous=True)
+    partner_proband = _family_call_exists(
+        "family_partner_proband", "family_partner_variant.id", heterozygous=True
+    )
+    partner_father = _family_call_exists(
+        "family_partner_father", "family_partner_variant.id"
+    )
+    partner_mother = _family_call_exists(
+        "family_partner_mother", "family_partner_variant.id"
+    )
+    paternal_partner = (
+        "EXISTS (SELECT 1 FROM variants family_partner_variant "
+        "JOIN annotations family_partner_annotation "
+        "ON family_partner_annotation.variant_id = family_partner_variant.id "
+        "WHERE family_partner_variant.id != v.id "
+        "AND family_partner_annotation.gene COLLATE NOCASE = an.gene "
+        "AND {0} AND {1} AND NOT {2})"
+    ).format(partner_proband, partner_mother, partner_father)
+    maternal_partner = (
+        "EXISTS (SELECT 1 FROM variants family_partner_variant "
+        "JOIN annotations family_partner_annotation "
+        "ON family_partner_annotation.variant_id = family_partner_variant.id "
+        "WHERE family_partner_variant.id != v.id "
+        "AND family_partner_annotation.gene COLLATE NOCASE = an.gene "
+        "AND {0} AND {1} AND NOT {2})"
+    ).format(partner_proband, partner_father, partner_mother)
+    clause = (
+        "(trim(COALESCE(an.gene, '')) != '' AND (({0} AND {1} AND NOT {2} AND {3}) "
+        "OR ({4} AND {5} AND NOT {6} AND {7})))"
+    ).format(proband, father, mother, paternal_partner,
+             proband, mother, father, maternal_partner)
+    parameters = [
+        sample_id, father_id, mother_id, sample_id, mother_id, father_id,
+        sample_id, mother_id, father_id, sample_id, father_id, mother_id,
+    ]
+    return clause, parameters
+
+
+def _priority_order_cache_key(database, sample_id, signature):
+    return (
+        os.path.abspath(os.fspath(database)),
+        _file_fingerprint(database),
+        _file_fingerprint(gene_phenotype.cache_path()),
+        _file_fingerprint(gnomad_frequency.cache_path()),
+        int(sample_id),
+        RULESET_VERSION,
+        signature,
+    )
+
+
+def _file_fingerprint(path):
+    try:
+        status = os.stat(os.fspath(path))
+        return status.st_mtime_ns, status.st_size
+    except OSError:
+        return None
+
+
+def _priority_order_cache_get(key):
+    with _PRIORITY_ORDER_CACHE_LOCK:
+        value = _PRIORITY_ORDER_CACHE.get(key)
+        if value is not None:
+            _PRIORITY_ORDER_CACHE.move_to_end(key)
+        return value
+
+
+def _priority_order_cache_put(key, variant_ids):
+    if key is None:
+        return
+    with _PRIORITY_ORDER_CACHE_LOCK:
+        _PRIORITY_ORDER_CACHE[key] = tuple(variant_ids)
+        _PRIORITY_ORDER_CACHE.move_to_end(key)
+        while len(_PRIORITY_ORDER_CACHE) > _PRIORITY_ORDER_CACHE_SIZE:
+            _PRIORITY_ORDER_CACHE.popitem(last=False)
+
+
 def _page_size(limit):
     try:
         limit = int(limit)
@@ -605,9 +1096,11 @@ def _page_size(limit):
 
 def _variant_filters(gene="", genes="", max_af=None, include_missing_af=True,
                      population_frequency="MAX_AF", consequences="", clinical_significances="",
-                     inheritance_candidates="",
+                     inheritance_candidates="", family_evidence="", family_pattern="",
+                     priority_classes="", min_priority=None, max_priority=None,
                      filter_mode="all", filter_statuses="", zygosities="",
-                     min_depth=None, min_vaf=None, min_quality=None, possible_compound=False):
+                     min_depth=None, min_vaf=None, min_quality=None,
+                     possible_compound=False):
     gene_values = _filter_values(genes, split_whitespace=True)
     if gene:
         gene_values = [gene]
@@ -618,24 +1111,62 @@ def _variant_filters(gene="", genes="", max_af=None, include_missing_af=True,
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", population_frequency):
         raise VariantQueryError("invalid population frequency field")
     clinical_values = _filter_values(clinical_significances)
-    inheritance_values = [item.lower() for item in _filter_values(inheritance_candidates)]
+    inheritance_values = [
+        "mitochondrial" if item.lower() == "maternal" else item.lower()
+        for item in _filter_values(inheritance_candidates)
+    ]
     if possible_compound and "compound" not in inheritance_values:
         inheritance_values.append("compound")
-    allowed_inheritance = {"compound", "recessive", "dominant", "x_linked", "y_linked"}
+    allowed_inheritance = {
+        "compound", "recessive", "dominant", "x_linked", "y_linked", "mitochondrial",
+    }
     if any(item not in allowed_inheritance for item in inheritance_values):
         raise VariantQueryError("invalid inheritance candidate")
-    status_values = _filter_values(filter_statuses)
+    family_values = [item.lower() for item in _filter_values(family_evidence)]
+    allowed_family = {
+        "de_novo", "father_only", "mother_only", "both_parents", "parental_compound",
+    }
+    if any(item not in allowed_family for item in family_values):
+        raise VariantQueryError("invalid family evidence filter")
+    family_pattern_values = []
+    family_pattern_seen = {}
+    for item in _filter_values(family_pattern):
+        match = re.fullmatch(r"([1-9][0-9]*):(present|absent)", item.lower())
+        if match is None:
+            raise VariantQueryError("invalid family pattern filter")
+        member_id, state = int(match.group(1)), match.group(2)
+        if member_id in family_pattern_seen and family_pattern_seen[member_id] != state:
+            raise VariantQueryError("conflicting states for one family member")
+        if member_id not in family_pattern_seen:
+            family_pattern_values.append((member_id, state))
+        family_pattern_seen[member_id] = state
+    priority_values = [item.upper() for item in _filter_values(priority_classes)]
+    if any(item not in {"P1", "P2", "P3", "P4"} for item in priority_values):
+        raise VariantQueryError("invalid priority class")
+    minimum_priority = _optional_number(min_priority, "minimum priority", 0, 100)
+    maximum_priority = _optional_number(max_priority, "maximum priority", 0, 100)
+    if (minimum_priority is not None and maximum_priority is not None
+            and minimum_priority > maximum_priority):
+        raise VariantQueryError("minimum priority cannot exceed maximum priority")
+    status_values = []
+    for status in _filter_values(filter_statuses):
+        canonical = _canonical_filter_status(status)
+        if canonical and canonical not in status_values:
+            status_values.append(canonical)
     zygosity_values = [item.lower() for item in _filter_values(zygosities)]
     mode = str(filter_mode or "all").lower()
-    if mode not in ("all", "pass", "selected"):
-        raise VariantQueryError("filter mode must be all, pass, or selected")
-    if mode == "selected" and not status_values:
+    if mode not in ("all", "pass", "selected", "exclude"):
+        raise VariantQueryError("filter mode must be all, pass, selected, or exclude")
+    if mode in {"selected", "exclude"} and not status_values:
         raise VariantQueryError("at least one FILTER status must be selected")
     return {
         "genes": gene_values, "max_af": _optional_number(max_af, "MAF", 0, 1),
         "population_frequency": population_frequency,
         "include_missing_af": bool(include_missing_af), "consequences": consequence_values,
         "clinical_significances": clinical_values, "inheritance_candidates": inheritance_values,
+        "family_evidence": family_values, "family_pattern": family_pattern_values,
+        "priority_classes": priority_values,
+        "min_priority": minimum_priority, "max_priority": maximum_priority,
         "filter_mode": mode, "filter_statuses": status_values, "zygosities": zygosity_values,
         "min_depth": _optional_number(min_depth, "minimum depth", 0),
         "min_vaf": _optional_number(min_vaf, "minimum VAF", 0, 1),
@@ -658,6 +1189,15 @@ def _filter_values(raw, split_whitespace=False):
     return result
 
 
+def _canonical_filter_status(status):
+    value = str(status or "").strip()
+    upper_value = value.upper()
+    for canonical, aliases in FILTER_STATUS_ALIASES.items():
+        if upper_value in aliases:
+            return canonical
+    return value
+
+
 def _optional_number(raw, label, minimum=None, maximum=None):
     if raw is None or raw == "":
         return None
@@ -669,6 +1209,97 @@ def _optional_number(raw, label, minimum=None, maximum=None):
             or (maximum is not None and number > maximum)):
         raise VariantQueryError("{} must be between {} and {}".format(label, minimum, maximum))
     return number
+
+
+def _variant_sort(sort_by, sort_direction):
+    sort_by = str(sort_by or "").strip().lower()
+    aliases = {"af_max": "population_af", "clinical": "clinical_significance"}
+    sort_by = aliases.get(sort_by, sort_by) or "priority"
+    allowed = {"priority", "gene", "population_af", "clinical_significance", "consequence"}
+    if sort_by not in allowed:
+        raise VariantQueryError("unsupported variant sort column")
+    sort_direction = str(sort_direction or "").strip().lower()
+    if not sort_direction:
+        sort_direction = "desc" if sort_by == "priority" else "asc"
+    if sort_direction not in {"asc", "desc"}:
+        raise VariantQueryError("sort direction must be asc or desc")
+    return sort_by, sort_direction
+
+
+def _variant_order(sort_by, sort_direction):
+    direction = "DESC" if sort_direction == "desc" else "ASC"
+    if sort_by == "gene":
+        return (
+            "CASE WHEN trim(COALESCE(an.gene, '')) = '' THEN 1 ELSE 0 END, "
+            "an.gene COLLATE NOCASE {} , v.id".format(direction)
+        )
+    if sort_by == "population_af":
+        # Missing AF is intentionally lower than every valid population frequency.
+        return "COALESCE(an.population_af, -1.0) {}, v.id".format(direction)
+    if sort_by == "clinical_significance":
+        normalized = (
+            "('&' || replace(replace(replace(lower(trim(COALESCE("
+            "an.clinical_significance, ''))), ',', '&'), '|', '&'), ' ', '_') || '&')"
+        )
+        priority = (
+            "CASE "
+            "WHEN instr({0}, '&pathogenic&') > 0 THEN 5 "
+            "WHEN instr({0}, '&likely_pathogenic&') > 0 THEN 4 "
+            "WHEN instr({0}, '&uncertain_significance&') > 0 "
+            "  OR instr({0}, '&variant_of_uncertain_significance&') > 0 "
+            "  OR instr({0}, '&vus&') > 0 THEN 3 "
+            "WHEN instr({0}, '&likely_benign&') > 0 THEN 2 "
+            "WHEN instr({0}, '&benign&') > 0 THEN 1 "
+            "WHEN trim(COALESCE(an.clinical_significance, '')) IN ('', '.') THEN -1 "
+            "ELSE 0 END"
+        ).format(normalized)
+        return "{} {}, COALESCE(an.clinical_significance, '') COLLATE NOCASE, v.id".format(
+            priority, direction
+        )
+    if sort_by == "consequence":
+        return (
+            "CASE WHEN trim(COALESCE(an.consequence, '')) = '' THEN 1 ELSE 0 END, "
+            "an.consequence COLLATE NOCASE {}, v.id".format(direction)
+        )
+    return "v.id"
+
+
+def _filter_priority(items, filters):
+    classes = set(filters["priority_classes"])
+    minimum = filters["min_priority"]
+    maximum = filters["max_priority"]
+    result = []
+    for item in items:
+        priority = item["priority"]
+        score = priority["normalized_score"]
+        if classes and priority["band"] not in classes:
+            continue
+        if minimum is not None and score < minimum:
+            continue
+        if maximum is not None and score > maximum:
+            continue
+        result.append(item)
+    return result
+
+
+def _sort_priority(items, sort_direction):
+    if sort_direction == "desc":
+        return sorted(
+            items,
+            key=lambda item: (
+                -item["priority"]["normalized_score"],
+                -item["priority"]["score"],
+                item["variant_id"],
+            ),
+        )
+    return sorted(
+        items,
+        key=lambda item: (
+            item["priority"]["normalized_score"],
+            item["priority"]["score"],
+            item["variant_id"],
+        ),
+    )
 
 
 def _encode_cursor(sample_id, variant_id, filter_signature=""):
@@ -687,6 +1318,26 @@ def _decode_cursor(cursor, sample_id, filter_signature=""):
                 or payload.get("filters", "") != filter_signature):
             raise ValueError
         return int(payload["variant_id"])
+    except (KeyError, TypeError, ValueError, UnicodeError, binascii.Error, json.JSONDecodeError):
+        raise VariantQueryError("invalid or mismatched variant cursor")
+
+
+def _encode_offset_cursor(sample_id, offset, filter_signature):
+    raw = json.dumps(
+        {"sample_id": sample_id, "offset": offset, "filters": filter_signature},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_offset_cursor(cursor, sample_id, filter_signature):
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        if (payload["sample_id"] != sample_id or int(payload["offset"]) < 0
+                or payload.get("filters", "") != filter_signature):
+            raise ValueError
+        return int(payload["offset"])
     except (KeyError, TypeError, ValueError, UnicodeError, binascii.Error, json.JSONDecodeError):
         raise VariantQueryError("invalid or mismatched variant cursor")
 

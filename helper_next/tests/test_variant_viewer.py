@@ -33,6 +33,20 @@ def test_viewer_is_a_configurable_shadow_dom_web_component_with_virtual_rows():
     assert "workspace.detailController?.abort()" in source
 
 
+def test_priority_score_opens_an_explainable_bottom_panel():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+
+    assert '{key: "priority", label: "Priority"' in source
+    assert "item.priority" in source
+    assert "priorityExplanationPanel(workspace)" in source
+    assert "priority.formula" in source
+    assert "priority.components" in source
+    assert "Experimental review priority; it is not an ACMG/AMP classification" in source
+    assert ".priority-explanation-panel" in stylesheet
+    assert "bottom: 0" in stylesheet
+
+
 def test_viewer_keeps_independent_workspaces_and_restorable_urls():
     source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
     app_source = (STATIC / "helper_next/web/static/app.js").read_text()
@@ -44,6 +58,66 @@ def test_viewer_keeps_independent_workspaces_and_restorable_urls():
     assert 'window.addEventListener("hashchange"' in source
     assert 'variants: "Variant Browser"' in app_source
     assert "sectionFromHash()" in app_source
+
+
+def test_viewer_opens_read_evidence_in_a_reusable_igv_workspace_tab():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+
+    assert 'node("button", "Inspect reads", "igv-open")' in source
+    assert 'kind: "igv"' in source
+    assert '`IGV · ${workspace.sample.display_name}`' in source
+    assert 'view: "igv", variantId: detail.variant_id' in source
+    assert 'igv-manifest' in source
+    assert 'this.igvTrackConfig(track, workspace)' in source
+    assert 'igv-evidence-summary' in source
+    assert 'track.type === "variant"' in source
+    assert "createBrowser" in source
+    assert "workspace.igvBrowser.search" in source
+    assert "removeBrowser" in source
+    assert ".igv-panel" in stylesheet
+
+
+def test_igv_overlays_are_clamped_and_match_the_variant_browser_ui():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+    igv_theme = (STATIC / "helper_variants/web/static/igv-theme.css").read_text()
+
+    assert "installIgvOverlayManagement(workspace)" in source
+    assert "installIgvTheme(workspace)" in source
+    assert "workspace.igvNodes.viewer.shadowRoot" in source
+    assert 'link.dataset.helperIgvTheme = "true"' in source
+    assert "IGV_THEME_URL" in source
+    assert "clampIgvOverlays(workspace)" in source
+    assert "decorateIgvOverlay(overlay)" in source
+    assert 'window.addEventListener("resize", schedule)' in source
+    assert 'window.addEventListener("scroll", schedule, true)' in source
+    assert "removeIgvOverlayManagement(workspace)" in source
+    assert ".igv-panel {" in stylesheet and "overflow: visible" in stylesheet
+    assert ".igv-ui-popover" in igv_theme
+    assert ".igv-track-label-popover" in igv_theme
+    assert ".igv-menu-popup" in igv_theme
+    assert "max-height: calc(100vh - 24px)" in igv_theme
+    assert "box-shadow: 0 12px 32px rgba(31, 46, 61, .2)" in igv_theme
+
+
+def test_igv_track_menu_loads_reference_population_and_split_read_tracks_on_demand():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+
+    assert 'node("details", undefined, "igv-track-picker")' in source
+    assert "initializeIgvTrackSelection(workspace)" in source
+    assert "renderIgvTrackMenu(workspace)" in source
+    assert "toggleIgvTrack(workspace, track, visible)" in source
+    assert "workspace.igvBrowser.loadTrack" in source
+    assert "workspace.igvBrowser.removeTrack" in source
+    assert 'track.mode === "split-reads"' in source
+    assert 'groupBy: "chimeric"' in source
+    assert "showSoftClips: true" in source
+    assert 'track.source_type === "custom"' in source
+    assert 'sourceType: "custom"' in source
+    assert ".igv-track-menu" in stylesheet
+    assert ".igv-track-option" in stylesheet
 
 
 def test_viewer_shows_runs_as_compact_rows_without_duplicate_overview():
@@ -59,8 +133,7 @@ def test_viewer_shows_runs_as_compact_rows_without_duplicate_overview():
     assert 'id="run-overview"' not in source
     assert 'id="sample-search"' in source
     assert "renderRunOverview" not in source
-    assert "this.refreshRuns(false)" in source
-    assert "this.refreshRuns(true)" not in source
+    assert "this.refreshRuns(true)" in source
     assert "const select = () => this.activateRun(run)" in source
     assert 'if (run.index_status === "complete")' in source
     assert "this.selectRun(run.history_id)" in source
@@ -78,6 +151,36 @@ def test_viewer_uses_collapsible_runs_and_expandable_sample_sidebar():
     assert '["Family", analysisType === "family" ? analysisId : ""]' in source
     assert '["Tissue / specimen", metadata.specimen_type || sample.specimen_type]' in source
     assert '["Variants", sample.variant_count]' in source
+
+
+def test_viewer_opens_evidence_source_registry_from_topbar_info_button():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+    index = (STATIC / "helper_next/web/static/index.html").read_text()
+    app_source = (STATIC / "helper_next/web/static/app.js").read_text()
+    app_stylesheet = (STATIC / "helper_next/web/static/styles.css").read_text()
+
+    assert 'id="source-registry" class="source-registry"' not in source
+    assert 'id="variant-source-info"' in index
+    assert 'class="topbar-title-row"' in index
+    assert 'variantSourceInfo.hidden = sectionId !== "variants"' in app_source
+    assert 'variant-browser")?.openSourceRegistryPanel()' in app_source
+    assert 'openSourceRegistryPanel()' in source
+    assert 'node("section", undefined, "source-registry-dialog")' in source
+    assert 'dialog.setAttribute("aria-modal", "true")' in source
+    assert 'if (event.key === "Escape") closeDialog()' in source
+    assert 'this.request("/knowledge/sources")' in source
+    assert '["Source", "Use", "Release / version", "Source updated", "Local snapshot", "State"]' in source
+    assert 'this.sourceRegistryDate(source.data_updated_at, "Not captured")' in source
+    assert 'this.sourceRegistryDate(source.synchronized_at' in source
+    assert 'sourceRegistryStatusLabel(status)' in source
+    assert 'sourceRegistryStatusDescription(status)' in source
+    assert 'status.title = statusDescription' in source
+    assert 'status.tabIndex = 0' in source
+    assert 'It is not a real-time connection to the source.' in source
+    assert '.source-registry-dialog {' in stylesheet
+    assert '.source-registry-status.synchronized' in stylesheet
+    assert '.variant-source-info[hidden]' in app_stylesheet
 
 
 def test_variant_columns_are_reorderable_and_include_vep_fields():
@@ -98,6 +201,8 @@ def test_variant_columns_are_reorderable_and_include_vep_fields():
     assert "dragHandle.draggable = true" in source
     assert "cell.draggable = true" not in source
     assert 'resizeHandle.addEventListener("pointerdown"' in source
+    assert 'node("span", "↔", "column-resize-handle")' in source
+    assert 'cell.classList.add("sortable-column-header")' in source
     assert 'cell.addEventListener("drop"' in source
     assert "localStorage.setItem(COLUMN_STORAGE_KEY" in source
     assert "localStorage.setItem(COLUMN_WIDTH_STORAGE_KEY" in source
@@ -106,6 +211,66 @@ def test_variant_columns_are_reorderable_and_include_vep_fields():
     assert '{key: "variant"' not in source
     assert '{key: "filter_status"' not in source
     assert '{key: "quality"' not in source
+
+
+def test_priority_columns_are_click_sortable_across_server_pages():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+
+    assert '["priority", {firstDirection: "desc", description: "by review priority; highest score first"}]' in source
+    assert 'sort: {key: "priority", direction: "desc"}' in source
+    assert '["gene", {firstDirection: "asc", description: "alphabetically"}]' in source
+    assert '["population_af", {firstDirection: "asc", description: "by AF_max; missing AF is the lowest value"}]' in source
+    assert '["clinical_significance", {firstDirection: "desc", description: "by clinical priority; Pathogenic is highest"}]' in source
+    assert '["consequence", {firstDirection: "asc", description: "alphabetically"}]' in source
+    assert 'params.set("sort_by", workspace.sort.key)' in source
+    assert 'params.set("sort_direction", workspace.sort.direction)' in source
+    assert 'this.toggleVariantSort(workspace, key)' in source
+    assert 'cell.setAttribute("aria-sort"' in source
+    assert 'direction === "desc" ? "▼" : "▲"' in source
+    assert '.column-sort-button {' in stylesheet
+    assert ".sortable-column-header" in stylesheet
+    assert ".column-resize-handle::before" in stylesheet
+
+
+def test_priority_filters_support_multiple_classes_and_numeric_range():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+
+    assert '"Class", "priorityClass", ["P1", "P2", "P3", "P4"]' in source
+    assert '[["minPriority", "From", filters.minPriority], ["maxPriority", "To", filters.maxPriority]]' in source
+    assert 'params.set("priority_classes", filters.priorityClasses.join(","))' in source
+    assert 'params.set("min_priority", filters.minPriority)' in source
+    assert 'params.set("max_priority", filters.maxPriority)' in source
+    assert 'Minimum priority cannot exceed maximum priority.' in source
+    assert ".priority-filter-body" in stylesheet
+    assert ".priority-range" in stylesheet
+
+
+def test_priority_panel_normalizes_locus_and_shows_hgvs():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+
+    assert "priorityVariantIdentity(item = {})" in source
+    assert 'String(item.chromosome || "").replace(/^chr/i, "")' in source
+    assert 'this.compactHgvs(item.hgvsc, "c.")' in source
+    assert 'this.compactHgvs(item.hgvsp, "p.")' in source
+    assert 'node("p", this.priorityVariantIdentity(item))' in source
+    assert "chr${item.chromosome}" not in source
+
+
+def test_variant_detail_loads_assembly_matched_gnomad_genome_frequency():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+
+    assert "/gnomad-frequency`" in source
+    assert 'dataset: "gnomad_r2_1", version: "2.1.1"' in source
+    assert 'dataset: "gnomad_r4", version: "4.1"' in source
+    assert "gnomadFrequencyCard(detail)" in source
+    assert "refreshVariantPriorities(workspace)" in source
+    assert '["observed", "not_observed_covered"].includes(frequency.status)' in source
+    assert 'not_observed_covered: "Not observed · adequately covered"' in source
+    assert 'node("h6", "Major populations"' in source
+    assert ".frequency-direct { grid-column: 1 / -1; }" in stylesheet
 
 
 def test_gene_context_action_opens_a_filtered_workspace_tab():
@@ -122,8 +287,23 @@ def test_filter_panel_supports_clinical_inheritance_and_removable_gene_panels():
     stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
 
     assert '"Clinical", "clinicalSignificance"' in source
-    assert '"compound", "recessive", "dominant", "x_linked", "y_linked"' in source
+    assert '"compound", "recessive", "dominant", "x_linked", "y_linked", "mitochondrial"' in source
+    assert 'mitochondrial: "Maternal (mitochondrial)"' in source
     assert 'params.set("inheritance_candidates"' in source
+    assert 'params.set("family_evidence", filters.familyEvidence.join(","))' in source
+    assert 'params.set("family_pattern", filters.familyPattern.join(","))' in source
+    assert 'node("h5", "Family evidence")' in source
+    assert '"de_novo", "father_only", "mother_only", "both_parents", "parental_compound"' in source
+    assert 'de_novo: "De novo (absent in both parents)"' in source
+    assert 'father_only: "Present only in father"' in source
+    assert 'mother_only: "Present only in mother"' in source
+    assert 'both_parents: "Present in both parents"' in source
+    assert 'parental_compound: "Parental compound (one variant per parent)"' in source
+    assert "familyPedigreeFilter(workspace, filters.familyPattern || [])" in source
+    assert "pedigreeMemberControl(member, selected)" in source
+    assert 'hidden.name = "familyPattern"' in source
+    assert 'present: "must carry the variant"' in source
+    assert 'absent: "must not carry the variant"' in source
     assert 'node("button", "🗑", "panelapp-source-remove")' in source
     assert "removePanelSource(workspace, textarea, sourceHost, source)" in source
     assert 'population.name = "populationFrequency"' in source
@@ -133,17 +313,61 @@ def test_filter_panel_supports_clinical_inheritance_and_removable_gene_panels():
     assert 'likely_benign: "Likely benign"' in source
     assert '__not_reported__: "Not reported"' in source
     assert "Up to 5,000 HGNC gene symbols" not in source
-    assert ".filter-evidence { grid-template-columns: 1fr; }" in stylesheet
-    assert ".interpretation-grid { grid-template-columns: repeat(4" in stylesheet
-    assert 'lowerGrid.append(sampleEvidence, genePanel)' in source
+    assert '"Zygosity", "zygosity"' not in source
+    assert 'params.set("zygosities"' not in source
+    assert ".sample-evidence-section { display: grid; grid-template-rows: auto minmax(0, 1fr)" in stylesheet
+    assert ".evidence-grid { align-items: stretch; gap: 6px; grid-template-columns: minmax(105px, 1fr) minmax(78px, 88px); height: 100%" in stylesheet
+    assert ".filter-site-status { grid-template-rows: auto auto minmax(0, 1fr); height: 100%" in stylesheet
+    assert ".filter-site-status .filter-choices { height: 100%; margin-top: 1px; max-height: none" in stylesheet
+    assert ".sample-evidence-section, .family-evidence-section { box-sizing: border-box; height: 270px; max-height: 270px; }" in stylesheet
+    assert ".call-threshold-grid { display: grid" in stylesheet
+    assert ".call-threshold-grid { display: grid; gap: 5px; grid-template-columns: minmax(0, 1fr)" in stylesheet
+    for field in (
+        '"minDepth", "DP"', '"minVaf", "VAF"', '"minQuality", "QUAL"',
+    ):
+        assert field in source
+    assert '["exclude", "Exclude selected FILTER flags"]' in source
+    assert '"FILTER flags", "filterStatus"' in source
+    assert "grid-template-columns: minmax(105px, .7fr) minmax(88px, .5fr) repeat(3, minmax(105px, 1fr))" in stylesheet
+    assert ".priority-class-choices { grid-template-columns: minmax(0, 1fr)" in stylesheet
+    assert 'lowerGrid.append(sampleEvidence, familyEvidence, genePanel)' in source
     assert ".filter-lower-grid { display: grid" in stylesheet
-    assert "grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr)" in stylesheet
+    assert "grid-template-columns: minmax(205px, .65fr) minmax(430px, 1.7fr) minmax(250px, 1fr)" in stylesheet
+    assert ".family-evidence-layout" in stylesheet
+    assert ".pedigree-diagram" in stylesheet
+    assert "isFamilyAnalysis(workspace)" in source
+    assert 'lowerGrid.classList.add("without-family")' in source
+    assert ".filter-lower-grid.without-family" in stylesheet
     assert ".workspace-grid:not(.detail-closed) .filter-lower-grid { grid-template-columns: 1fr; }" in stylesheet
-    assert ".workspace-grid:not(.detail-closed) .evidence-grid { grid-template-columns: repeat(3" in stylesheet
+    assert ".workspace-grid:not(.detail-closed) .interpretation-grid { grid-template-columns: minmax(100px, .7fr) minmax(82px, .5fr) repeat(3, minmax(95px, 1fr)); }" in stylesheet
+    assert ".workspace-grid:not(.detail-closed) .evidence-grid { grid-template-columns: minmax(105px, 1fr) minmax(78px, 88px); }" in stylesheet
+
+
+def test_filter_typography_uses_one_consistent_scale():
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+
+    assert "--filter-control-size: 10px" in stylesheet
+    assert "--filter-label-size: 11px" in stylesheet
+    assert "--filter-note-size: 10px" in stylesheet
+    assert "--filter-section-title-size: 12px" in stylesheet
+    assert ".priority-class-choices label { font-size: var(--filter-control-size)" in stylesheet
+    assert ".priority-range label { color: #526174; display: grid; font-size: var(--filter-control-size)" in stylesheet
+    assert ".call-threshold-control > span { font-size: var(--filter-control-size)" in stylesheet
+    assert ".pedigree-member-role { color: #6a7683; font-size: var(--filter-note-size)" in stylesheet
+
+
+def test_priority_explanations_use_readable_text_sizes():
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
+
+    assert ".priority-component p { color: #42566b; font-size: 12px" in stylesheet
+    assert ".priority-component small { color: #667385; display: block; font-size: 11px" in stylesheet
+    assert ".priority-explanation-footer span { color: #45596e; font-size: 11.5px; }" in stylesheet
+    assert ".priority-explanation-footer small { color: #6a7685; font-size: 11px; }" in stylesheet
 
 
 def test_variant_hgvs_is_compact_and_detail_panel_can_be_closed():
     source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+    stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
 
     assert 'this.compactHgvs(item[key], "c.")' in source
     assert 'this.compactHgvs(item[key], "p.")' in source
@@ -157,6 +381,10 @@ def test_variant_hgvs_is_compact_and_detail_panel_can_be_closed():
     assert 'hgvsp ? `(${hgvsp})` : ""' in source
     assert '"detail-identity"' in source
     assert '"detail-annotation"' in source
+    assert "variantDetailIdentityRow(locus, annotationLabel, options = {})" in source
+    assert '"detail-build-badge"' in source
+    assert "HGVSc and HGVSp are transcript-level descriptions" in source
+    assert ".detail-identity-row.projected" in stylesheet
 
 
 def test_variant_detail_uses_collapsible_interpretation_sections():
@@ -177,6 +405,13 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert '["VCF ID",' not in source
     assert '["dbSNP", this.databaseIdentifierLinks("dbsnp", databaseIds.dbsnp)]' in source
     assert 'this.externalDatabaseLabel("ClinVar", clinvarSearchUrl' in source
+    assert "assemblyCoordinateSummary(detail)" in source
+    assert "loadLiftover(workspace, variantId)" in source
+    assert '"GRCh37 / hg19"' in source
+    assert '"GRCh38 / hg38"' in source
+    assert ".assembly-coordinate-card.projected" in stylesheet
+    assert "https://www.ncbi.nlm.nih.gov/variation/services/" in source
+    assert "https://www.ncbi.nlm.nih.gov/variation/docs/" not in source
     assert "clinvarSearchUrl(dbsnpIdentifiers = [])" in source
     assert "clinvar/?term=${encodeURIComponent(rsid)}" in source
     assert '["ClinGen Allele Registry", this.databaseIdentifierLinks("clingen", databaseIds.clingen)]' in source
@@ -308,8 +543,8 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert 'EAS: "East Asia"' in source
     assert 'NFE: "Non-Finnish European"' in source
     assert 'code.replace(/^GNOMAD[EG]_/, "")' in source
-    assert 'gnomad: {dataset: "gnomad_r2_1", version: "2.1"}' in source
-    assert 'gnomad: {dataset: "gnomad_r4", version: "4"}' in source
+    assert 'gnomad: {dataset: "gnomad_r2_1", version: "2.1.1"}' in source
+    assert 'gnomad: {dataset: "gnomad_r4", version: "4.1"}' in source
     assert 'referenceToolConfiguration(referenceBuild)' in source
     assert 'externalVariantTool(detail, toolName)' in source
     assert 'return null;' in source
@@ -330,7 +565,36 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert ".carrier-zygosity-group" in stylesheet
     assert ".carrier-sample strong { font-size: var(--detail-secondary-size)" in stylesheet
     assert "this.openCarrierSample(workspace, carrier, historical)" in source
+    assert "Open ${carrier.display_name} at this variant" in source
+    assert "await this.loadDetail(targetWorkspace, carrier.variant_id)" in source
+    assert "await this.focusVariantInWorkspace(targetWorkspace, carrier.variant_id)" in source
+    assert "async focusVariantInWorkspace(workspace, variantId)" in source
+    assert 'new URLSearchParams({limit: "1", variant_id: String(variantId)})' in source
+    assert "workspace.items = [item, ...workspace.items.filter" in source
+    assert 'node("span", "●", "selected-variant-marker")' in source
+    assert 'row.setAttribute("aria-current", "true")' in source
+    assert "`${carrier.history_id}:${carrier.sample_id}`" in source
+    assert "`${workspace.runId}:${carrier.sample_id}`" in source
     assert "/carriers`" in source
+    assert ".variant-row.selected {" in stylesheet
+    assert "inset 4px 0 #176b86" in stylesheet
+    assert ".selected-variant-marker" in stylesheet
+
+
+def test_damage_predictions_cover_pipeline_predictors_and_splicing_plugins():
+    source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
+
+    for predictor in (
+        "SIFT", "POLYPHEN", "LRT", "MUTATIONTASTER", "MUTATIONASSESSOR",
+        "FATHMM", "PROVEAN", "VEST4", "METASVM", "METALR", "M[-_]?CAP",
+        "REVEL", "MUTPRED", "MVP", "MPC", "PRIMATEAI", "DEOGEN2", "ALOFT",
+        "CADD", "DANN", "EIGEN", "GENOCANYON", "LINSIGHT", "FITCONS",
+        "SPLICEAI", "GENESPLICER", "MAXENTSCAN", "SPLICEREGION",
+        "GERP", "PHYLOP", "PHASTCONS", "SIPHY", "BSTATISTIC",
+    ):
+        assert predictor in source
+    assert "this.annotationMetadataFields(" in source
+    assert "[proteinImpact, generalImpact, splicing, conservation]" in source
 
 
 def test_viewer_can_create_one_archived_run_from_multiple_vcfs():

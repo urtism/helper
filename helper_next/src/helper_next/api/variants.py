@@ -1,10 +1,12 @@
 """API for creating and inspecting run-local variant indexes."""
 import logging
+import re
 import sqlite3
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from helper_next.api.samplesheet import consume_picker_selection
@@ -12,15 +14,24 @@ from helper_next.core import analysis_history as history
 from helper_next.core.variant_import import ArchivedRunImportError, create_archived_run
 from helper_variants import clinvar
 from helper_variants import gene_phenotype
+from helper_variants import gnomad_frequency
 from helper_variants import indexer as variant_indexer
+from helper_variants import igv
+from helper_variants import liftover
 from helper_variants import panelapp
 from helper_variants import query as variant_query
 from helper_variants import secondary_findings
+from helper_variants import source_registry
 
 
 router = APIRouter(prefix="/api/variants", tags=["variants"])
 _active = set()
 _active_lock = threading.Lock()
+
+
+@router.get("/knowledge/sources")
+def knowledge_sources():
+    return source_registry.catalog()
 
 
 @router.get("/knowledge/panelapp/panels")
@@ -319,26 +330,180 @@ def variant_run_tools(identifier: str):
     }
 
 
+@router.get("/runs/{identifier}/samples/{sample_id}/igv-manifest")
+def sample_igv_manifest(identifier: str, sample_id: int):
+    entry = _entry(identifier)
+    sample = _igv_sample(entry, sample_id)
+    try:
+        payload, _ = igv.manifest(entry["record"], sample)
+    except igv.IgvResourceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    resource_base = (
+        f"{router.prefix}/runs/{identifier}/samples/{sample_id}/igv-files"
+    )
+    reference = dict(payload["reference"])
+    if reference.get("local"):
+        reference["fasta_url"] = f"{resource_base}/reference"
+        reference["index_url"] = f"{resource_base}/reference-index"
+        if reference.get("compressed_index_resource"):
+            reference["compressed_index_url"] = f"{resource_base}/reference-compressed-index"
+    tracks = []
+    for track in payload["tracks"]:
+        public_track = dict(track)
+        if track.get("resource"):
+            public_track["url"] = f"{resource_base}/{track['resource']}"
+        elif track.get("url_template") == "gnomad-region":
+            public_track["url"] = (
+                f"{router.prefix}/runs/{identifier}/samples/{sample_id}/igv-gnomad"
+                "?chr=$CHR&start=$START&end=$END"
+            )
+        if track.get("index_resource"):
+            public_track["index_url"] = f"{resource_base}/{track['index_resource']}"
+        tracks.append(public_track)
+    return {**payload, "reference": reference, "tracks": tracks}
+
+
+@router.api_route(
+    "/runs/{identifier}/samples/{sample_id}/igv-files/{kind}", methods=["GET", "HEAD"]
+)
+def sample_igv_file(identifier: str, sample_id: int, kind: str, request: Request):
+    entry = _entry(identifier)
+    sample = _igv_sample(entry, sample_id)
+    try:
+        path = igv.resource(entry["record"], sample, kind)
+    except igv.IgvResourceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _range_response(path, request, kind)
+
+
+@router.get("/runs/{identifier}/samples/{sample_id}/igv-gnomad")
+def sample_igv_gnomad_region(
+    identifier: str, sample_id: int, chr: str,
+    start: int = Query(ge=0), end: int = Query(ge=1),
+):
+    entry = _entry(identifier)
+    sample = _igv_sample(entry, sample_id)
+    if end <= start or end - start > 100_000:
+        raise HTTPException(status_code=422, detail="gnomAD track windows must span 1-100000 bases")
+    try:
+        payload, _ = igv.manifest(entry["record"], sample)
+        return gnomad_frequency.region_variants(
+            payload["reference_build"], chr, start + 1, end,
+        )
+    except (gnomad_frequency.GnomadFrequencyError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _igv_sample(entry, sample_id):
+    try:
+        samples = variant_query.list_samples(_entry_database(entry))
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    sample = next((item for item in samples if item["sample_id"] == int(sample_id)), None)
+    if sample is None:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    return sample
+
+
+def _range_response(path, request, kind):
+    size = path.stat().st_size
+    range_header = request.headers.get("range", "")
+    lowered = path.name.lower()
+    if lowered.endswith((".vcf", ".bed", ".fai")):
+        content_type = "text/plain; charset=utf-8"
+    elif lowered.endswith(".gz"):
+        content_type = "application/gzip"
+    else:
+        content_type = "application/octet-stream"
+    headers = {
+        "Accept-Ranges": "bytes", "Content-Length": str(size),
+        "ETag": f'"{path.stat().st_mtime_ns:x}-{size:x}"',
+        "Cache-Control": "private, max-age=0, must-revalidate",
+    }
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type=content_type, headers=headers)
+    if not range_header:
+        return StreamingResponse(
+            _file_chunks(path, 0, max(0, size - 1)), media_type=content_type, headers=headers
+        )
+    try:
+        start, end = _parse_byte_range(range_header, size)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=416, detail=str(exc), headers={"Content-Range": f"bytes */{size}"}
+        ) from exc
+    headers.update({
+        "Content-Range": f"bytes {start}-{end}/{size}",
+        "Content-Length": str(end - start + 1),
+    })
+    return StreamingResponse(
+        _file_chunks(path, start, end), status_code=206, media_type=content_type, headers=headers
+    )
+
+
+def _parse_byte_range(header, size):
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", str(header).strip())
+    if not match or size <= 0:
+        raise ValueError("Invalid byte range")
+    first, last = match.groups()
+    if not first and not last:
+        raise ValueError("Invalid byte range")
+    if first:
+        start = int(first)
+        end = int(last) if last else size - 1
+    else:
+        length = int(last)
+        if length <= 0:
+            raise ValueError("Invalid byte range")
+        start, end = max(0, size - length), size - 1
+    if start >= size or start < 0 or end < start:
+        raise ValueError("Requested byte range is outside the resource")
+    return start, min(end, size - 1)
+
+
+def _file_chunks(path, start, end, chunk_size=1024 * 1024):
+    remaining = end - start + 1
+    with path.open("rb") as handle:
+        handle.seek(start)
+        while remaining > 0:
+            chunk = handle.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
 @router.get("/runs/{identifier}/samples/{sample_id}/variants")
 def sample_variants(identifier: str, sample_id: int, cursor: str = "",
                     limit: int = Query(100, ge=1, le=500),
-                    gene: str = "", genes: str = "", max_af: float | None = None,
+                    gene: str = "", variant_id: int | None = None,
+                    genes: str = "", max_af: float | None = None,
                     population_frequency: str = "MAX_AF", include_missing_af: bool = True,
                     consequences: str = "",
                     clinical_significances: str = "", inheritance_candidates: str = "",
+                    family_evidence: str = "", family_pattern: str = "",
+                    priority_classes: str = "", min_priority: float | None = None,
+                    max_priority: float | None = None,
                     filter_mode: str = "all", filter_statuses: str = "", zygosities: str = "",
                     min_depth: float | None = None, min_vaf: float | None = None,
-                    min_quality: float | None = None, possible_compound: bool = False):
+                    min_quality: float | None = None, possible_compound: bool = False,
+                    sort_by: str = "priority", sort_direction: str = ""):
     entry = _entry(identifier)
     try:
         result = variant_query.list_variants(
             _entry_database(entry), sample_id, cursor=cursor or None, limit=limit, gene=gene,
+            variant_id=variant_id,
             genes=genes, max_af=max_af, population_frequency=population_frequency,
             include_missing_af=include_missing_af,
             consequences=consequences, clinical_significances=clinical_significances,
-            inheritance_candidates=inheritance_candidates, filter_mode=filter_mode,
+            inheritance_candidates=inheritance_candidates, family_evidence=family_evidence,
+            family_pattern=family_pattern,
+            priority_classes=priority_classes, min_priority=min_priority,
+            max_priority=max_priority,
+            filter_mode=filter_mode,
             filter_statuses=filter_statuses, zygosities=zygosities, min_depth=min_depth,
             min_vaf=min_vaf, min_quality=min_quality, possible_compound=possible_compound,
+            sort_by=sort_by, sort_direction=sort_direction,
         )
     except variant_query.VariantQueryError as exc:
         raise HTTPException(status_code=404 if "sample not found" in str(exc) else 400, detail=str(exc))
@@ -385,7 +550,61 @@ def sample_variant_detail(identifier: str, sample_id: int, variant_id: int):
             detail["clinvar_evidence"] = clinvar.merge_evidence(evidence, retrieved)
         except clinvar.ClinVarError:
             detail["clinvar_evidence"] = dict(evidence, retrieval_status="unavailable")
+    _include_clinvar_identifiers(detail)
     return detail
+
+
+def _include_clinvar_identifiers(detail):
+    """Expose exact ClinVar Variation/VCV identifiers in the common identifier block."""
+    database_ids = detail.setdefault("database_ids", {})
+    existing = list(database_ids.get("clinvar") or [])
+    evidence = detail.get("clinvar_evidence") or {}
+    candidates = existing + list(evidence.get("identifiers") or [])
+    seen = set()
+    identifiers = []
+    for candidate in candidates:
+        identifier = str(candidate or "").strip()
+        folded = identifier.casefold()
+        if not identifier or folded in seen:
+            continue
+        seen.add(folded)
+        identifiers.append(identifier)
+    database_ids["clinvar"] = identifiers
+
+
+@router.get("/runs/{identifier}/samples/{sample_id}/variants/{variant_id}/liftover")
+def sample_variant_liftover(identifier: str, sample_id: int, variant_id: int):
+    entry = _entry(identifier)
+    try:
+        detail = variant_query.variant_detail(_entry_database(entry), sample_id, variant_id)
+    except variant_query.VariantQueryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Variant not found for this sample")
+    return liftover.project_variant(
+        detail["reference_build"], detail["chromosome"], detail["position"],
+        detail["reference"], detail["alternate"],
+    )
+
+
+@router.get("/runs/{identifier}/samples/{sample_id}/variants/{variant_id}/gnomad-frequency")
+def sample_variant_gnomad_frequency(identifier: str, sample_id: int, variant_id: int):
+    """Retrieve assembly-matched, allele-specific gnomAD genome frequency evidence."""
+    entry = _entry(identifier)
+    try:
+        detail = variant_query.variant_detail(_entry_database(entry), sample_id, variant_id)
+    except variant_query.VariantQueryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Variant not found for this sample")
+    return gnomad_frequency.lookup_variant(
+        detail["reference_build"], detail["chromosome"], detail["position"],
+        detail["reference"], detail["alternate"],
+    )
 
 
 @router.get("/runs/{identifier}/samples/{sample_id}/variants/{variant_id}/carriers")

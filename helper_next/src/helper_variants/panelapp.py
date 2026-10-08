@@ -58,6 +58,32 @@ def list_panels():
     }
 
 
+def cache_status(database=None):
+    """Describe the local catalogue without contacting PanelApp."""
+    database = Path(database or cache_path())
+    payload = _read_json_file(database)
+    panels = payload.get("panels") if isinstance(payload.get("panels"), list) else []
+    synced_at = str(payload.get("synced_at") or "")
+    latest_panel_update = max(
+        (str(panel.get("version_created") or "") for panel in panels), default=""
+    )
+    stale = True
+    try:
+        synchronized = datetime.fromisoformat(synced_at.replace("Z", "+00:00"))
+        stale = (datetime.now(timezone.utc) - synchronized).total_seconds() > CACHE_SECONDS
+    except (TypeError, ValueError):
+        pass
+    return {
+        "status": "ready" if panels else "missing",
+        "database": str(database),
+        "schema_version": str(payload.get("schema_version") or ""),
+        "synced_at": synced_at,
+        "latest_panel_update": latest_panel_update,
+        "panel_count": len(panels),
+        "stale": stale,
+    }
+
+
 def sync_panels():
     with _cache_lock:
         panels = _fetch_catalog()

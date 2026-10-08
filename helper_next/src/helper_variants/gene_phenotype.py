@@ -472,11 +472,15 @@ def refresh_gnomad_constraint(gene_symbol, database=None, timeout=30):
     with _open_request(request, timeout) as response:
         document = json.load(response)
     if document.get("errors"):
-        message = "; ".join(
+        messages = [
             str(error.get("message", error)) for error in document["errors"]
-        )
-        raise RuntimeError(f"gnomAD GraphQL error: {message}")
-    gene = (document.get("data") or {}).get("gene") or {}
+        ]
+        if any(_gnomad_gene_not_found(message) for message in messages):
+            gene = {}
+        else:
+            raise RuntimeError(f"gnomAD GraphQL error: {'; '.join(messages)}")
+    else:
+        gene = (document.get("data") or {}).get("gene") or {}
     constraint = gene.get("gnomad_constraint") or {}
     available = bool(gene and constraint)
     gene_id = str(gene.get("gene_id") or "")
@@ -502,6 +506,11 @@ def refresh_gnomad_constraint(gene_symbol, database=None, timeout=30):
         connection.execute(_INSERT_GNOMAD_CONSTRAINT, values)
         connection.commit()
     return available
+
+
+def _gnomad_gene_not_found(message):
+    normalized = " ".join(str(message or "").casefold().split())
+    return "gene not found" in normalized or "could not find gene" in normalized
 
 
 def _number_or_none(value):
@@ -900,6 +909,85 @@ def query_gene(gene_symbol, hgnc_id="", database=None):
         "dosage_sensitivity": dosage_sensitivity,
         "cache": status,
     }
+
+
+def priority_contexts(gene_symbols, database=None):
+    """Return compact gene-level context for the prioritization engine.
+
+    This deliberately exposes uncertainty: without a disease selected by the
+    reviewer, records spanning multiple diseases are marked as ambiguous.
+    """
+    requested = sorted({
+        str(symbol or "").strip().upper() for symbol in gene_symbols
+        if str(symbol or "").strip()
+    })
+    if not requested:
+        return {}
+    database = Path(database or cache_path())
+    if cache_status(database)["status"] != "ready":
+        return {}
+    with sqlite3.connect(str(database)) as connection:
+        connection.row_factory = sqlite3.Row
+        g2p_rows = []
+        assertion_rows = []
+        for offset in range(0, len(requested), 500):
+            batch = requested[offset:offset + 500]
+            placeholders = ",".join("?" for _ in batch)
+            g2p_rows.extend(connection.execute(
+                "SELECT gene_symbol, disease_curie, allelic_requirement, confidence, mechanism "
+                "FROM g2p_records WHERE gene_symbol COLLATE NOCASE IN ({})".format(placeholders),
+                batch,
+            ).fetchall())
+            assertion_rows.extend(connection.execute(
+                "SELECT gene_symbol, disease_curie, classification_title, moi_title "
+                "FROM assertions WHERE gene_symbol COLLATE NOCASE IN ({})".format(placeholders),
+                batch,
+            ).fetchall())
+
+    contexts = {}
+
+    def context(symbol):
+        return contexts.setdefault(str(symbol).upper(), {
+            "disease_mechanisms": set(), "mechanism_confidence": set(),
+            "inheritance_modes": set(), "disease_contexts": set(),
+            "sources": set(),
+        })
+
+    for row in g2p_rows:
+        confidence = str(row["confidence"] or "").strip().casefold()
+        if confidence not in _G2P_ACCEPTED_CONFIDENCE:
+            continue
+        item = context(row["gene_symbol"])
+        mechanism = _normalize_mechanism(row["mechanism"])
+        if mechanism != "unknown":
+            item["disease_mechanisms"].add(mechanism)
+            item["mechanism_confidence"].add(confidence)
+        if row["allelic_requirement"]:
+            item["inheritance_modes"].add(row["allelic_requirement"])
+        if row["disease_curie"]:
+            item["disease_contexts"].add(row["disease_curie"])
+        item["sources"].add("Gene2Phenotype")
+    for row in assertion_rows:
+        classification = str(row["classification_title"] or "").strip().casefold()
+        if _CLASSIFICATION_RANK.get(classification, 99) > 2:
+            continue
+        item = context(row["gene_symbol"])
+        if row["moi_title"]:
+            item["inheritance_modes"].add(row["moi_title"])
+        if row["disease_curie"]:
+            item["disease_contexts"].add(row["disease_curie"])
+        item["sources"].add("GenCC")
+
+    result = {}
+    for symbol, item in contexts.items():
+        result[symbol] = {
+            "disease_mechanisms": sorted(item["disease_mechanisms"]),
+            "mechanism_confidence": sorted(item["mechanism_confidence"]),
+            "inheritance_modes": sorted(item["inheritance_modes"]),
+            "gene_context_ambiguous": len(item["disease_contexts"]) > 1,
+            "gene_context_sources": sorted(item["sources"]),
+        }
+    return result
 
 
 def _query_gnomad_constraint(connection, gene_symbol):

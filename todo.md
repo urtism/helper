@@ -24,8 +24,11 @@ Regola di lavoro:
 
 ### Dopo la stabilizzazione E2E
 
+- Estendere IGV con confronto multi-campione per trio e tumor-normal.
+- Integrare in IGV tracce locali per CNV/SV e annotazioni geniche quando prodotte dalla pipeline.
 - Esportare un file PED dai campi `sample_name`, `father`, `mother`, `sex` e `affected`, includendo gli individui non sequenziati referenziati come genitori.
 - Implementare analisi downstream di segregazione, ereditarieta e prioritizzazione de novo usando i gruppi family.
+- Implementare un sistema di prioritizzazione data-driven affiancato al motore decisionale attuale: costruire dataset di training e validazione versionati, prevenire leakage tra varianti/gene/famiglie, integrare MAF e copertura, conseguenza coerente con il meccanismo di malattia, ClinVar, predittori di danno e splicing, ereditarieta e compound heterozygosity; produrre probabilita calibrate, spiegazioni per variante, confronto con il baseline a regole e monitoraggio delle prestazioni per release e sottogruppo clinico.
 - Rendere esplicita la configurazione somatica per germline resource, panel of normals, contaminazione e orientation-bias filtering.
 - Implementare i moduli ancora mancanti: adapter trimming, FASTQ filtering, BAM filtering e UMI merging.
 - Implementare nel DAG Nextflow i quattro tipi di Variant Calling esposti dalla UI: Short variants, CNV, SV e metilazione, con canali di input/output, validazione, log e status dedicati per ciascun ramo.
@@ -34,7 +37,12 @@ Regola di lavoro:
 
 ## In Corso
 
-- Nessuna attivita in corso.
+### Catalogo tracce IGV
+
+- Aggiungere un menu compatto per mostrare o nascondere trascritti, target, varianti del campione, ClinVar, gnomAD e regioni difficili GIAB.
+- Aggiungere una vista dedicata alle split reads con soft clipping e allineamenti supplementari evidenziati.
+- Rendere le tracce compatibili con hg19/GRCh37 e hg38/GRCh38, con stato di disponibilita e sorgente espliciti.
+- Verificare caricamento, rimozione, persistenza della selezione e comportamento responsive.
 
 ## Bloccate
 

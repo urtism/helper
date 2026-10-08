@@ -1,11 +1,14 @@
 const ROW_HEIGHT = 36;
 const PAGE_SIZE = 200;
 const OVERSCAN = 8;
-const STYLESHEET_URL = new URL("./variant-browser.css?v=20261006-38", import.meta.url).href;
-const COLUMN_STORAGE_KEY = "helper-variant-column-order-v6";
-const COLUMN_WIDTH_STORAGE_KEY = "helper-variant-column-widths-v4";
+const STYLESHEET_URL = new URL("./variant-browser.css?v=20261008-20", import.meta.url).href;
+const IGV_THEME_URL = new URL("./igv-theme.css?v=20261008-2", import.meta.url).href;
+const IGV_MODULE_URL = "https://cdn.jsdelivr.net/npm/igv@3.8.5/dist/igv.esm.min.js";
+const COLUMN_STORAGE_KEY = "helper-variant-column-order-v7";
+const COLUMN_WIDTH_STORAGE_KEY = "helper-variant-column-widths-v5";
 const VARIANT_COLUMNS = [
   {key: "filter_alert", label: "", width: 34},
+  {key: "priority", label: "Priority", width: 88},
   {key: "genotypes", label: "GT", width: 85},
   {key: "gene", label: "Gene", width: 110},
   {key: "hgvsc", label: "HGVSc", width: 160},
@@ -19,6 +22,13 @@ const VARIANT_COLUMNS = [
   {key: "transcript", label: "Transcript", width: 150},
 ];
 const VARIANT_COLUMNS_BY_KEY = new Map(VARIANT_COLUMNS.map(column => [column.key, column]));
+const SORTABLE_VARIANT_COLUMNS = new Map([
+  ["priority", {firstDirection: "desc", description: "by review priority; highest score first"}],
+  ["gene", {firstDirection: "asc", description: "alphabetically"}],
+  ["population_af", {firstDirection: "asc", description: "by AF_max; missing AF is the lowest value"}],
+  ["clinical_significance", {firstDirection: "desc", description: "by clinical priority; Pathogenic is highest"}],
+  ["consequence", {firstDirection: "asc", description: "alphabetically"}],
+]);
 const FORMAT_FIELD_LABELS = {
   PS: "Phase set (PS)", PID: "Phase ID (PID)", PGT: "Phased genotype (PGT)",
   FT: "Sample filter (FT)", MIN_DP: "Minimum depth (MIN_DP)",
@@ -73,6 +83,7 @@ class VariantBrowser extends HTMLElement {
     this.columnWidths = this.loadColumnWidths();
     this.draggedColumn = null;
     this.activePickerId = null;
+    this.igvLibrary = null;
     this.messageHandler = event => this.handleArchivedRunFiles(event);
   }
 
@@ -138,10 +149,14 @@ class VariantBrowser extends HTMLElement {
     this.visibilityObserver?.disconnect();
     for (const workspace of this.workspaces.values()) {
       workspace.pageController?.abort();
+      workspace.focusVariantController?.abort();
       workspace.detailController?.abort();
+      workspace.liftoverController?.abort();
+      workspace.gnomadFrequencyController?.abort();
       workspace.carrierController?.abort();
       workspace.genePhenotypeController?.abort();
       window.clearTimeout(workspace.genePhenotypeTimer);
+      this.removeIgvBrowser(workspace);
     }
   }
 
@@ -149,7 +164,7 @@ class VariantBrowser extends HTMLElement {
     if (this.activated) return;
     this.activated = true;
     this.visibilityObserver?.disconnect();
-    this.refreshRuns(false);
+    this.refreshRuns(true);
   }
 
   async request(path, options) {
@@ -164,6 +179,131 @@ class VariantBrowser extends HTMLElement {
     const status = this.shadowRoot.querySelector("#status");
     status.textContent = message || "";
     status.classList.toggle("error", error);
+  }
+
+  openSourceRegistryPanel() {
+    const layer = this.shadowRoot.querySelector("#dialog-layer");
+    const opener = document.activeElement;
+    const backdrop = node("div", undefined, "dialog-backdrop");
+    const dialog = node("section", undefined, "source-registry-dialog");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "source-registry-dialog-title");
+    const heading = node("div", undefined, "dialog-heading");
+    const headingText = node("div");
+    const title = node("h4", "Evidence source registry");
+    title.id = "source-registry-dialog-title";
+    headingText.append(
+      title,
+      node("p", "Releases and local snapshots currently used for variant interpretation. Source dates and local snapshot dates are kept separate."),
+    );
+    const close = node("button", "×", "dialog-close");
+    close.setAttribute("aria-label", "Close evidence source registry");
+    heading.append(headingText, close);
+    const summary = node("p", "Loading source registry…", "source-registry-dialog-summary");
+    const body = node("div", undefined, "source-registry-body");
+    const list = node("div", undefined, "source-registry-list");
+    list.setAttribute("aria-live", "polite");
+    body.append(list);
+    dialog.append(heading, summary, body);
+    backdrop.append(dialog);
+    const closeDialog = () => {
+      document.removeEventListener("keydown", onKeydown);
+      layer.replaceChildren();
+      opener?.focus?.();
+    };
+    const onKeydown = event => {
+      if (event.key === "Escape") closeDialog();
+    };
+    close.addEventListener("click", closeDialog);
+    backdrop.addEventListener("click", event => {
+      if (event.target === backdrop) closeDialog();
+    });
+    document.addEventListener("keydown", onKeydown);
+    layer.replaceChildren(backdrop);
+    close.focus();
+    this.loadSourceRegistry(summary, list);
+  }
+
+  async loadSourceRegistry(summary, list) {
+    try {
+      const payload = await this.request("/knowledge/sources");
+      const sources = payload.sources || [];
+      const counts = payload.summary || {};
+      const stateParts = [
+        [counts.synchronized, "synchronized"], [counts.on_demand, "on demand"],
+        [counts.bundled, "bundled"], [counts.stale, "stale"],
+        [counts.unavailable, "unavailable"],
+      ].filter(([count]) => Number(count) > 0).map(([count, label]) => `${count} ${label}`);
+      summary.textContent = stateParts.join(" · ") || `${sources.length} sources`;
+      const header = node("div", undefined, "source-registry-row source-registry-header");
+      ["Source", "Use", "Release / version", "Source updated", "Local snapshot", "State"].forEach(label => {
+        header.append(node("span", label));
+      });
+      const rows = sources.map(source => this.sourceRegistryRow(source));
+      list.replaceChildren(...(rows.length ? [header, ...rows] : [node("p", "No evidence sources are registered.", "empty")]));
+    } catch (error) {
+      summary.textContent = "Unavailable";
+      list.replaceChildren(node("p", error.message || "The source registry could not be loaded.", "inline-error"));
+    }
+  }
+
+  sourceRegistryRow(source) {
+    const row = node("div", undefined, "source-registry-row");
+    const sourceCell = node("div", undefined, "source-registry-source");
+    const sourceLink = node("a", source.name || source.id);
+    sourceLink.href = source.source_url || "#";
+    sourceLink.target = "_blank";
+    sourceLink.rel = "noopener noreferrer";
+    sourceCell.append(sourceLink);
+    if (source.record_count) {
+      sourceCell.append(node("small", `${Number(source.record_count).toLocaleString()} records`));
+    }
+    const release = node("div", undefined, "source-registry-release");
+    release.append(node("strong", value(source.release)));
+    if (source.note) release.append(node("small", source.note));
+    const statusLabel = this.sourceRegistryStatusLabel(source.status);
+    const statusDescription = this.sourceRegistryStatusDescription(source.status);
+    const status = node("span", statusLabel, `source-registry-status ${source.status || "unavailable"}`);
+    status.title = statusDescription;
+    status.tabIndex = 0;
+    status.setAttribute("aria-label", `${statusLabel}: ${statusDescription}`);
+    row.append(
+      sourceCell,
+      node("span", value(source.role)),
+      release,
+      node("time", this.sourceRegistryDate(source.data_updated_at, "Not captured")),
+      node("time", this.sourceRegistryDate(source.synchronized_at, source.status === "bundled" ? "Bundled" : "Not cached")),
+      status,
+    );
+    return row;
+  }
+
+  sourceRegistryDate(raw, fallback) {
+    if (!raw) return fallback;
+    if (/^\d{4}$/.test(String(raw))) return String(raw);
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return String(raw);
+    const hasTime = String(raw).includes("T") || String(raw).includes(":");
+    return new Intl.DateTimeFormat(undefined, hasTime
+      ? {dateStyle: "medium", timeStyle: "short"} : {dateStyle: "medium"}).format(parsed);
+  }
+
+  sourceRegistryStatusLabel(status) {
+    return ({
+      synchronized: "Synchronized", on_demand: "On demand", bundled: "Bundled",
+      stale: "Update due", unavailable: "Unavailable",
+    })[status] || value(status, "Unavailable");
+  }
+
+  sourceRegistryStatusDescription(status) {
+    return ({
+      synchronized: "A local snapshot is available and is still within its expected refresh interval. It is not a real-time connection to the source.",
+      on_demand: "Data are retrieved only when the related variant or gene is requested, then retained in a temporary local cache.",
+      bundled: "This versioned dataset is included with the application and does not require a remote synchronization.",
+      stale: "A local snapshot is available, but it has exceeded its expected refresh interval and should be updated.",
+      unavailable: "No valid local snapshot is currently available, so evidence from this source may be missing.",
+    })[status] || "Source status is not defined.";
   }
 
   async refreshRuns(restore = false) {
@@ -484,8 +624,9 @@ class VariantBrowser extends HTMLElement {
     if (!this.workspaces.has(key)) {
       this.workspaces.set(key, {
         key, runId: this.selectedRun, sample, items: [], cursor: null,
-        initialized: false, loading: false, error: "", detail: null,
+        initialized: false, loading: false, error: "", detail: null, priorityExplanation: null,
         scrollTop: 0, scrollLeft: 0, filters: this.emptyFilters(), filtersOpen: false,
+        sort: {key: "priority", direction: "desc"},
         filterOptions: null, filterOptionsLoading: false, panelAppSources: [],
         panelAppDraftSources: null, panelAppDraftGenes: null,
       });
@@ -506,7 +647,9 @@ class VariantBrowser extends HTMLElement {
       this.workspaces.set(key, {
         key, runId: sourceWorkspace.runId, sample: sourceWorkspace.sample, gene: normalizedGene,
         items: [], cursor: null, initialized: false, loading: false, error: "", detail: null,
+        priorityExplanation: null,
         scrollTop: 0, scrollLeft: 0, filters: this.emptyFilters(), filtersOpen: false,
+        sort: {key: "priority", direction: "desc"},
         filterOptions: null, filterOptionsLoading: false, panelAppSources: [],
         panelAppDraftSources: null, panelAppDraftGenes: null,
       });
@@ -522,10 +665,14 @@ class VariantBrowser extends HTMLElement {
   closeWorkspace(key) {
     const workspace = this.workspaces.get(key);
     workspace?.pageController?.abort();
+    workspace?.focusVariantController?.abort();
     workspace?.detailController?.abort();
+    workspace?.liftoverController?.abort();
+    workspace?.gnomadFrequencyController?.abort();
     workspace?.carrierController?.abort();
     workspace?.genePhenotypeController?.abort();
     window.clearTimeout(workspace?.genePhenotypeTimer);
+    this.removeIgvBrowser(workspace);
     this.workspaces.delete(key);
     if (this.activeWorkspace === key) {
       const sameRun = Array.from(this.workspaces.values()).filter(item => item.runId === this.selectedRun);
@@ -543,14 +690,19 @@ class VariantBrowser extends HTMLElement {
       .filter(workspace => workspace.runId === this.selectedRun)
       .map(workspace => {
         const wrapper = node("div", undefined, `workspace-tab${workspace.key === this.activeWorkspace ? " active" : ""}`);
-        const tabLabel = workspace.gene
-          ? `${workspace.gene} · ${workspace.sample.display_name}` : workspace.sample.display_name;
+        const tabLabel = workspace.kind === "igv"
+          ? `IGV · ${workspace.sample.display_name}`
+          : (workspace.gene
+            ? `${workspace.gene} · ${workspace.sample.display_name}` : workspace.sample.display_name);
         const select = node("button", tabLabel);
         select.addEventListener("click", () => {
           this.activeWorkspace = workspace.key;
           this.renderTabs();
           this.renderWorkspace();
-          this.setRoute(workspace.runId, workspace.sample.sample_id);
+          this.setRoute(
+            workspace.runId, workspace.sample.sample_id,
+            workspace.kind === "igv" ? {view: "igv", variantId: workspace.variant?.variant_id} : {},
+          );
         });
         const close = node("button", "×", "close-tab");
         close.setAttribute("aria-label", `Close ${tabLabel}`);
@@ -579,18 +731,27 @@ class VariantBrowser extends HTMLElement {
     if (filters.consequences.length) params.set("consequences", filters.consequences.join(","));
     if (filters.clinicalSignificances.length) params.set("clinical_significances", filters.clinicalSignificances.join(","));
     if (filters.inheritanceCandidates.length) params.set("inheritance_candidates", filters.inheritanceCandidates.join(","));
+    if (filters.familyEvidence.length) params.set("family_evidence", filters.familyEvidence.join(","));
+    if ((filters.familyPattern || []).length) params.set("family_pattern", filters.familyPattern.join(","));
+    if (filters.priorityClasses.length) params.set("priority_classes", filters.priorityClasses.join(","));
+    if (filters.minPriority !== "") params.set("min_priority", filters.minPriority);
+    if (filters.maxPriority !== "") params.set("max_priority", filters.maxPriority);
     if (filters.filterMode !== "all") params.set("filter_mode", filters.filterMode);
     if (filters.filterStatuses.length) params.set("filter_statuses", filters.filterStatuses.join(","));
-    if (filters.zygosities.length) params.set("zygosities", filters.zygosities.join(","));
     if (filters.minDepth !== "") params.set("min_depth", filters.minDepth);
     if (filters.minVaf !== "") params.set("min_vaf", filters.minVaf);
     if (filters.minQuality !== "") params.set("min_quality", filters.minQuality);
+    if (workspace.sort?.key) {
+      params.set("sort_by", workspace.sort.key);
+      params.set("sort_direction", workspace.sort.direction);
+    }
     try {
       const payload = await this.request(
         `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants?${params}`,
         {signal: workspace.pageController.signal},
       );
-      workspace.items.push(...(payload.items || []));
+      const knownVariantIds = new Set(workspace.items.map(item => item.variant_id));
+      workspace.items.push(...(payload.items || []).filter(item => !knownVariantIds.has(item.variant_id)));
       workspace.cursor = payload.next_cursor;
       workspace.initialized = true;
     } catch (error) {
@@ -604,8 +765,10 @@ class VariantBrowser extends HTMLElement {
   emptyFilters() {
     return {
       genes: [], maxAf: "", populationFrequency: "MAX_AF", includeMissingAf: true, consequences: [],
-      clinicalSignificances: [], inheritanceCandidates: [],
-      filterMode: "all", filterStatuses: [], zygosities: [],
+      clinicalSignificances: [], inheritanceCandidates: [], familyEvidence: [],
+      familyPattern: [],
+      priorityClasses: [], minPriority: "", maxPriority: "",
+      filterMode: "all", filterStatuses: [],
       minDepth: "", minVaf: "", minQuality: "",
     };
   }
@@ -614,7 +777,9 @@ class VariantBrowser extends HTMLElement {
     const filters = workspace.filters || this.emptyFilters();
     return [filters.genes.length, filters.maxAf !== "", filters.consequences.length,
       filters.clinicalSignificances.length, filters.inheritanceCandidates.length,
-      filters.filterMode !== "all", filters.zygosities.length, filters.minDepth !== "",
+      filters.familyEvidence.length, (filters.familyPattern || []).length, filters.priorityClasses.length,
+      filters.minPriority !== "" || filters.maxPriority !== "",
+      filters.filterMode !== "all", filters.minDepth !== "",
       filters.minVaf !== "", filters.minQuality !== ""].filter(Boolean).length;
   }
 
@@ -649,9 +814,15 @@ class VariantBrowser extends HTMLElement {
         het: "Heterozygous", hom_alt: "Homozygous alternate", unknown: "Unknown",
         compound: "Possible compound het", recessive: "Recessive (hom-alt)",
         dominant: "Dominant (het)", x_linked: "X-linked", y_linked: "Y-linked",
+        mitochondrial: "Maternal (mitochondrial)",
+        de_novo: "De novo (absent in both parents)",
+        father_only: "Present only in father", mother_only: "Present only in mother",
+        both_parents: "Present in both parents",
+        parental_compound: "Parental compound (one variant per parent)",
         pathogenic: "Pathogenic", likely_pathogenic: "Likely pathogenic",
         uncertain_significance: "VUS", likely_benign: "Likely benign", benign: "Benign",
         __not_reported__: "Not reported",
+        P1: "P1 · 75–100", P2: "P2 · 50–74", P3: "P3 · 25–49", P4: "P4 · 0–24",
       };
       label.append(input, document.createTextNode(displayLabels[option] || option.replaceAll("_", " ")));
       choices.append(label);
@@ -660,11 +831,139 @@ class VariantBrowser extends HTMLElement {
     return field;
   }
 
+  familyMembers(workspace) {
+    const current = workspace.sample;
+    const metadata = current.metadata || {};
+    const familyId = String(metadata.analysis_id || "").trim().toLowerCase();
+    const expectedParents = new Set(
+      [metadata.father, metadata.mother].map(item => String(item || "").trim().toLowerCase()).filter(Boolean),
+    );
+    const members = this.samples.filter(sample => {
+      if (sample.sample_id === current.sample_id) return true;
+      const candidate = sample.metadata || {};
+      const candidateFamily = String(candidate.analysis_id || "").trim().toLowerCase();
+      const identifiers = [
+        sample.display_name, candidate.sample_name, candidate.individual_id,
+      ].map(item => String(item || "").trim().toLowerCase());
+      return (familyId && candidateFamily === familyId)
+        || identifiers.some(identifier => expectedParents.has(identifier));
+    }).map(sample => {
+      const candidate = sample.metadata || {};
+      const relationship = String(
+        candidate.relationship || sample.role
+        || (sample.sample_id === current.sample_id ? "proband" : "relative"),
+      ).trim().toLowerCase();
+      return {
+        ...sample, relationship,
+        sex: String(candidate.sex || "unknown").trim().toLowerCase(),
+        affected: ["affected", "yes", "true", "1"].includes(
+          String(candidate.affected || "").trim().toLowerCase(),
+        ),
+      };
+    });
+    const order = {father: 0, mother: 1, proband: 2, sibling: 3, brother: 3, sister: 3};
+    return members.sort((left, right) => (
+      (order[left.relationship] ?? 10) - (order[right.relationship] ?? 10)
+      || String(left.display_name).localeCompare(String(right.display_name))
+    ));
+  }
+
+  isFamilyAnalysis(workspace) {
+    const metadata = workspace.sample?.metadata || {};
+    const analysisType = String(metadata.analysis_type || "").trim().toLowerCase();
+    if (analysisType) return analysisType === "family";
+    return Boolean(
+      metadata.father || metadata.mother
+      || ["proband", "father", "mother", "sibling", "brother", "sister"].includes(
+        String(metadata.relationship || workspace.sample?.role || "").trim().toLowerCase(),
+      )
+      || this.familyMembers(workspace).length > 1
+    );
+  }
+
+  familyPedigreeFilter(workspace, selectedPatterns = []) {
+    const field = node("fieldset", undefined, "filter-field pedigree-filter");
+    field.append(node("legend", "Pedigree segregation"));
+    const members = this.familyMembers(workspace);
+    if (!members.length) {
+      field.append(node("span", "No family members are available.", "filter-empty"));
+      return field;
+    }
+    const selected = new Map(selectedPatterns.map(item => String(item).split(":")));
+    const diagram = node("div", undefined, "pedigree-diagram");
+    const parents = members.filter(member => ["father", "mother"].includes(member.relationship));
+    const children = members.filter(member => !["father", "mother"].includes(member.relationship));
+    const makeGeneration = (items, className) => {
+      const generation = node("div", undefined, `pedigree-generation ${className}`);
+      items.forEach(member => generation.append(this.pedigreeMemberControl(member, selected)));
+      return generation;
+    };
+    if (parents.length) diagram.append(makeGeneration(parents, "pedigree-parents"));
+    if (parents.length && children.length) diagram.append(node("div", undefined, "pedigree-descent"));
+    if (children.length) diagram.append(makeGeneration(
+      children, `pedigree-children${parents.length ? "" : " pedigree-single-generation"}`,
+    ));
+    const legend = node("div", undefined, "pedigree-state-legend");
+    [["present", "+", "Must carry"], ["absent", "−", "Must not carry"], ["ignore", "○", "Ignore"]]
+      .forEach(([state, marker, label]) => {
+        const item = node("span", undefined, `pedigree-legend-item ${state}`);
+        item.append(node("b", marker), document.createTextNode(label));
+        legend.append(item);
+      });
+    field.append(diagram, legend, node(
+      "small", "Click each subject to cycle: must carry → must not carry → ignore.",
+    ));
+    return field;
+  }
+
+  pedigreeMemberControl(member, selected) {
+    const states = ["ignore", "present", "absent"];
+    let state = selected.get(String(member.sample_id)) || "ignore";
+    if (!states.includes(state)) state = "ignore";
+    const wrapper = node(
+      "div", undefined,
+      `pedigree-member${member.relationship === "proband" ? " proband" : ""}`,
+    );
+    const button = node("button", undefined, "pedigree-member-button");
+    button.type = "button";
+    const symbolSex = member.sex.startsWith("m") ? "male"
+      : (member.sex.startsWith("f") ? "female" : "unknown");
+    const symbol = node(
+      "span", undefined,
+      `pedigree-symbol ${symbolSex}${member.affected ? " affected" : ""}`,
+    );
+    const marker = node("span", undefined, "pedigree-state-marker");
+    const name = node("span", member.display_name || member.sample_key, "pedigree-member-name");
+    const relationship = node("small", member.relationship || "relative", "pedigree-member-role");
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.name = "familyPattern";
+    const stateLabels = {
+      ignore: "ignored", present: "must carry the variant", absent: "must not carry the variant",
+    };
+    const update = () => {
+      button.dataset.state = state;
+      marker.textContent = {ignore: "○", present: "+", absent: "−"}[state];
+      hidden.value = `${member.sample_id}:${state}`;
+      hidden.disabled = state === "ignore";
+      button.title = `${member.display_name}: ${stateLabels[state]}. Click to change.`;
+      button.setAttribute("aria-label", button.title);
+    };
+    button.append(symbol, marker, name, relationship);
+    button.addEventListener("click", () => {
+      state = states[(states.indexOf(state) + 1) % states.length];
+      update();
+    });
+    update();
+    wrapper.append(button, hidden);
+    return wrapper;
+  }
+
   renderFilterPanel(workspace) {
     const filters = workspace.filters || this.emptyFilters();
     const options = workspace.filterOptions || {
       consequences: [], clinical_significances: [], population_frequencies: ["MAX_AF"],
-      filter_statuses: [], zygosities: [],
+      filter_statuses: [],
     };
     const form = node("form", undefined, "variant-filter-panel");
     form.addEventListener("submit", event => {
@@ -737,6 +1036,29 @@ class VariantBrowser extends HTMLElement {
     frequency.append(population, af, missingLabel);
     interpretationGrid.append(frequency);
 
+    const priorityFilter = node("fieldset", undefined, "filter-field priority-filter");
+    priorityFilter.append(node("legend", "Priority"));
+    const priorityBody = node("div", undefined, "priority-filter-body");
+    const priorityClasses = this.filterChoiceGroup(
+      "Class", "priorityClass", ["P1", "P2", "P3", "P4"], filters.priorityClasses,
+    ).lastChild;
+    priorityClasses.classList.add("priority-class-choices");
+    const priorityRange = node("div", undefined, "priority-range");
+    [["minPriority", "From", filters.minPriority], ["maxPriority", "To", filters.maxPriority]]
+      .forEach(([name, labelText, current]) => {
+        const label = node("label");
+        label.append(node("span", labelText));
+        const input = document.createElement("input");
+        input.type = "number"; input.name = name; input.min = "0"; input.max = "100";
+        input.step = "1"; input.placeholder = name === "minPriority" ? "0" : "100";
+        input.value = current;
+        label.append(input);
+        priorityRange.append(label);
+      });
+    priorityBody.append(priorityClasses, priorityRange);
+    priorityFilter.append(priorityBody);
+    interpretationGrid.append(priorityFilter);
+
     interpretationGrid.append(this.filterChoiceGroup(
       "Consequence", "consequence", options.consequences, filters.consequences,
     ));
@@ -745,12 +1067,12 @@ class VariantBrowser extends HTMLElement {
     ));
     interpretationGrid.append(this.filterChoiceGroup(
       "Inheritance candidate", "inheritanceCandidate",
-      ["compound", "recessive", "dominant", "x_linked", "y_linked"], filters.inheritanceCandidates,
+      ["compound", "recessive", "dominant", "x_linked", "y_linked", "mitochondrial"], filters.inheritanceCandidates,
     ));
     interpretation.append(interpretationGrid);
     form.append(interpretation);
 
-    const sampleEvidence = node("section", undefined, "filter-section");
+    const sampleEvidence = node("section", undefined, "filter-section sample-evidence-section");
     const evidenceHeading = node("div", undefined, "filter-section-heading");
     evidenceHeading.append(
       node("h5", "Sample evidence"),
@@ -758,37 +1080,67 @@ class VariantBrowser extends HTMLElement {
     );
     sampleEvidence.append(evidenceHeading);
     const evidenceGrid = node("div", undefined, "filter-section-grid evidence-grid");
-    evidenceGrid.append(this.filterChoiceGroup(
-      "Zygosity", "zygosity", options.zygosities, filters.zygosities,
-    ));
 
     const siteFilter = node("fieldset", undefined, "filter-field filter-site-status");
     siteFilter.append(node("legend", "VCF FILTER"));
     const mode = document.createElement("select");
     mode.name = "filterMode";
-    [["all", "PASS and filtered"], ["pass", "PASS only"], ["selected", "Selected FILTER flags"]]
+    [
+      ["all", "PASS and filtered"],
+      ["pass", "PASS only"],
+      ["selected", "Only selected FILTER flags"],
+      ["exclude", "Exclude selected FILTER flags"],
+    ]
       .forEach(([optionValue, label]) => {
         const option = document.createElement("option");
         option.value = optionValue; option.textContent = label; option.selected = filters.filterMode === optionValue;
         mode.append(option);
       });
     siteFilter.append(mode, this.filterChoiceGroup(
-      "Available flags", "filterStatus", options.filter_statuses, filters.filterStatuses,
+      "FILTER flags", "filterStatus", options.filter_statuses, filters.filterStatuses,
     ).lastChild);
     evidenceGrid.append(siteFilter);
 
     const evidence = node("div", undefined, "filter-field filter-evidence");
     evidence.append(node("span", "Call thresholds"));
-    [["minVaf", "Minimum VAF", filters.minVaf, "any"], ["minDepth", "Minimum DP", filters.minDepth, "1"],
-      ["minQuality", "Minimum QUAL", filters.minQuality, "any"]].forEach(([name, placeholder, current, step]) => {
+    const thresholdGrid = node("div", undefined, "call-threshold-grid");
+    [
+      ["minDepth", "DP", filters.minDepth, "1", "Minimum total read depth"],
+      ["minVaf", "VAF", filters.minVaf, "any", "Minimum variant allele fraction", "1"],
+      ["minQuality", "QUAL", filters.minQuality, "any", "Minimum variant quality"],
+    ].forEach(([name, label, current, step, description, maximum]) => {
+      const control = node("label", undefined, "call-threshold-control");
+      control.title = description;
+      control.append(node("span", label));
       const input = document.createElement("input");
-      input.type = "number"; input.min = "0"; input.step = step; input.name = name;
-      input.placeholder = placeholder; input.value = current;
-      if (name === "minVaf") input.max = "1";
-      evidence.append(input);
+      input.type = "number"; input.min = "0";
+      input.step = step; input.name = name;
+      input.placeholder = "min"; input.value = current;
+      input.setAttribute("aria-label", description);
+      if (maximum) input.max = maximum;
+      control.append(input);
+      thresholdGrid.append(control);
     });
+    evidence.append(thresholdGrid);
     evidenceGrid.append(evidence);
     sampleEvidence.append(evidenceGrid);
+
+    const familyEvidence = node("section", undefined, "filter-section family-evidence-section");
+    const familyEvidenceHeading = node("div", undefined, "filter-section-heading");
+    familyEvidenceHeading.append(
+      node("h5", "Family evidence"),
+      node("p", "Compare the proband with all indexed family members."),
+    );
+    const familyEvidenceLayout = node("div", undefined, "family-evidence-layout");
+    familyEvidenceLayout.append(
+      this.filterChoiceGroup(
+        "Parental origin", "familyEvidence",
+        ["de_novo", "father_only", "mother_only", "both_parents", "parental_compound"],
+        filters.familyEvidence,
+      ),
+      this.familyPedigreeFilter(workspace, filters.familyPattern || []),
+    );
+    familyEvidence.append(familyEvidenceHeading, familyEvidenceLayout);
 
     const genePanel = node("section", undefined, "filter-section gene-panel-section");
     const genePanelHeading = node("div", undefined, "filter-section-heading");
@@ -798,7 +1150,12 @@ class VariantBrowser extends HTMLElement {
     );
     genePanel.append(genePanelHeading, genes);
     const lowerGrid = node("div", undefined, "filter-lower-grid");
-    lowerGrid.append(sampleEvidence, genePanel);
+    if (this.isFamilyAnalysis(workspace)) {
+      lowerGrid.append(sampleEvidence, familyEvidence, genePanel);
+    } else {
+      lowerGrid.classList.add("without-family");
+      lowerGrid.append(sampleEvidence, genePanel);
+    }
     form.append(lowerGrid);
     if (workspace.filterOptionsLoading) form.append(node("p", "Loading available annotations and FILTER flags…", "filter-message"));
     if (workspace.filterOptionsError) form.append(node("p", workspace.filterOptionsError, "inline-error"));
@@ -1054,8 +1411,15 @@ class VariantBrowser extends HTMLElement {
     const genes = String(values.get("genes") || "").split(/[,;\s]+/).map(item => item.trim()).filter(Boolean);
     const filterMode = String(values.get("filterMode") || "all");
     const filterStatuses = values.getAll("filterStatus").map(String);
-    if (filterMode === "selected" && !filterStatuses.length) {
+    if (["selected", "exclude"].includes(filterMode) && !filterStatuses.length) {
       workspace.error = "Select at least one FILTER flag, or choose another VCF FILTER mode.";
+      this.renderWorkspace();
+      return;
+    }
+    const minPriority = String(values.get("minPriority") || "");
+    const maxPriority = String(values.get("maxPriority") || "");
+    if (minPriority !== "" && maxPriority !== "" && Number(minPriority) > Number(maxPriority)) {
+      workspace.error = "Minimum priority cannot exceed maximum priority.";
       this.renderWorkspace();
       return;
     }
@@ -1066,8 +1430,12 @@ class VariantBrowser extends HTMLElement {
       consequences: values.getAll("consequence").map(String),
       clinicalSignificances: values.getAll("clinicalSignificance").map(String),
       inheritanceCandidates: values.getAll("inheritanceCandidate").map(String),
+      familyEvidence: values.getAll("familyEvidence").map(String),
+      familyPattern: values.getAll("familyPattern").map(String),
+      priorityClasses: values.getAll("priorityClass").map(String),
+      minPriority, maxPriority,
       filterMode, filterStatuses,
-      zygosities: values.getAll("zygosity").map(String), minDepth: String(values.get("minDepth") || ""),
+      minDepth: String(values.get("minDepth") || ""),
       minVaf: String(values.get("minVaf") || ""), minQuality: String(values.get("minQuality") || ""),
     };
     workspace.panelAppSources = genes.length
@@ -1088,7 +1456,8 @@ class VariantBrowser extends HTMLElement {
   restartFilteredWorkspace(workspace) {
     workspace.pageController?.abort();
     workspace.items = []; workspace.cursor = null; workspace.initialized = false;
-    workspace.loading = false; workspace.error = ""; workspace.detail = null; workspace.scrollTop = 0;
+    workspace.loading = false; workspace.error = ""; workspace.detail = null;
+    workspace.priorityExplanation = null; workspace.pinnedVariantId = null; workspace.scrollTop = 0;
     this.renderWorkspace();
     this.loadPage(workspace);
   }
@@ -1142,17 +1511,39 @@ class VariantBrowser extends HTMLElement {
     if (body) body.style.minWidth = width;
   }
 
-  columnHeader(key) {
+  columnHeader(workspace, key) {
     const definition = VARIANT_COLUMNS_BY_KEY.get(key);
     const cell = node("span", undefined, "column-header");
+    cell.setAttribute("role", "columnheader");
     if (key === "filter_alert") {
       cell.classList.add("filter-column-header");
       cell.setAttribute("aria-label", "Filter alert");
       return cell;
     }
-    const label = node("span", definition.label, "column-label");
+    const sortDefinition = SORTABLE_VARIANT_COLUMNS.get(key);
+    let label;
+    if (sortDefinition) {
+      cell.classList.add("sortable-column-header");
+      const active = workspace.sort?.key === key;
+      const direction = active ? workspace.sort.direction : "";
+      label = node("button", undefined, `column-sort-button${active ? " active" : ""}`);
+      label.type = "button";
+      label.title = `Sort ${definition.label} ${sortDefinition.description}`;
+      label.setAttribute("aria-label", active
+        ? `${definition.label}, sorted ${direction === "desc" ? "descending" : "ascending"}. Activate to reverse order.`
+        : `Sort ${definition.label} ${sortDefinition.description}.`);
+      label.append(
+        node("span", definition.label, "column-label"),
+        node("span", active ? (direction === "desc" ? "▼" : "▲") : "↕", "column-sort-indicator"),
+      );
+      cell.setAttribute("aria-sort", active
+        ? (direction === "desc" ? "descending" : "ascending") : "none");
+      label.addEventListener("click", () => this.toggleVariantSort(workspace, key));
+    } else {
+      label = node("span", definition.label, "column-label");
+    }
     const dragHandle = node("span", "⋮⋮", "column-drag-handle");
-    const resizeHandle = node("span", undefined, "column-resize-handle");
+    const resizeHandle = node("span", "↔", "column-resize-handle");
     cell.dataset.column = key;
     dragHandle.draggable = true;
     dragHandle.title = `Drag to move ${definition.label}`;
@@ -1212,6 +1603,19 @@ class VariantBrowser extends HTMLElement {
     return cell;
   }
 
+  toggleVariantSort(workspace, key) {
+    const definition = SORTABLE_VARIANT_COLUMNS.get(key);
+    if (!definition) return;
+    const active = workspace.sort?.key === key;
+    workspace.sort = {
+      key,
+      direction: active
+        ? (workspace.sort.direction === "asc" ? "desc" : "asc")
+        : definition.firstDirection,
+    };
+    this.restartFilteredWorkspace(workspace);
+  }
+
   compactHgvs(raw, marker) {
     if (raw === null || raw === undefined || raw === "") return raw;
     return String(raw).split(/([&,])/).map(part => {
@@ -1225,7 +1629,7 @@ class VariantBrowser extends HTMLElement {
     if (key === "genotypes") {
       return Array.isArray(item[key]) ? item[key].join(", ") : item[key];
     }
-    if (key === "filter_alert") return "";
+    if (key === "filter_alert" || key === "priority") return "";
     if (key === "hgvsc") return this.compactHgvs(item[key], "c.");
     if (key === "hgvsp") return this.compactHgvs(item[key], "p.");
     if (key === "allele_fraction" && item[key] !== null && item[key] !== undefined) {
@@ -1246,6 +1650,13 @@ class VariantBrowser extends HTMLElement {
     const cell = node("span");
     if (key === "filter_alert") {
       cell.classList.add("filter-alert-cell");
+      if (workspace.detail?.variant_id === item.variant_id) {
+        const marker = node("span", "●", "selected-variant-marker");
+        marker.title = "Selected variant";
+        marker.setAttribute("role", "img");
+        marker.setAttribute("aria-label", "Selected variant");
+        cell.append(marker);
+      }
       if (this.hasFilterAlert(item)) {
         const alert = node("span", "▲", "filter-alert");
         const filters = Array.isArray(item.filter_status) ? item.filter_status : [item.filter_status];
@@ -1254,6 +1665,29 @@ class VariantBrowser extends HTMLElement {
         alert.setAttribute("aria-label", "Filtered variant");
         cell.append(alert);
       }
+      return cell;
+    }
+    if (key === "priority") {
+      cell.classList.add("priority-cell");
+      const priority = item.priority;
+      if (!priority) {
+        cell.append(document.createTextNode("—"));
+        return cell;
+      }
+      const badge = node(
+        "button", `${priority.band} · ${priority.normalized_score}`,
+        `priority-badge priority-${String(priority.band).toLowerCase()}`,
+      );
+      badge.type = "button";
+      badge.title = `Explain priority score (${priority.formula})`;
+      badge.setAttribute("aria-label", `Explain priority ${priority.band}, score ${priority.normalized_score}`);
+      badge.addEventListener("click", event => {
+        event.stopPropagation();
+        workspace.priorityExplanation = workspace.priorityExplanation?.variant_id === item.variant_id
+          ? null : item;
+        this.renderWorkspace();
+      });
+      cell.append(badge);
       return cell;
     }
     if (key === "gene" && item.gene) {
@@ -1275,6 +1709,12 @@ class VariantBrowser extends HTMLElement {
     if (!workspace) {
       host.className = "workspace-empty";
       host.textContent = "Select an indexed run and open a sample.";
+      return;
+    }
+    if (workspace.kind === "igv") {
+      host.className = "igv-workspace";
+      host.replaceChildren(this.renderIgvWorkspace(workspace));
+      window.requestAnimationFrame(() => this.initializeIgvWorkspace(workspace));
       return;
     }
     host.className = `workspace-grid${workspace.detail ? "" : " detail-closed"}`;
@@ -1319,7 +1759,7 @@ class VariantBrowser extends HTMLElement {
     const tableWidth = this.columnTableWidth();
     header.style.gridTemplateColumns = gridTemplate;
     header.style.minWidth = `${tableWidth}px`;
-    this.columnOrder.forEach(key => header.append(this.columnHeader(key)));
+    this.columnOrder.forEach(key => header.append(this.columnHeader(workspace, key)));
     const body = node("div", undefined, "virtual-body");
     body.style.minWidth = `${tableWidth}px`;
     body.style.height = `${workspace.items.length * ROW_HEIGHT}px`;
@@ -1351,6 +1791,9 @@ class VariantBrowser extends HTMLElement {
       footer.append(more);
     } else if (workspace.initialized) footer.append(node("span", "All variants loaded", "complete-text"));
     tablePanel.append(footer);
+    if (workspace.priorityExplanation) {
+      tablePanel.append(this.priorityExplanationPanel(workspace));
+    }
     if (workspace.detail) host.replaceChildren(tablePanel, this.renderDetail(workspace));
     else host.replaceChildren(tablePanel);
     window.requestAnimationFrame(() => {
@@ -1361,21 +1804,555 @@ class VariantBrowser extends HTMLElement {
   }
 
   variantRow(workspace, item) {
-    const row = node("button", undefined, `variant-grid variant-row${workspace.detail?.variant_id === item.variant_id ? " selected" : ""}`);
-    row.type = "button";
+    const selected = workspace.detail?.variant_id === item.variant_id;
+    const row = node("div", undefined, `variant-grid variant-row${selected ? " selected" : ""}`);
+    row.setAttribute("role", "button");
+    if (selected) row.setAttribute("aria-current", "true");
+    row.tabIndex = 0;
     row.style.gridTemplateColumns = this.columnTemplate();
     row.style.minWidth = `${this.columnTableWidth()}px`;
     this.columnOrder.forEach(key => row.append(this.variantCellNode(workspace, item, key)));
     row.addEventListener("click", () => this.loadDetail(workspace, item.variant_id));
+    row.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        this.loadDetail(workspace, item.variant_id);
+      }
+    });
     return row;
   }
 
+  priorityExplanationPanel(workspace) {
+    const item = workspace.priorityExplanation;
+    const priority = item?.priority;
+    const panel = node("section", undefined, "priority-explanation-panel");
+    panel.setAttribute("aria-label", "Priority score explanation");
+    if (!priority) return panel;
+
+    const header = node("div", undefined, "priority-explanation-heading");
+    const identity = node("div");
+    identity.append(
+      node("h4", `Priority ${priority.band} · ${priority.normalized_score}/100`),
+      node("p", this.priorityVariantIdentity(item)),
+    );
+    const close = node("button", "×", "priority-explanation-close");
+    close.type = "button";
+    close.setAttribute("aria-label", "Close priority explanation");
+    close.addEventListener("click", () => {
+      workspace.priorityExplanation = null;
+      this.renderWorkspace();
+    });
+    header.append(identity, close);
+
+    const summary = node("div", undefined, "priority-score-summary");
+    summary.append(
+      node("strong", priority.formula, "priority-formula"),
+      node("span", `Normalized: ${priority.normalized_score}/100 · ruleset ${priority.ruleset}`),
+    );
+    const components = node("div", undefined, "priority-components");
+    (priority.components || []).forEach(component => {
+      const card = node("article", undefined, `priority-component${component.applicable ? "" : " not-applicable"}`);
+      const title = node("div", undefined, "priority-component-title");
+      title.append(
+        node("strong", component.label),
+        node("span", component.applicable ? `${component.score} / ${component.max_score}` : "N/A"),
+      );
+      card.append(title, node("p", component.reason));
+      if (component.evidence?.length) {
+        card.append(node("small", component.evidence.join(" · ")));
+      }
+      components.append(card);
+    });
+    const footer = node("div", undefined, "priority-explanation-footer");
+    const missing = priority.missing_evidence?.length
+      ? `Missing evidence: ${priority.missing_evidence.join(", ")}` : "No applicable evidence is missing.";
+    const call = priority.call_confidence || {};
+    footer.append(
+      node("span", missing),
+      node("span", `Call confidence: ${value(call.status)}${call.warnings?.length ? ` · ${call.warnings.join("; ")}` : ""}`),
+      node("small", "Experimental review priority; it is not an ACMG/AMP classification or a diagnosis."),
+    );
+    panel.append(header, summary, components, footer);
+    return panel;
+  }
+
+  priorityVariantIdentity(item = {}) {
+    const chromosome = String(item.chromosome || "").replace(/^chr/i, "");
+    const locus = `chr${chromosome}:${value(item.position)} ${value(item.reference)}>${value(item.alternate)}`;
+    const gene = String(item.gene || "").trim();
+    const hgvsc = String(this.compactHgvs(item.hgvsc, "c.") || "").trim();
+    const hgvsp = String(this.compactHgvs(item.hgvsp, "p.") || "").trim();
+    const coding = [gene, hgvsc].filter(Boolean).join(":");
+    const transcript = [coding, hgvsp ? `(${hgvsp})` : ""].filter(Boolean).join(" ");
+    return [transcript, locus].filter(Boolean).join(" · ");
+  }
+
+  openIgvWorkspace(sourceWorkspace, detail) {
+    if (!detail || detail.loading || detail.error) return;
+    const key = `${sourceWorkspace.runId}:${sourceWorkspace.sample.sample_id}:igv`;
+    let workspace = this.workspaces.get(key);
+    if (!workspace) {
+      workspace = {
+        kind: "igv", key, runId: sourceWorkspace.runId, sample: sourceWorkspace.sample,
+        sourceWorkspaceKey: sourceWorkspace.key, variant: {...detail}, manifest: null,
+        loading: false, error: "", igvBrowser: null, igvElement: null,
+        igvTrackSelection: {}, igvTrackBusy: new Set(), igvLoadedTracks: new Map(),
+      };
+      this.workspaces.set(key, workspace);
+    } else {
+      workspace.sourceWorkspaceKey = sourceWorkspace.key;
+      workspace.variant = {...detail};
+      workspace.error = "";
+    }
+    this.activeWorkspace = key;
+    this.renderTabs();
+    this.renderWorkspace();
+    this.setRoute(workspace.runId, workspace.sample.sample_id, {
+      view: "igv", variantId: detail.variant_id,
+    });
+    if (workspace.igvBrowser) this.updateIgvLocus(workspace);
+  }
+
+  renderIgvWorkspace(workspace) {
+    if (workspace.igvElement) {
+      this.updateIgvHeading(workspace);
+      return workspace.igvElement;
+    }
+    const panel = node("section", undefined, "igv-panel");
+    const header = node("div", undefined, "igv-panel-header");
+    const identity = node("div", undefined, "igv-panel-identity");
+    identity.append(
+      node("span", "Read evidence", "igv-eyebrow"),
+      node("h4", "IGV"),
+      node("p", "Preparing locus…", "igv-locus-label"),
+    );
+    const actions = node("div", undefined, "igv-panel-actions");
+    const trackPicker = node("details", undefined, "igv-track-picker");
+    const trackSummary = node("summary", "Tracks", "igv-track-summary");
+    const trackMenu = node("div", undefined, "igv-track-menu");
+    trackMenu.append(
+      node("strong", "Visible tracks"),
+      node("p", "Tracks become available after the run resources are resolved."),
+    );
+    trackPicker.append(trackSummary, trackMenu);
+    const back = node("button", "Back to variants");
+    back.addEventListener("click", () => {
+      const source = this.workspaces.get(workspace.sourceWorkspaceKey)
+        || Array.from(this.workspaces.values()).find(item => (
+          item.kind !== "igv" && item.runId === workspace.runId
+          && item.sample.sample_id === workspace.sample.sample_id
+        ));
+      if (!source) return;
+      this.activeWorkspace = source.key;
+      this.renderTabs();
+      this.renderWorkspace();
+      this.setRoute(source.runId, source.sample.sample_id);
+    });
+    const center = node("button", "Center on variant", "primary");
+    center.addEventListener("click", () => this.updateIgvLocus(workspace));
+    actions.append(back, trackPicker, center);
+    header.append(identity, actions);
+    const status = node("p", "Loading read evidence configuration…", "igv-status");
+    status.setAttribute("aria-live", "polite");
+    const evidence = node("div", undefined, "igv-evidence-summary");
+    const viewer = node("div", undefined, "igv-viewer");
+    panel.append(header, evidence, status, viewer);
+    workspace.igvElement = panel;
+    workspace.igvNodes = {
+      identity, evidence, status, viewer, trackPicker, trackSummary, trackMenu,
+    };
+    this.updateIgvHeading(workspace);
+    return panel;
+  }
+
+  async initializeIgvWorkspace(workspace) {
+    if (workspace.kind !== "igv" || workspace.igvBrowser || workspace.loading) {
+      if (workspace.igvBrowser) workspace.igvBrowser.visibilityChange?.();
+      return;
+    }
+    workspace.loading = true;
+    workspace.igvNodes.status.className = "igv-status";
+    workspace.igvNodes.status.textContent = "Resolving indexed alignment and reference…";
+    try {
+      workspace.manifest = await this.request(
+        `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/igv-manifest`,
+      );
+      if (!workspace.manifest.available) {
+        throw new Error((workspace.manifest.warnings || []).join(" ") || "Read evidence is unavailable.");
+      }
+      this.initializeIgvTrackSelection(workspace);
+      this.renderIgvTrackMenu(workspace);
+      workspace.igvNodes.status.textContent = "Loading IGV…";
+      this.igvLibrary ||= (await import(IGV_MODULE_URL)).default;
+      const locus = this.igvLocus(workspace);
+      const config = {
+        locus,
+        loadDefaultGenomes: false,
+        showNavigation: true,
+        showRuler: true,
+        showCenterGuide: true,
+        showCursorTrackGuide: true,
+        showSVGButton: true,
+        roi: [this.igvVariantRoi(workspace)],
+        tracks: workspace.manifest.tracks
+          .filter(track => workspace.igvTrackSelection[track.id])
+          .map(track => this.igvTrackConfig(track, workspace)),
+      };
+      const reference = workspace.manifest.reference || {};
+      if (reference.local) {
+        config.reference = {
+          id: reference.id, name: reference.name,
+          fastaURL: reference.fasta_url, indexURL: reference.index_url,
+        };
+        if (reference.compressed_index_url) {
+          config.reference.compressedIndexURL = reference.compressed_index_url;
+        }
+      } else {
+        config.genome = reference.genome || "hg38";
+        config.loadDefaultGenomes = true;
+      }
+      workspace.igvBrowser = await this.igvLibrary.createBrowser(workspace.igvNodes.viewer, config);
+      workspace.manifest.tracks.forEach(track => {
+        const loaded = workspace.igvBrowser.findTracks?.("id", track.id)?.[0];
+        if (loaded) workspace.igvLoadedTracks.set(track.id, loaded);
+      });
+      this.installIgvOverlayManagement(workspace);
+      workspace.igvNodes.status.textContent = this.igvStatus(workspace);
+    } catch (error) {
+      workspace.error = error.message;
+      workspace.igvNodes.status.className = "igv-status error";
+      workspace.igvNodes.status.textContent = error.message;
+    } finally {
+      workspace.loading = false;
+      this.renderIgvTrackMenu(workspace);
+    }
+  }
+
+  initializeIgvTrackSelection(workspace) {
+    workspace.igvTrackSelection ||= {};
+    (workspace.manifest?.tracks || []).forEach(track => {
+      if (!(track.id in workspace.igvTrackSelection)) {
+        workspace.igvTrackSelection[track.id] = Boolean(track.default_visible);
+      }
+    });
+  }
+
+  renderIgvTrackMenu(workspace) {
+    if (!workspace.igvNodes?.trackMenu) return;
+    const tracks = workspace.manifest?.tracks || [];
+    const selected = tracks.filter(track => workspace.igvTrackSelection?.[track.id]).length;
+    workspace.igvNodes.trackSummary.textContent = tracks.length
+      ? `Tracks ${selected}/${tracks.length}` : "Tracks";
+    const heading = node("div", undefined, "igv-track-menu-heading");
+    heading.append(
+      node("strong", "Visible tracks"),
+      node("span", "Load only the evidence you need."),
+    );
+    const list = node("div", undefined, "igv-track-list");
+    let category = "";
+    tracks.forEach(track => {
+      if (track.category !== category) {
+        category = track.category;
+        list.append(node("h5", category || "Other"));
+      }
+      const row = node("label", undefined, "igv-track-option");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = Boolean(workspace.igvTrackSelection?.[track.id]);
+      input.disabled = !workspace.igvBrowser || workspace.igvTrackBusy?.has(track.id);
+      input.addEventListener("change", () => this.toggleIgvTrack(workspace, track, input.checked));
+      const copy = node("span", undefined, "igv-track-option-copy");
+      const title = node("span", undefined, "igv-track-option-title");
+      title.append(node("strong", track.name), node("small", track.stage));
+      copy.append(title, node("span", track.description || track.source));
+      if (track.source) copy.append(node("small", track.source, "igv-track-source"));
+      row.append(input, copy);
+      list.append(row);
+    });
+    if (!tracks.length) list.append(node("p", "No compatible tracks were found.", "igv-track-empty"));
+    workspace.igvNodes.trackMenu.replaceChildren(heading, list);
+  }
+
+  async toggleIgvTrack(workspace, track, visible) {
+    if (!workspace.igvBrowser || workspace.igvTrackBusy.has(track.id)) return;
+    const previous = Boolean(workspace.igvTrackSelection[track.id]);
+    workspace.igvTrackSelection[track.id] = visible;
+    workspace.igvTrackBusy.add(track.id);
+    this.renderIgvTrackMenu(workspace);
+    workspace.igvNodes.status.className = "igv-status";
+    workspace.igvNodes.status.textContent = `${visible ? "Loading" : "Removing"} ${track.name}…`;
+    try {
+      if (visible) {
+        const loaded = await workspace.igvBrowser.loadTrack(this.igvTrackConfig(track, workspace));
+        if (loaded) workspace.igvLoadedTracks.set(track.id, loaded);
+      } else {
+        const loaded = workspace.igvLoadedTracks.get(track.id)
+          || workspace.igvBrowser.findTracks?.("id", track.id)?.[0];
+        if (loaded) await workspace.igvBrowser.removeTrack(loaded);
+        workspace.igvLoadedTracks.delete(track.id);
+      }
+      workspace.igvNodes.status.textContent = this.igvStatus(workspace);
+    } catch (error) {
+      workspace.igvTrackSelection[track.id] = previous;
+      workspace.igvNodes.status.className = "igv-status error";
+      workspace.igvNodes.status.textContent = `Could not update ${track.name}: ${error.message}`;
+    } finally {
+      workspace.igvTrackBusy.delete(track.id);
+      this.renderIgvTrackMenu(workspace);
+    }
+  }
+
+  async updateIgvLocus(workspace) {
+    this.updateIgvHeading(workspace);
+    if (!workspace.igvBrowser) {
+      this.initializeIgvWorkspace(workspace);
+      return;
+    }
+    try {
+      await workspace.igvBrowser.search(this.igvLocus(workspace));
+      workspace.igvBrowser.clearROIs();
+      await workspace.igvBrowser.loadROI(this.igvVariantRoi(workspace));
+      const alignmentTracks = workspace.igvBrowser.findTracks?.("type", "alignment") || [];
+      alignmentTracks.forEach(track => track.sort?.({
+        chr: this.igvChromosome(workspace), position: Number(workspace.variant.position),
+        option: "BASE", direction: "ASC",
+      }));
+      workspace.igvNodes.status.textContent = this.igvStatus(workspace);
+    } catch (error) {
+      workspace.igvNodes.status.className = "igv-status error";
+      workspace.igvNodes.status.textContent = error.message;
+    }
+  }
+
+  updateIgvHeading(workspace) {
+    if (!workspace.igvNodes) return;
+    const chromosome = this.igvChromosome(workspace);
+    const variant = workspace.variant || {};
+    workspace.igvNodes.identity.querySelector("h4").textContent = `IGV · ${workspace.sample.display_name}`;
+    workspace.igvNodes.identity.querySelector(".igv-locus-label").textContent =
+      `${chromosome}:${value(variant.position)} ${value(variant.reference)}>${value(variant.alternate)}`;
+    workspace.igvNodes.evidence.replaceChildren(this.igvEvidenceSummary(workspace));
+  }
+
+  igvEvidenceSummary(workspace) {
+    const variant = workspace.variant || {};
+    const call = (variant.calls || [])[0] || {};
+    const fields = [
+      ["Gene", variant.gene],
+      ["Consequence", variant.consequence],
+      ["Genotype", call.genotype || (variant.genotypes || []).join(", ")],
+      ["Depth", call.depth],
+      ["Alt reads", call.alternate_depth],
+      ["VAF", call.allele_fraction === null || call.allele_fraction === undefined
+        ? null : `${(Number(call.allele_fraction) * 100).toFixed(1)}%`],
+      ["QUAL", call.quality ?? variant.quality],
+    ];
+    const summary = node("dl", undefined, "igv-evidence-grid");
+    fields.forEach(([label, fieldValue]) => {
+      summary.append(node("div", undefined, "igv-evidence-item"));
+      summary.lastElementChild.append(node("dt", label), node("dd", value(fieldValue)));
+    });
+    return summary;
+  }
+
+  igvTrackConfig(track, workspace) {
+    const common = {
+      id: track.id, name: `${track.name} · ${track.stage}`,
+      type: track.type, format: track.format, url: track.url,
+    };
+    if (track.index_url) common.indexURL = track.index_url;
+    if (track.indexed === false) common.indexed = false;
+    if (track.source_type === "custom") {
+      return {
+        id: track.id, name: `${track.name} · ${track.stage}`, type: "annotation",
+        sourceType: "custom", source: {url: track.url, contentType: "application/json"},
+        displayMode: "EXPANDED", color: "#6c5aa7", height: 75,
+        visibilityWindow: 100000,
+      };
+    }
+    if (track.type === "alignment") {
+      if (track.mode === "split-reads") {
+        return {
+          ...common, showCoverage: false, showAlignments: true, showSoftClips: true,
+          viewAsPairs: true, groupBy: "chimeric", colorBy: "pairOrientation",
+          filter: {
+            duplicates: true, vendorFailed: true, secondary: false,
+            supplementary: false, mq: 0,
+          },
+          height: 220, maxHeight: 500, visibilityWindow: 30000,
+        };
+      }
+      return {
+        ...common, showCoverage: true, showAlignments: true, height: 300, maxHeight: 650,
+        sort: {
+          chr: this.igvChromosome(workspace), position: Number(workspace.variant.position),
+          option: "BASE", direction: "ASC",
+        },
+      };
+    }
+    if (track.type === "variant") {
+      return {...common, displayMode: "EXPANDED", height: 90, visibilityWindow: 1000000};
+    }
+    if (track.id === "refseq-transcripts") {
+      return {...common, displayMode: "EXPANDED", color: "#365f91", height: 105};
+    }
+    if (track.id === "giab-difficult") {
+      return {...common, displayMode: "COLLAPSED", color: "#b36b28", height: 45};
+    }
+    return {...common, displayMode: "COLLAPSED", color: "#4b8b6b", height: 55};
+  }
+
+  igvChromosome(workspace) {
+    const raw = String(workspace.variant?.chromosome || "").replace(/^chr/i, "");
+    const prefix = workspace.manifest?.reference?.contig_prefix ?? "chr";
+    if (prefix) return `chr${raw === "MT" ? "M" : raw}`;
+    return raw === "M" ? "MT" : raw;
+  }
+
+  igvLocus(workspace) {
+    const position = Number(workspace.variant?.position || 1);
+    const alleleSize = Math.max(
+      String(workspace.variant?.reference || "").length,
+      String(workspace.variant?.alternate || "").length,
+    );
+    const flank = alleleSize > 1 ? 200 : 100;
+    return `${this.igvChromosome(workspace)}:${Math.max(1, position - flank)}-${position + flank}`;
+  }
+
+  igvVariantRoi(workspace) {
+    const position = Number(workspace.variant?.position || 1);
+    const length = Math.max(1, String(workspace.variant?.reference || "").length);
+    return {
+      name: "Selected variant", color: "rgba(255, 184, 0, 0.28)",
+      features: [{chr: this.igvChromosome(workspace), start: position - 1, end: position - 1 + length}],
+    };
+  }
+
+  igvStatus(workspace) {
+    const warnings = workspace.manifest?.warnings || [];
+    const reference = workspace.manifest?.reference?.local ? "run reference" : "hosted reference";
+    const tracks = (workspace.manifest?.tracks || [])
+      .filter(track => workspace.igvTrackSelection?.[track.id]);
+    const labels = tracks.map(track => track.type).filter((item, index, all) => all.indexOf(item) === index);
+    return `${labels.join(" + ") || "no tracks"} · ${reference}`
+      + `${warnings.length ? ` · ${warnings.join(" ")}` : ""}`;
+  }
+
+  installIgvOverlayManagement(workspace) {
+    this.removeIgvOverlayManagement(workspace);
+    const igvRoot = this.installIgvTheme(workspace);
+    let scheduled = false;
+    const schedule = () => {
+      if (scheduled) return;
+      scheduled = true;
+      window.requestAnimationFrame(() => {
+        scheduled = false;
+        this.clampIgvOverlays(workspace);
+      });
+    };
+    const observer = new MutationObserver(schedule);
+    observer.observe(igvRoot, {childList: true, subtree: true});
+    workspace.igvOverlayObserver = observer;
+    workspace.igvOverlaySchedule = schedule;
+    workspace.igvOverlayRoot = igvRoot;
+    igvRoot.addEventListener("click", schedule, true);
+    igvRoot.addEventListener("pointerup", schedule, true);
+    workspace.igvThemeLink?.addEventListener("load", schedule, {once: true});
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    schedule();
+  }
+
+  installIgvTheme(workspace) {
+    const root = workspace.igvNodes.viewer.shadowRoot || workspace.igvNodes.viewer;
+    let link = root.querySelector('link[data-helper-igv-theme="true"]');
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = IGV_THEME_URL;
+      link.dataset.helperIgvTheme = "true";
+      root.append(link);
+    }
+    workspace.igvThemeLink = link;
+    return root;
+  }
+
+  clampIgvOverlays(workspace) {
+    if (!workspace?.igvElement?.isConnected) return;
+    const selector = [
+      ".igv-ui-popover", ".igv-track-label-popover", ".igv-menu-popup",
+      ".igv-roi-menu", ".igv-ui-dropdown", ".igv-roi-table",
+    ].join(",");
+    const margin = 12;
+    const igvRoot = workspace.igvNodes.viewer.shadowRoot || workspace.igvNodes.viewer;
+    igvRoot.querySelectorAll(selector).forEach(overlay => {
+      if (overlay.offsetParent === null || getComputedStyle(overlay).position !== "absolute") return;
+      this.decorateIgvOverlay(overlay);
+      const rect = overlay.getBoundingClientRect();
+      let horizontalShift = 0;
+      let verticalShift = 0;
+      if (rect.right > window.innerWidth - margin) {
+        horizontalShift = window.innerWidth - margin - rect.right;
+      }
+      if (rect.left + horizontalShift < margin) {
+        horizontalShift += margin - (rect.left + horizontalShift);
+      }
+      if (rect.bottom > window.innerHeight - margin) {
+        verticalShift = window.innerHeight - margin - rect.bottom;
+      }
+      if (rect.top + verticalShift < margin) {
+        verticalShift += margin - (rect.top + verticalShift);
+      }
+      const left = Number.parseFloat(overlay.style.left);
+      const top = Number.parseFloat(overlay.style.top);
+      if (horizontalShift && Number.isFinite(left)) overlay.style.left = `${left + horizontalShift}px`;
+      if (verticalShift && Number.isFinite(top)) overlay.style.top = `${top + verticalShift}px`;
+    });
+  }
+
+  decorateIgvOverlay(overlay) {
+    if (!overlay.classList.contains("igv-ui-popover")) return;
+    const title = overlay.querySelector(":scope > div:first-child > div:first-child");
+    if (!title || title.textContent.trim()) return;
+    const content = overlay.querySelector(":scope > div:last-child")?.textContent || "";
+    title.textContent = content.includes("Read Name")
+      ? "Read details" : content.includes("HGVS") ? "Variant details" : "Genomic details";
+  }
+
+  removeIgvOverlayManagement(workspace) {
+    workspace?.igvOverlayObserver?.disconnect();
+    if (!workspace?.igvOverlaySchedule) return;
+    workspace.igvOverlayRoot?.removeEventListener("click", workspace.igvOverlaySchedule, true);
+    workspace.igvOverlayRoot?.removeEventListener("pointerup", workspace.igvOverlaySchedule, true);
+    window.removeEventListener("resize", workspace.igvOverlaySchedule);
+    window.removeEventListener("scroll", workspace.igvOverlaySchedule, true);
+    workspace.igvOverlayObserver = null;
+    workspace.igvOverlaySchedule = null;
+    workspace.igvOverlayRoot = null;
+    workspace.igvThemeLink = null;
+  }
+
+  removeIgvBrowser(workspace) {
+    this.removeIgvOverlayManagement(workspace);
+    if (!workspace?.igvBrowser || !this.igvLibrary) return;
+    this.igvLibrary.removeBrowser(workspace.igvBrowser);
+    workspace.igvBrowser = null;
+    workspace.igvLoadedTracks?.clear();
+  }
+
   async loadDetail(workspace, variantId) {
+    if (workspace.pinnedVariantId && workspace.pinnedVariantId !== variantId) {
+      workspace.items = workspace.items.filter(item => item.variant_id !== workspace.pinnedVariantId);
+      workspace.pinnedVariantId = null;
+    }
     workspace.detailController?.abort();
+    workspace.liftoverController?.abort();
+    workspace.gnomadFrequencyController?.abort();
     workspace.carrierController?.abort();
     workspace.genePhenotypeController?.abort();
     window.clearTimeout(workspace.genePhenotypeTimer);
     workspace.detailController = new AbortController();
+    workspace.priorityExplanation = null;
     workspace.detail = {variant_id: variantId, loading: true};
     this.renderWorkspace();
     let loadCarriers = false;
@@ -1387,6 +2364,8 @@ class VariantBrowser extends HTMLElement {
       workspace.detail = {
         ...detail, variant_id: variantId, carriers: null, carriersLoading: true,
         genePhenotypes: [], genePhenotypesLoading: true,
+        liftover: null, liftoverLoading: true,
+        gnomadFrequency: null, gnomadFrequencyLoading: true,
       };
       loadCarriers = true;
     } catch (error) {
@@ -1394,9 +2373,61 @@ class VariantBrowser extends HTMLElement {
     }
     if (workspace.key === this.activeWorkspace) this.renderWorkspace();
     if (loadCarriers) {
+      this.loadLiftover(workspace, variantId);
+      this.loadGnomadFrequency(workspace, variantId);
       this.loadCarriers(workspace, variantId);
       this.loadGenePhenotypes(workspace, variantId);
     }
+  }
+
+  async loadLiftover(workspace, variantId) {
+    workspace.liftoverController = new AbortController();
+    try {
+      const projection = await this.request(
+        `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants/${variantId}/liftover`,
+        {signal: workspace.liftoverController.signal},
+      );
+      if (workspace.detail?.variant_id !== variantId) return;
+      workspace.detail.liftover = projection;
+      workspace.detail.liftoverLoading = false;
+    } catch (error) {
+      if (error.name === "AbortError" || workspace.detail?.variant_id !== variantId) return;
+      workspace.detail.liftoverError = error.message;
+      workspace.detail.liftoverLoading = false;
+    }
+    if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+  }
+
+  async loadGnomadFrequency(workspace, variantId) {
+    workspace.gnomadFrequencyController = new AbortController();
+    try {
+      const frequency = await this.request(
+        `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}`
+          + `/variants/${variantId}/gnomad-frequency`,
+        {signal: workspace.gnomadFrequencyController.signal},
+      );
+      if (workspace.detail?.variant_id !== variantId) return;
+      workspace.detail.gnomadFrequency = frequency;
+      workspace.detail.gnomadFrequencyLoading = false;
+      if (frequency.cache === "miss" && ["observed", "not_observed_covered"].includes(frequency.status)) {
+        this.refreshVariantPriorities(workspace);
+      }
+    } catch (error) {
+      if (error.name === "AbortError" || workspace.detail?.variant_id !== variantId) return;
+      workspace.detail.gnomadFrequencyError = error.message;
+      workspace.detail.gnomadFrequencyLoading = false;
+    }
+    if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+  }
+
+  refreshVariantPriorities(workspace) {
+    workspace.pageController?.abort();
+    workspace.items = [];
+    workspace.cursor = null;
+    workspace.initialized = false;
+    workspace.loading = false;
+    workspace.error = "";
+    this.loadPage(workspace);
   }
 
   async loadCarriers(workspace, variantId) {
@@ -1474,16 +2505,27 @@ class VariantBrowser extends HTMLElement {
     close.setAttribute("aria-label", "Close variant detail");
     close.addEventListener("click", () => {
       workspace.detailController?.abort();
+      workspace.liftoverController?.abort();
+      workspace.gnomadFrequencyController?.abort();
       workspace.carrierController?.abort();
       workspace.genePhenotypeController?.abort();
       window.clearTimeout(workspace.genePhenotypeTimer);
       workspace.detailController = null;
+      workspace.liftoverController = null;
+      workspace.gnomadFrequencyController = null;
       workspace.carrierController = null;
       workspace.genePhenotypeController = null;
       workspace.detail = null;
       this.renderWorkspace();
     });
-    heading.append(node("h4", "Variant detail"), close);
+    const headingActions = node("div", undefined, "detail-heading-actions");
+    const inspect = node("button", "Inspect reads", "igv-open");
+    inspect.type = "button";
+    inspect.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
+    inspect.title = "Open this locus in a dedicated IGV tab";
+    inspect.addEventListener("click", () => this.openIgvWorkspace(workspace, workspace.detail));
+    headingActions.append(inspect, close);
+    heading.append(node("h4", "Variant detail"), headingActions);
     panel.append(heading);
     if (workspace.detail.loading) {
       panel.append(node("p", "Loading…", "loading"));
@@ -1497,39 +2539,51 @@ class VariantBrowser extends HTMLElement {
     const calls = detail.calls || [];
     const annotations = detail.annotations || [];
     const identity = node("div", undefined, "detail-identity");
-    identity.append(node(
-      "h4", `${detail.chromosome}:${detail.position} ${detail.reference}>${detail.alternate}`,
-      "detail-locus",
-    ));
     const annotationLabel = this.variantDetailAnnotationLabel(annotations);
-    if (annotationLabel) identity.append(node("span", annotationLabel, "detail-annotation"));
+    identity.append(this.variantDetailIdentityRow({
+      reference_build: detail.reference_build, chromosome: detail.chromosome,
+      position: detail.position, reference: detail.reference, alternate: detail.alternate,
+    }, annotationLabel, {original: true}));
+    const projection = detail.liftover || {};
+    if (projection.status === "mapped" || projection.status === "same_reference") {
+      identity.append(this.variantDetailIdentityRow(
+        projection.target || {}, annotationLabel, {projected: true},
+      ));
+    } else {
+      const sourceBuild = String(detail.reference_build || "").toLowerCase();
+      const targetBuild = projection.target_build
+        || ((sourceBuild.includes("37") || sourceBuild === "hg19") ? "GRCh38" : "GRCh37");
+      const state = detail.liftoverLoading
+        ? "Resolving coordinates…"
+        : this.assemblyProjectionStatus(projection.status, detail.liftoverError);
+      identity.append(this.variantDetailIdentityRow(
+        {reference_build: targetBuild}, "", {projected: true, status: state},
+      ));
+    }
     panel.append(identity);
     const sampleEvidence = this.sampleEvidenceContent(calls, detail);
     const databaseIds = detail.database_ids || {};
     const clinvarSearchUrl = this.clinvarSearchUrl(databaseIds.dbsnp);
 
     const variantContent = node("div", undefined, "detail-content");
-    const variantSummary = node("div", undefined, "detail-cards variant-summary-grid");
-    variantSummary.append(
-      this.detailCard([
-        ["Reference build", detail.reference_build], ["Chromosome", detail.chromosome],
-        ["Position", detail.position], ["REF", detail.reference], ["ALT", detail.alternate],
-        ["Type", detail.variant_type],
-      ]),
-      this.detailCard([
-        ["dbSNP", this.databaseIdentifierLinks("dbsnp", databaseIds.dbsnp)],
-        [
-          clinvarSearchUrl
-            ? this.externalDatabaseLabel("ClinVar", clinvarSearchUrl, `Search ClinVar by ${databaseIds.dbsnp[0]}`)
-            : "ClinVar",
-          this.databaseIdentifierLinks("clinvar", databaseIds.clinvar),
-        ],
-        ["ClinGen Allele Registry", this.databaseIdentifierLinks("clingen", databaseIds.clingen)],
-      ]),
-    );
+    const variantSummary = this.assemblyCoordinateSummary(detail);
+    const identifierSummary = node("div", undefined, "detail-cards variant-identifier-grid");
+    identifierSummary.append(this.detailCard([
+      ["dbSNP", this.databaseIdentifierLinks("dbsnp", databaseIds.dbsnp)],
+      [
+        clinvarSearchUrl
+          ? this.externalDatabaseLabel("ClinVar", clinvarSearchUrl, `Search ClinVar by ${databaseIds.dbsnp[0]}`)
+          : "ClinVar",
+        this.databaseIdentifierLinks("clinvar", databaseIds.clinvar),
+      ],
+      ["ClinGen Allele Registry", this.databaseIdentifierLinks("clingen", databaseIds.clingen)],
+    ]));
     variantContent.append(
-      node("h5", "Variant"),
+      node("h5", "Assembly coordinates"),
       variantSummary,
+      this.assemblyProjectionNote(detail),
+      node("h5", "Variant identifiers"),
+      identifierSummary,
       node("h5", "Sample evidence"),
       sampleEvidence,
     );
@@ -1597,7 +2651,7 @@ class VariantBrowser extends HTMLElement {
     panel.append(this.detailDisclosure(
       "Population frequencies",
       this.populationFrequencyContent(populationGroups, detail),
-      {status: populationFieldCount ? `${populationFieldCount} fields` : "No data"},
+      {status: this.populationFrequencyStatus(detail, populationFieldCount)},
     ));
 
     const predictionFacts = this.damagePredictionFields(annotations);
@@ -1687,7 +2741,8 @@ class VariantBrowser extends HTMLElement {
           ? `VAF ${Number(carrier.allele_fraction).toPrecision(3)}` : "",
       ].filter(Boolean).join(" · ");
       button.append(node("strong", label), node("small", facts || "Carrier"));
-      button.title = `Open ${carrier.display_name}`;
+      button.title = `Open ${carrier.display_name} at this variant`;
+      button.setAttribute("aria-label", `Open ${carrier.display_name} at this variant`);
       button.addEventListener("click", () => this.openCarrierSample(workspace, carrier, historical));
       group.append(button);
     });
@@ -1695,12 +2750,51 @@ class VariantBrowser extends HTMLElement {
   }
 
   async openCarrierSample(workspace, carrier, historical) {
+    let targetWorkspace = null;
     if (historical) {
       await this.selectRun(carrier.history_id, carrier.sample_id);
-      return;
+      targetWorkspace = this.workspaces.get(
+        `${carrier.history_id}:${carrier.sample_id}`,
+      );
+    } else {
+      const sample = this.samples.find(candidate => candidate.sample_id === carrier.sample_id);
+      if (!sample) return;
+      await this.openSample(sample);
+      targetWorkspace = this.workspaces.get(`${workspace.runId}:${carrier.sample_id}`);
     }
-    const sample = this.samples.find(candidate => candidate.sample_id === carrier.sample_id);
-    if (sample) await this.openSample(sample);
+    if (targetWorkspace && carrier.variant_id !== null && carrier.variant_id !== undefined) {
+      await this.focusVariantInWorkspace(targetWorkspace, carrier.variant_id);
+      await this.loadDetail(targetWorkspace, carrier.variant_id);
+    }
+  }
+
+  async focusVariantInWorkspace(workspace, variantId) {
+    workspace.focusVariantController?.abort();
+    workspace.focusVariantController = new AbortController();
+    let index = workspace.items.findIndex(item => item.variant_id === variantId);
+    if (index < 0) {
+      try {
+        const params = new URLSearchParams({limit: "1", variant_id: String(variantId)});
+        const payload = await this.request(
+          `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants?${params}`,
+          {signal: workspace.focusVariantController.signal},
+        );
+        const item = (payload.items || [])[0];
+        if (!item) {
+          workspace.error = "The selected carrier variant is no longer available in this sample index.";
+          return false;
+        }
+        workspace.items = [item, ...workspace.items.filter(existing => existing.variant_id !== variantId)];
+        workspace.pinnedVariantId = variantId;
+        index = 0;
+      } catch (error) {
+        if (error.name !== "AbortError") workspace.error = error.message;
+        return false;
+      }
+    }
+    workspace.scrollTop = Math.max(0, (index - 3) * ROW_HEIGHT);
+    if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+    return true;
   }
 
   detailDisclosure(title, content, options = {}) {
@@ -1738,6 +2832,119 @@ class VariantBrowser extends HTMLElement {
       card.append(term, description);
     });
     return card;
+  }
+
+  assemblyCoordinateSummary(detail) {
+    const projection = detail.liftover || {};
+    const original = projection.source || {
+      reference_build: detail.reference_build, chromosome: detail.chromosome,
+      position: detail.position, reference: detail.reference, alternate: detail.alternate,
+    };
+    const sourceBuild = String(detail.reference_build).toLowerCase();
+    const sourceIs37 = sourceBuild.includes("37") || sourceBuild === "hg19" || sourceBuild === "b37";
+    const targetBuild = projection.target_build || (sourceIs37 ? "GRCh38" : "GRCh37");
+    const grid = node("div", undefined, "detail-cards variant-summary-grid assembly-coordinate-grid");
+    const originalCard = this.detailCard([
+      ["Assembly", `${this.assemblyDisplayName(original.reference_build)} · original`],
+      ["Chromosome", original.chromosome], ["Position", original.position],
+      ["REF", original.reference], ["ALT", original.alternate], ["Type", detail.variant_type],
+    ]);
+    originalCard.classList.add("assembly-coordinate-card", "original");
+
+    let targetFields;
+    if (detail.liftoverLoading) {
+      targetFields = [
+        ["Assembly", `${this.assemblyDisplayName(targetBuild)} · projected`],
+        ["Status", "Resolving…"],
+      ];
+    } else if (projection.status === "mapped" || projection.status === "same_reference") {
+      const target = projection.target || {};
+      targetFields = [
+        ["Assembly", `${this.assemblyDisplayName(target.reference_build || targetBuild)} · projected`],
+        ["Chromosome", target.chromosome], ["Position", target.position],
+        ["REF", target.reference], ["ALT", target.alternate],
+        ["Status", projection.status === "same_reference" ? "Shared reference" : "Mapped"],
+      ];
+    } else {
+      targetFields = [
+        ["Assembly", `${this.assemblyDisplayName(targetBuild)} · projected`],
+        ["Status", this.assemblyProjectionStatus(projection.status, detail.liftoverError)],
+      ];
+    }
+    const targetCard = this.detailCard(targetFields);
+    targetCard.classList.add("assembly-coordinate-card", "projected");
+    if (projection.status && !["mapped", "same_reference"].includes(projection.status)) {
+      targetCard.classList.add("projection-unavailable");
+    }
+    grid.append(originalCard, targetCard);
+    return grid;
+  }
+
+  assemblyProjectionNote(detail) {
+    const projection = detail.liftover || {};
+    const note = node("p", undefined, "detail-note assembly-projection-note");
+    if (detail.liftoverLoading) {
+      note.textContent = "Allele-aware projection is being resolved; the original coordinate remains authoritative.";
+      return note;
+    }
+    if (projection.status === "mapped") {
+      note.append(document.createTextNode(
+        `${projection.validation?.label || "Allele-aware assembly projection"} · `
+        + `${projection.cache === "hit" ? "local cache" : "retrieved now"} · `
+      ));
+      const link = node("a", "NCBI Variation Services ↗");
+      link.href = projection.source_url || "https://www.ncbi.nlm.nih.gov/variation/services/";
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      note.append(link);
+      return note;
+    }
+    note.textContent = projection.message || detail.liftoverError
+      || "The alternate assembly coordinate is not available.";
+    return note;
+  }
+
+  assemblyDisplayName(build) {
+    const normalized = String(build || "").toLowerCase();
+    if (normalized.includes("37") || normalized === "hg19") return "GRCh37 / hg19";
+    if (normalized.includes("38") || normalized === "hg38") return "GRCh38 / hg38";
+    return value(build);
+  }
+
+  assemblyProjectionStatus(status, error) {
+    if (error) return "Temporarily unavailable";
+    return ({
+      not_mapped: "Not mappable", ambiguous: "Ambiguous mapping",
+      unsupported: "Unsupported allele", unavailable: "Temporarily unavailable",
+    })[status] || "Not available";
+  }
+
+  variantDetailIdentityRow(locus, annotationLabel, options = {}) {
+    const row = node(
+      "div", undefined,
+      `detail-identity-row${options.projected ? " projected" : " original"}`,
+    );
+    row.append(node("span", this.assemblyDisplayName(locus.reference_build), "detail-build-badge"));
+    if (options.status) {
+      row.append(node("span", options.status, "detail-coordinate-status"));
+      return row;
+    }
+    const chromosome = String(locus.chromosome || "").replace(/^chr/i, "");
+    row.append(node(
+      "h4", `chr${chromosome}:${locus.position} ${locus.reference}>${locus.alternate}`,
+      "detail-locus",
+    ));
+    if (annotationLabel) {
+      const annotation = node("span", annotationLabel, "detail-annotation");
+      if (options.projected) {
+        annotation.title = (
+          "HGVSc and HGVSp are transcript-level descriptions of the same projected allele; "
+          + "they were not generated by a separate VEP reannotation on the target assembly."
+        );
+      }
+      row.append(annotation);
+    }
+    return row;
   }
 
   variantDetailAnnotationLabel(annotations = []) {
@@ -2753,13 +3960,13 @@ class VariantBrowser extends HTMLElement {
     if (["grch37", "hg19", "b37", "hs37d5", "human_g1k_v37"].some(name => build.includes(name))) {
       return {
         referenceBuild: "GRCh37",
-        tools: {gnomad: {dataset: "gnomad_r2_1", version: "2.1"}},
+        tools: {gnomad: {dataset: "gnomad_r2_1", version: "2.1.1"}},
       };
     }
     if (["grch38", "hg38", "b38", "hs38dh"].some(name => build.includes(name))) {
       return {
         referenceBuild: "GRCh38",
-        tools: {gnomad: {dataset: "gnomad_r4", version: "4"}},
+        tools: {gnomad: {dataset: "gnomad_r4", version: "4.1"}},
       };
     }
     return null;
@@ -2785,7 +3992,9 @@ class VariantBrowser extends HTMLElement {
 
   populationFrequencyContent(groups, detail) {
     const content = node("div", undefined, "detail-content population-frequency-groups");
-    if (!groups.length) {
+    const directFrequency = this.gnomadFrequencyCard(detail);
+    if (directFrequency) content.append(directFrequency);
+    if (!groups.length && !directFrequency) {
       content.append(node("p", "No data available.", "empty"));
       return content;
     }
@@ -2819,15 +4028,135 @@ class VariantBrowser extends HTMLElement {
     return content;
   }
 
-  damagePredictionFields(annotations) {
-    const predictors = /SIFT|POLYPHEN|CADD|REVEL|MUTATIONTASTER|METASVM|METALR|FATHMM|DANN|SPLICEAI|ALPHAMISSENSE|PRIMATEAI|MPC|CLINPRED|BAYESDEL/i;
-    return this.annotationMetadataFields(annotations, key => predictors.test(key));
+  populationFrequencyStatus(detail, indexedFieldCount) {
+    if (detail.gnomadFrequencyLoading) return "Retrieving gnomAD genomes…";
+    const frequency = detail.gnomadFrequency || {};
+    const labels = {
+      observed: "Observed in gnomAD genomes",
+      not_observed_covered: "Not observed · adequately covered",
+      not_observed_low_coverage: "Not observed · low coverage",
+      not_observed_coverage_unknown: "Not observed · coverage unknown",
+      unsupported: "gnomAD lookup unsupported",
+      unavailable: "gnomAD unavailable",
+    };
+    if (labels[frequency.status]) return labels[frequency.status];
+    if (detail.gnomadFrequencyError) return "gnomAD unavailable";
+    return indexedFieldCount ? `${indexedFieldCount} indexed fields` : "No data";
   }
 
-  setRoute(runId, sampleId) {
+  gnomadFrequencyCard(detail) {
+    if (detail.gnomadFrequencyLoading) {
+      const card = node("section", undefined, "frequency-group frequency-direct");
+      card.append(node("h5", "gnomAD genomes"), node("p", "Retrieving exact allele frequency and locus coverage…", "loading"));
+      return card;
+    }
+    const frequency = detail.gnomadFrequency;
+    if (!frequency && !detail.gnomadFrequencyError) return null;
+    const card = node("section", undefined, "frequency-group frequency-direct");
+    const heading = node("h5");
+    const externalTool = this.externalVariantTool(detail, "gnomad");
+    if (externalTool) {
+      const link = node("a", undefined, "frequency-external-link");
+      link.href = frequency?.source_url || externalTool.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = `Open the exact ${externalTool.referenceBuild} allele in gnomAD genomes v${externalTool.version}`;
+      link.append(
+        node("span", "gnomAD genomes"),
+        node("small", `v${frequency?.release || externalTool.version}`, "frequency-tool-version"),
+        node("span", "↗", "external-link-icon"),
+      );
+      heading.append(link);
+    } else {
+      heading.textContent = "gnomAD genomes";
+    }
+    card.append(heading);
+    if (!frequency) {
+      card.append(node("p", detail.gnomadFrequencyError || "Frequency retrieval unavailable.", "inline-error"));
+      return card;
+    }
+    const statusLabels = {
+      observed: "Observed",
+      not_observed_covered: "Not observed; locus adequately covered",
+      not_observed_low_coverage: "Not observed; locus coverage insufficient",
+      not_observed_coverage_unknown: "Not observed; locus coverage unavailable",
+      unsupported: "Unsupported allele or assembly",
+      unavailable: "Temporarily unavailable",
+    };
+    const coverage = frequency.coverage || {};
+    const coverageText = coverage.available
+      ? `${this.frequencyNumber(coverage.mean)}× mean · ${this.frequencyPercent(coverage.over_20)} ≥20×`
+        + ` · ${coverage.adequate ? "adequate" : "below heuristic"}`
+      : "Not available";
+    const fields = [
+      ["Dataset", `Genomes v${frequency.release || "—"} · ${frequency.reference_build || "—"}`],
+      ["Allele status", statusLabels[frequency.status] || frequency.status],
+      ["Allele frequency", this.frequencyNumber(frequency.af)],
+      ["Allele count / number", this.countRatio(frequency.ac, frequency.an)],
+      ["Homozygotes", frequency.ac_hom],
+      ["Hemizygotes", frequency.ac_hemi],
+      ["Site filters", frequency.status === "observed"
+        ? ((frequency.filters || []).length ? frequency.filters.join(" · ") : "PASS")
+        : "Not applicable"],
+      ["Locus coverage", coverageText, {
+        title: `Adequate-coverage heuristic: mean ≥${coverage.minimum_mean || 20}× and `
+          + `≥${Math.round((coverage.minimum_over_20 || 0.8) * 100)}% of samples at 20×.`,
+      }],
+    ];
+    card.append(this.detailCard(fields));
+    if ((frequency.populations || []).length) {
+      const populationFields = frequency.populations.map(population => [
+        POPULATION_LABELS[String(population.id || "").toUpperCase()]
+          || this.readableFieldName(population.id),
+        population.an
+          ? `${this.frequencyNumber(population.af)} · AC/AN ${this.countRatio(population.ac, population.an)}`
+          : "Not covered",
+      ]);
+      card.append(node("h6", "Major populations", "frequency-population-heading"));
+      card.append(this.detailCard(populationFields));
+    }
+    if (frequency.message) card.append(node("p", frequency.message, "detail-note frequency-note"));
+    return card;
+  }
+
+  frequencyNumber(rawValue) {
+    if (rawValue === null || rawValue === undefined || rawValue === "") return "—";
+    const numberValue = Number(rawValue);
+    if (!Number.isFinite(numberValue)) return String(rawValue);
+    if (numberValue !== 0 && Math.abs(numberValue) < 0.0001) return numberValue.toExponential(3);
+    return numberValue.toLocaleString(undefined, {maximumSignificantDigits: 6});
+  }
+
+  frequencyPercent(rawValue) {
+    if (rawValue === null || rawValue === undefined || rawValue === "") return "—";
+    return `${(Number(rawValue) * 100).toLocaleString(undefined, {maximumFractionDigits: 1})}%`;
+  }
+
+  countRatio(numerator, denominator) {
+    const format = rawValue => (
+      rawValue === null || rawValue === undefined
+        ? "—" : Number(rawValue).toLocaleString()
+    );
+    return `${format(numerator)} / ${format(denominator)}`;
+  }
+
+  damagePredictionFields(annotations) {
+    const proteinImpact = /SIFT|POLYPHEN|LRT|MUTATIONTASTER|MUTATIONASSESSOR|FATHMM|PROVEAN|VEST4|METASVM|METALR|M[-_]?CAP|REVEL|MUTPRED|MVP|MPC|PRIMATEAI|DEOGEN2|ALOFT|ALPHAMISSENSE|CLINPRED|BAYESDEL|RELIABILITY_INDEX/i;
+    const generalImpact = /CADD|DANN|EIGEN|GENOCANYON|LINSIGHT|FITCONS/i;
+    const splicing = /SPLICEAI|GENESPLICER|MAXENTSCAN|SPLICEREGION|SPLICE_REGION/i;
+    const conservation = /GERP(?:\+\+)?|PHYLOP|PHASTCONS|SIPHY|BSTATISTIC/i;
+    return this.annotationMetadataFields(
+      annotations,
+      key => [proteinImpact, generalImpact, splicing, conservation].some(pattern => pattern.test(key)),
+    );
+  }
+
+  setRoute(runId, sampleId, options = {}) {
     if (!runId) return;
     const params = new URLSearchParams({run: runId});
     if (sampleId !== null) params.set("sample", String(sampleId));
+    if (options.view) params.set("view", options.view);
+    if (options.variantId) params.set("variant", String(options.variantId));
     const next = `#${this.routePrefix}?${params}`;
     if (window.location.hash !== next) window.history.replaceState(null, "", next);
   }
@@ -2838,11 +4167,20 @@ class VariantBrowser extends HTMLElement {
     const params = new URLSearchParams(hash.includes("?") ? hash.split("?")[1] : "");
     const runId = params.get("run");
     const sampleId = params.get("sample");
+    const view = params.get("view");
+    const variantId = params.get("variant");
     if (runId && this.runs.some(run => run.history_id === runId)) {
       if (this.selectedRun !== runId || !this.samples.length) await this.selectRun(runId, sampleId);
       else if (sampleId) {
         const sample = this.samples.find(item => item.sample_id === Number(sampleId));
         if (sample) await this.openSample(sample, false);
+      }
+      if (view === "igv" && sampleId && variantId) {
+        const source = this.workspaces.get(`${runId}:${Number(sampleId)}`);
+        if (source) {
+          await this.loadDetail(source, Number(variantId));
+          if (source.detail && !source.detail.error) this.openIgvWorkspace(source, source.detail);
+        }
       }
     }
   }

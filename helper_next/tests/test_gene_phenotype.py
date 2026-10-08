@@ -63,6 +63,24 @@ def test_missing_cache_returns_explicit_state(tmp_path):
     assert result["cache"]["status"] == "missing"
 
 
+def test_priority_contexts_use_supported_records_and_mark_multiple_diseases(tmp_path):
+    rows = (
+        'SGC-1,1,HGNC:1,GENE1,MONDO:1,Disease one,,,Definitive,,Autosomal dominant,ClinGen,,,,,\n'
+        'SGC-2,1,HGNC:1,GENE1,MONDO:2,Disease two,,,Moderate,,Autosomal recessive,GenCC,,,,,\n'
+        'SGC-3,1,HGNC:2,GENE2,MONDO:3,Disease three,,,Limited,,Autosomal dominant,GenCC,,,,,\n'
+    )
+    database = tmp_path / "gene_phenotype.sqlite3"
+    gene_phenotype.build_cache(io.StringIO(HEADER + rows), database)
+
+    contexts = gene_phenotype.priority_contexts(["GENE1", "GENE2"], database)
+
+    assert contexts["GENE1"]["inheritance_modes"] == [
+        "Autosomal dominant", "Autosomal recessive",
+    ]
+    assert contexts["GENE1"]["gene_context_ambiguous"] is True
+    assert "GENE2" not in contexts
+
+
 def test_enriches_exact_disease_with_hpo_features_and_g2p_mechanism(tmp_path):
     gencc = (
         HEADER
@@ -135,6 +153,7 @@ def test_enriches_exact_disease_with_hpo_features_and_g2p_mechanism(tmp_path):
         orphadata_stream=io.BytesIO(orphadata),
     )
     result = gene_phenotype.query_gene("SKI", "HGNC:10896", database)
+    priority_context = gene_phenotype.priority_contexts(["SKI"], database)["SKI"]
 
     assert status["hpo_row_count"] == 2
     assert status["g2p_row_count"] == 1
@@ -147,6 +166,9 @@ def test_enriches_exact_disease_with_hpo_features_and_g2p_mechanism(tmp_path):
     assert association["molecular_mechanism"]["status"] == "supported"
     assert association["molecular_mechanism"]["value"] == "dominant negative"
     assert association["molecular_mechanism"]["records"][0]["id"] == "G2P01276"
+    assert priority_context["disease_mechanisms"] == ["dominant negative"]
+    assert priority_context["mechanism_confidence"] == ["definitive"]
+    assert priority_context["gene_context_sources"] == ["GenCC", "Gene2Phenotype"]
     assert result["dosage_sensitivity"]["haploinsufficiency"]["score"] == "3"
     assert result["dosage_sensitivity"]["haploinsufficiency"]["disease_id"] == "MONDO:0008426"
     assert [(item["system"], item["code"]) for item in association["icd_codes"]] == [
@@ -183,6 +205,24 @@ def test_caches_gnomad_constraint_metrics_per_gene(tmp_path, monkeypatch):
     assert result["gene_constraint"]["pli"] == 0.99
     assert result["gene_constraint"]["loeuf"] == 0.21
     assert result["gene_constraint"]["missense_z"] == 3.2
+
+
+def test_caches_gnomad_gene_not_found_as_unavailable(tmp_path, monkeypatch):
+    database = tmp_path / "gene_knowledge.sqlite3"
+    gene_phenotype.build_cache(io.StringIO(
+        HEADER
+        + "SGC-1,1,HGNC:1,AC130469.2,MONDO:1,Example,,,Limited,,AD,Source,,,,,\n"
+    ), database)
+    response = io.BytesIO(b'{"errors": [{"message": "Gene not found"}]}')
+    monkeypatch.setattr(gene_phenotype, "_open_request", lambda request, timeout: response)
+
+    assert gene_phenotype.refresh_gnomad_constraint("AC130469.2", database) is False
+    result = gene_phenotype.query_gene("AC130469.2", "HGNC:1", database)
+
+    assert result["gene_constraint"]["status"] == "unavailable"
+    assert result["gene_constraint"]["stale"] is False
+    assert result["gene_constraint"]["refreshing"] is False
+    assert result["gene_constraint"]["updated_at"]
 
 
 def test_knowledge_download_retries_rate_limit(monkeypatch):

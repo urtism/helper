@@ -31,6 +31,40 @@ def cache_path():
     return root / "helper_variants" / "clinvar_evidence.sqlite3"
 
 
+def cache_status(database=None):
+    """Describe the on-demand cache without creating or refreshing it."""
+    database = Path(database or cache_path())
+    if not database.is_file():
+        return {
+            "status": "missing", "database": str(database), "record_count": 0,
+            "synchronized_at": "", "latest_record_update": "",
+        }
+    latest_record_update = ""
+    try:
+        with sqlite3.connect(str(database)) as connection:
+            rows = connection.execute(
+                "SELECT payload, retrieved_at FROM evidence ORDER BY retrieved_at DESC"
+            ).fetchall()
+    except sqlite3.Error as exc:
+        return {
+            "status": "invalid", "database": str(database), "record_count": 0,
+            "synchronized_at": "", "latest_record_update": "", "error": str(exc),
+        }
+    for payload, _ in rows:
+        try:
+            record_update = str(json.loads(payload).get("record_updated") or "")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if record_update > latest_record_update:
+            latest_record_update = record_update
+    return {
+        "status": "ready", "database": str(database), "record_count": len(rows),
+        "synchronized_at": str(rows[0][1] or "") if rows else "",
+        "latest_record_update": latest_record_update,
+        "cache_max_age_days": CACHE_MAX_AGE.days,
+    }
+
+
 def lookup_variant(reference_build, chromosome, position, reference, alternate,
                    database=None, timeout=12):
     """Return the current aggregate ClinVar assertion for one exact VCF allele."""

@@ -19,6 +19,7 @@ const sidebarStorageKey = "helper-next.sidebar-collapsed";
 const appShell = document.querySelector(".app-shell");
 const sidebar = document.querySelector("#primary-sidebar");
 const sidebarToggle = document.querySelector("#sidebar-toggle");
+const variantSourceInfo = document.querySelector("#variant-source-info");
 
 function setSidebarCollapsed(collapsed) {
   appShell.classList.toggle("sidebar-collapsed", collapsed);
@@ -45,10 +46,15 @@ function showSection(sectionId, updateHash = true) {
   });
 
   document.querySelector("#section-title").textContent = sectionTitles[sectionId];
+  variantSourceInfo.hidden = sectionId !== "variants";
   if (updateHash && !window.location.hash.startsWith(`#${sectionId}`)) {
     window.history.replaceState(null, "", `#${sectionId}`);
   }
 }
+
+variantSourceInfo.addEventListener("click", () => {
+  document.querySelector("variant-browser")?.openSourceRegistryPanel();
+});
 
 document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => showSection(button.dataset.section));
