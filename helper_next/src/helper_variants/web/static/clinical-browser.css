@@ -1,0 +1,23 @@
+:root { color: #263d52; font-family: Arial, Helvetica, sans-serif; }
+* { box-sizing: border-box; }
+body { background: #fff; margin: 0; min-width: 320px; }
+.clinical-toolbar { align-items: center; background: #faf7fd; border-bottom: 1px solid #dfd4ea; display: flex; gap: 14px; justify-content: space-between; min-height: 45px; padding: 7px 11px; }
+.clinical-toolbar > div:first-child { display: grid; gap: 2px; min-width: 0; }
+.clinical-toolbar strong { color: #52366f; font-size: 12px; }
+.clinical-toolbar #clinical-region { color: #607183; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clinical-legend { align-items: center; display: flex; flex-wrap: wrap; gap: 5px 10px; justify-content: flex-end; }
+.clinical-legend span { align-items: center; color: #536477; display: inline-flex; font-size: 9px; gap: 4px; white-space: nowrap; }
+.clinical-legend i { border: 1px solid rgba(0, 0, 0, .15); border-radius: 2px; display: inline-block; height: 9px; width: 9px; }
+.clinical-legend .pathogenic { background: #b42318; }
+.clinical-legend .vus { background: #d6a400; }
+.clinical-legend .conflicting { background: #d56a00; }
+.clinical-legend .benign { background: #238636; }
+.clinical-legend .other { background: #718096; }
+.clinical-status { background: #f6f8fa; border-bottom: 1px solid #dfe4ea; color: #526174; font-size: 11px; margin: 0; padding: 9px 11px; }
+.clinical-status.error { background: #fff1f1; color: #8a2525; }
+.clinical-status[hidden] { display: none; }
+#jbrowse-clinical-view { min-height: 535px; }
+@media (max-width: 700px) {
+  .clinical-toolbar { align-items: flex-start; display: grid; }
+  .clinical-legend { justify-content: flex-start; }
+}

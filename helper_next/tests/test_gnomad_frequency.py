@@ -56,6 +56,15 @@ def test_grch38_uses_v41_genomes_and_caches_frequency(tmp_path, monkeypatch):
     )
     assert cached["cache"] == "hit"
     assert len(calls) == 1
+    full = gnomad_frequency.cached_variant("GRCh38", "1", 11973063, "G", "C", database)
+    assert full["ac"] == 2 and full["an"] == 100000
+    assert full["coverage"]["adequate"] is True
+    assert full["populations"][0]["ac"] == 2
+    assert gnomad_frequency.cached_variant("GRCh37", "1", 11973063, "G", "C", database) is None
+    assert gnomad_frequency.cached_variant("GRCh38", "1", 11973063, "G", "T", database) is None
+    full["ac"] = 999
+    assert gnomad_frequency.cached_variant("GRCh38", "1", 11973063, "G", "C", database)["ac"] == 2
+    assert len(calls) == 1  # Full structured evidence is read locally.
 
 
 def test_hg19_uses_v211_genomes(tmp_path, monkeypatch):

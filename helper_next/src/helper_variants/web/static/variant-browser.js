@@ -1,9 +1,10 @@
 const ROW_HEIGHT = 36;
 const PAGE_SIZE = 200;
 const OVERSCAN = 8;
-const STYLESHEET_URL = new URL("./variant-browser.css?v=20261008-20", import.meta.url).href;
+const STYLESHEET_URL = new URL("./variant-browser.css?v=20261009-1", import.meta.url).href;
 const IGV_THEME_URL = new URL("./igv-theme.css?v=20261008-2", import.meta.url).href;
 const IGV_MODULE_URL = "https://cdn.jsdelivr.net/npm/igv@3.8.5/dist/igv.esm.min.js";
+const CLINICAL_BROWSER_URL = new URL("./clinical-browser.html?v=20261009-1", import.meta.url);
 const COLUMN_STORAGE_KEY = "helper-variant-column-order-v7";
 const COLUMN_WIDTH_STORAGE_KEY = "helper-variant-column-widths-v5";
 const VARIANT_COLUMNS = [
@@ -97,10 +98,12 @@ class VariantBrowser extends HTMLElement {
       <link rel="stylesheet" href="${STYLESHEET_URL}">
       <div class="variant-app">
         <details id="run-drawer" class="run-drawer" open>
-          <summary><span>Analysis runs</span><strong id="active-run-label">Select a run</strong></summary>
+          <summary><span>VCF sources · Open from run / External upload</span><strong id="active-run-label">Select a source</strong></summary>
           <div class="run-drawer-body">
             <div class="run-browser-controls">
               ${archiveAction}
+              <button id="upload-external-vcf" type="button">Upload external VCF</button>
+              <input id="external-vcf-file" type="file" accept=".vcf,.vcf.gz" hidden>
               <input id="run-search" type="search" placeholder="Search run, panel, pipeline…" aria-label="Search variant runs">
             </div>
             <div id="run-list" class="run-list"></div>
@@ -128,6 +131,23 @@ class VariantBrowser extends HTMLElement {
         <div id="dialog-layer"></div>
       </div>`;
     this.shadowRoot.querySelector("#run-search").addEventListener("input", () => this.renderRuns());
+    const externalFile = this.shadowRoot.querySelector("#external-vcf-file");
+    this.shadowRoot.querySelector("#upload-external-vcf").addEventListener("click", () => externalFile.click());
+    externalFile.addEventListener("change", async () => {
+      const file = externalFile.files[0];
+      if (!file) return;
+      const assembly = window.prompt("Confirm genome assembly explicitly: GRCh37 or GRCh38 (required even if metadata are absent).", "");
+      if (!assembly) return;
+      this.setStatus("Validating and indexing external VCF locally…");
+      try {
+        const response = await fetch(`${this.apiBase}/external-sources?assembly=${encodeURIComponent(assembly)}`, {method: "POST", body: file, headers: {"Content-Type": "application/octet-stream", "X-VCF-Filename": encodeURIComponent(file.name)}});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "VCF upload failed");
+        await this.refreshRuns();
+        await this.selectRun(result.source_id);
+      } catch (error) { this.setStatus(error.message, true); }
+      externalFile.value = "";
+    });
     this.shadowRoot.querySelector("#sample-search").addEventListener("input", () => this.renderSamples());
     this.shadowRoot.querySelector("#sample-panel-toggle").addEventListener("click", () => this.toggleSamplePanel());
     this.shadowRoot.querySelector("#add-archived-run")?.addEventListener("click", () => this.openArchivedRunPicker());
@@ -157,6 +177,7 @@ class VariantBrowser extends HTMLElement {
       workspace.genePhenotypeController?.abort();
       window.clearTimeout(workspace.genePhenotypeTimer);
       this.removeIgvBrowser(workspace);
+      if (workspace.clinicalFrame) workspace.clinicalFrame.src = "about:blank";
     }
   }
 
@@ -673,6 +694,7 @@ class VariantBrowser extends HTMLElement {
     workspace?.genePhenotypeController?.abort();
     window.clearTimeout(workspace?.genePhenotypeTimer);
     this.removeIgvBrowser(workspace);
+    if (workspace?.clinicalFrame) workspace.clinicalFrame.src = "about:blank";
     this.workspaces.delete(key);
     if (this.activeWorkspace === key) {
       const sameRun = Array.from(this.workspaces.values()).filter(item => item.runId === this.selectedRun);
@@ -692,7 +714,9 @@ class VariantBrowser extends HTMLElement {
         const wrapper = node("div", undefined, `workspace-tab${workspace.key === this.activeWorkspace ? " active" : ""}`);
         const tabLabel = workspace.kind === "igv"
           ? `IGV · ${workspace.sample.display_name}`
-          : (workspace.gene
+          : workspace.kind === "clinical"
+            ? `ClinVar · ${workspace.sample.display_name}`
+            : (workspace.gene
             ? `${workspace.gene} · ${workspace.sample.display_name}` : workspace.sample.display_name);
         const select = node("button", tabLabel);
         select.addEventListener("click", () => {
@@ -701,7 +725,8 @@ class VariantBrowser extends HTMLElement {
           this.renderWorkspace();
           this.setRoute(
             workspace.runId, workspace.sample.sample_id,
-            workspace.kind === "igv" ? {view: "igv", variantId: workspace.variant?.variant_id} : {},
+            ["igv", "clinical"].includes(workspace.kind)
+              ? {view: workspace.kind, variantId: workspace.variant?.variant_id} : {},
           );
         });
         const close = node("button", "×", "close-tab");
@@ -1717,6 +1742,11 @@ class VariantBrowser extends HTMLElement {
       window.requestAnimationFrame(() => this.initializeIgvWorkspace(workspace));
       return;
     }
+    if (workspace.kind === "clinical") {
+      host.className = "clinical-workspace";
+      host.replaceChildren(this.renderClinicalWorkspace(workspace));
+      return;
+    }
     host.className = `workspace-grid${workspace.detail ? "" : " detail-closed"}`;
     const tablePanel = node("section", undefined, "table-panel");
     const heading = node("div", undefined, "sample-heading");
@@ -1911,6 +1941,112 @@ class VariantBrowser extends HTMLElement {
       view: "igv", variantId: detail.variant_id,
     });
     if (workspace.igvBrowser) this.updateIgvLocus(workspace);
+  }
+
+  openClinicalWorkspace(sourceWorkspace, detail) {
+    if (!detail || detail.loading || detail.error) return;
+    const key = `${sourceWorkspace.runId}:${sourceWorkspace.sample.sample_id}:clinical`;
+    let workspace = this.workspaces.get(key);
+    if (!workspace) {
+      workspace = {
+        kind: "clinical", key, runId: sourceWorkspace.runId, sample: sourceWorkspace.sample,
+        sourceWorkspaceKey: sourceWorkspace.key, variant: {...detail}, clinicalElement: null,
+        clinicalFrame: null,
+      };
+      this.workspaces.set(key, workspace);
+    } else {
+      workspace.sourceWorkspaceKey = sourceWorkspace.key;
+      workspace.variant = {...detail};
+    }
+    this.activeWorkspace = key;
+    this.renderTabs();
+    this.renderWorkspace();
+    this.setRoute(workspace.runId, workspace.sample.sample_id, {
+      view: "clinical", variantId: detail.variant_id,
+    });
+  }
+
+  clinicalBrowserSrc(workspace) {
+    const variant = workspace.variant || {};
+    const position = Math.max(1, Number(variant.position || 1));
+    const referenceLength = Math.max(1, String(variant.reference || "").length);
+    const chromosome = String(variant.chromosome || "").replace(/^chr/i, "");
+    const displayChromosome = `chr${chromosome === "MT" ? "M" : chromosome}`;
+    const url = new URL(CLINICAL_BROWSER_URL);
+    url.searchParams.set("build", variant.reference_build || "GRCh38");
+    url.searchParams.set("chr", displayChromosome);
+    url.searchParams.set("start", String(Math.max(1, position - 25000)));
+    url.searchParams.set("end", String(position + 25000));
+    url.searchParams.set("position", String(position));
+    url.searchParams.set("length", String(referenceLength));
+    url.searchParams.set("allele", `${value(variant.reference, "?")}>${value(variant.alternate, "?")}`);
+    return url.href;
+  }
+
+  renderClinicalWorkspace(workspace) {
+    if (workspace.clinicalElement) {
+      this.updateClinicalWorkspace(workspace);
+      return workspace.clinicalElement;
+    }
+    const panel = node("section", undefined, "clinical-panel");
+    const header = node("div", undefined, "clinical-panel-header");
+    const identity = node("div", undefined, "clinical-panel-identity");
+    identity.append(
+      node("span", "Clinical context", "clinical-eyebrow"),
+      node("h4", "ClinVar regional variants"),
+      node("p", "Preparing locus…", "clinical-locus-label"),
+    );
+    const actions = node("div", undefined, "clinical-panel-actions");
+    const back = node("button", "Back to variants");
+    back.addEventListener("click", () => {
+      const source = this.workspaces.get(workspace.sourceWorkspaceKey)
+        || Array.from(this.workspaces.values()).find(item => (
+          !item.kind && item.runId === workspace.runId
+          && item.sample.sample_id === workspace.sample.sample_id
+        ));
+      if (!source) return;
+      this.activeWorkspace = source.key;
+      this.renderTabs();
+      this.renderWorkspace();
+      this.setRoute(source.runId, source.sample.sample_id);
+    });
+    const center = node("button", "Center on variant", "primary");
+    center.addEventListener("click", () => {
+      workspace.clinicalFrame.src = this.clinicalBrowserSrc(workspace);
+    });
+    actions.append(back, center);
+    header.append(identity, actions);
+
+    const note = node(
+      "p",
+      "ClinVar classifications may be condition-specific; conflicting submissions remain distinct evidence.",
+      "clinical-note",
+    );
+    const frame = document.createElement("iframe");
+    frame.className = "clinical-browser-frame";
+    frame.title = `ClinVar regional variants for ${workspace.sample.display_name}`;
+    frame.referrerPolicy = "no-referrer";
+    panel.append(header, note, frame);
+    workspace.clinicalElement = panel;
+    workspace.clinicalFrame = frame;
+    workspace.clinicalIdentity = identity;
+    this.updateClinicalWorkspace(workspace);
+    return panel;
+  }
+
+  updateClinicalWorkspace(workspace) {
+    if (!workspace.clinicalElement) return;
+    const variant = workspace.variant || {};
+    const chromosome = String(variant.chromosome || "").replace(/^chr/i, "");
+    workspace.clinicalIdentity.querySelector("h4").textContent =
+      `ClinVar · ${workspace.sample.display_name}`;
+    workspace.clinicalIdentity.querySelector(".clinical-locus-label").textContent =
+      `chr${chromosome}:${value(variant.position)} ${value(variant.reference)}>${value(variant.alternate)}`;
+    const src = this.clinicalBrowserSrc(workspace);
+    if (workspace.clinicalFrame.dataset.clinicalSrc !== src) {
+      workspace.clinicalFrame.dataset.clinicalSrc = src;
+      workspace.clinicalFrame.src = src;
+    }
   }
 
   renderIgvWorkspace(workspace) {
@@ -2165,9 +2301,17 @@ class VariantBrowser extends HTMLElement {
     if (track.source_type === "custom") {
       return {
         id: track.id, name: `${track.name} · ${track.stage}`, type: "annotation",
-        sourceType: "custom", source: {url: track.url, contentType: "application/json"},
+        sourceType: "custom", source: {
+          // IGV expands query windows using fractional coordinates; the API expects integers.
+          url: ({chr, start, end}) => track.url
+            .replace("$CHR", encodeURIComponent(chr))
+            .replace("$START", Math.max(0, Math.floor(start)))
+            .replace("$END", Math.ceil(end)),
+          contentType: "application/json",
+        },
         displayMode: "EXPANDED", color: "#6c5aa7", height: 75,
-        visibilityWindow: 100000,
+        // Leave room for outward rounding within the API's 100000-base limit.
+        visibilityWindow: 99998,
       };
     }
     if (track.type === "alignment") {
@@ -2524,7 +2668,19 @@ class VariantBrowser extends HTMLElement {
     inspect.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
     inspect.title = "Open this locus in a dedicated IGV tab";
     inspect.addEventListener("click", () => this.openIgvWorkspace(workspace, workspace.detail));
-    headingActions.append(inspect, close);
+    const clinical = node("button", "Clinical region", "clinical-open");
+    clinical.type = "button";
+    clinical.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
+    clinical.title = "Show nearby ClinVar variants in JBrowse";
+    clinical.addEventListener("click", () => this.openClinicalWorkspace(workspace, workspace.detail));
+    const acmg = node("button", "Interpret with ACMG Engine", "acmg-open");
+    acmg.type = "button";
+    acmg.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
+    acmg.addEventListener("click", async () => {
+      const {openAcmgWorkbench} = await import("./acmg-workbench.js");
+      await openAcmgWorkbench(this, workspace);
+    });
+    headingActions.append(acmg, clinical, inspect, close);
     heading.append(node("h4", "Variant detail"), headingActions);
     panel.append(heading);
     if (workspace.detail.loading) {
@@ -4175,11 +4331,14 @@ class VariantBrowser extends HTMLElement {
         const sample = this.samples.find(item => item.sample_id === Number(sampleId));
         if (sample) await this.openSample(sample, false);
       }
-      if (view === "igv" && sampleId && variantId) {
+      if (["igv", "clinical"].includes(view) && sampleId && variantId) {
         const source = this.workspaces.get(`${runId}:${Number(sampleId)}`);
         if (source) {
           await this.loadDetail(source, Number(variantId));
-          if (source.detail && !source.detail.error) this.openIgvWorkspace(source, source.detail);
+          if (source.detail && !source.detail.error) {
+            if (view === "igv") this.openIgvWorkspace(source, source.detail);
+            else this.openClinicalWorkspace(source, source.detail);
+          }
         }
       }
     }

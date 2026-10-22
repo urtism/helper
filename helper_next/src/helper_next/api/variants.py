@@ -1,16 +1,21 @@
 """API for creating and inspecting run-local variant indexes."""
 import logging
+import math
 import re
 import sqlite3
 import threading
 from pathlib import Path
+from urllib.parse import unquote
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from helper_next.api.samplesheet import consume_picker_selection
 from helper_next.core import analysis_history as history
+from helper_next.core import external_vcf
+from helper_next.core import acmg_context
 from helper_next.core.variant_import import ArchivedRunImportError, create_archived_run
 from helper_variants import clinvar
 from helper_variants import gene_phenotype
@@ -102,7 +107,10 @@ class ArchivedRunRequest(BaseModel):
 
 
 def _record(identifier):
-    record = history.get(identifier)
+    try:
+        record = external_vcf.get(identifier) if identifier.startswith("external-") else history.get(identifier)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="External VCF source not found")
     if record is None:
         raise HTTPException(status_code=404, detail="Archived analysis not found")
     return record
@@ -118,7 +126,7 @@ def _database(record):
 def _entry(identifier):
     record = _record(identifier)
     return {
-        "kind": "analysis", "record": record,
+        "kind": "external" if record.get("source_type") == "EXTERNAL_UPLOAD" else "analysis", "record": record,
         "database": variant_indexer.index_path(record["run_dir"]),
         "run_id": record.get("run_id", ""), "identifier": identifier,
     }
@@ -270,7 +278,39 @@ def indexed_variant_runs():
             "reference_build": public_run["reference_build"],
             "sample_count": public_run["sample_count"],
         })
-    return {"runs": runs}
+    return {"runs": runs + external_vcf.public_sources()}
+
+
+@router.post("/external-sources", status_code=201)
+async def upload_external_vcf(request: Request, filename: str = Header(..., alias="X-VCF-Filename"), assembly: str = Query(...)):
+    """Raw streamed file body avoids multipart buffering and synthetic run history."""
+    identifier = None
+    try:
+        filename = unquote(filename, errors="strict")
+        if assembly not in ("GRCh37", "GRCh38"):
+            raise ValueError("Explicit GRCh37 or GRCh38 confirmation is required")
+        identifier, path = external_vcf.allocate(filename)
+        size = 0
+        with path.open("xb") as handle:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > external_vcf.MAX_UPLOAD:
+                    raise HTTPException(status_code=413, detail="VCF upload size limit exceeded")
+                handle.write(chunk)
+        record = await run_in_threadpool(external_vcf.finish, identifier, path, filename, assembly)
+        return {"source_id": identifier, "source_type": "EXTERNAL_UPLOAD", "sha256": record["sha256"]}
+    except HTTPException:
+        if identifier:
+            external_vcf.discard(identifier)
+        raise
+    except (OSError, ValueError, EOFError) as exc:
+        if identifier:
+            external_vcf.discard(identifier)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except BaseException:
+        if identifier:
+            external_vcf.discard(identifier)
+        raise
 
 
 @router.post("/archived-runs", status_code=202)
@@ -379,16 +419,22 @@ def sample_igv_file(identifier: str, sample_id: int, kind: str, request: Request
 @router.get("/runs/{identifier}/samples/{sample_id}/igv-gnomad")
 def sample_igv_gnomad_region(
     identifier: str, sample_id: int, chr: str,
-    start: int = Query(ge=0), end: int = Query(ge=1),
+    start: float = Query(ge=0), end: float = Query(ge=1),
 ):
     entry = _entry(identifier)
     sample = _igv_sample(entry, sample_id)
-    if end <= start or end - start > 100_000:
+    if not math.isfinite(start) or not math.isfinite(end):
+        raise HTTPException(status_code=422, detail="gnomAD track coordinates must be finite")
+    # IGV expands cached windows with fractional coordinates. Convert its zero-based
+    # interval outward so the requested bases remain covered by the integer API.
+    region_start = max(0, math.floor(start))
+    region_end = math.ceil(end)
+    if region_end <= region_start or region_end - region_start > 100_000:
         raise HTTPException(status_code=422, detail="gnomAD track windows must span 1-100000 bases")
     try:
         payload, _ = igv.manifest(entry["record"], sample)
         return gnomad_frequency.region_variants(
-            payload["reference_build"], chr, start + 1, end,
+            payload["reference_build"], chr, region_start + 1, region_end,
         )
     except (gnomad_frequency.GnomadFrequencyError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -551,6 +597,7 @@ def sample_variant_detail(identifier: str, sample_id: int, variant_id: int):
         except clinvar.ClinVarError:
             detail["clinvar_evidence"] = dict(evidence, retrieval_status="unavailable")
     _include_clinvar_identifiers(detail)
+    detail["interpretation_context"] = acmg_context.build(detail)
     return detail
 
 

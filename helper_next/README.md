@@ -1,5 +1,9 @@
 # Helper Next
 
+ACMG Interpretation Workbench (research): [installazione e uso](../docs/TASK22_WORKBENCH.md),
+[stato e verifiche TASK 22](../docs/TASK22_STATUS.md),
+[contratto ACMG Engine e limiti dell'audit](../docs/TASK22_ACMG_CONTRACT.md).
+
 Prototype for the next Helper interface.
 
 The goal is to develop a local web app without touching the existing PyQt GUI.
@@ -14,6 +18,16 @@ From this directory:
 python -m pip install -e .
 helper-next serve
 ```
+
+Il server avvia anche ACMG Engine locale, se installato nel repository adiacente
+`acmg-engine/.venv` o disponibile nel `PATH`, e riutilizza un motore già attivo.
+Per un altro eseguibile usare `HELPER_ACMG_COMMAND`; per disabilitare l'avvio
+automatico usare `HELPER_ACMG_AUTOSTART=0`.
+I sei profili sperimentali selezionati sono elencati in
+`configs/acmg_engine.json`; `ACMG_PROFILES_DIR` ha priorità su questa selezione.
+La stessa configurazione abilita l'esecuzione research; l'ambiente
+`ACMG_ENABLE_RESEARCH_INTERPRETATION` ha priorità su tale impostazione.
+[Installazione e configurazione ACMG](../docs/TASK22_WORKBENCH.md).
 
 Use `python -m pip` rather than plain `pip` in the `gatk43` environment. On
 some workstations the `pip` command still points to Python 2.7.

@@ -243,6 +243,9 @@ def test_igv_manifest_and_file_endpoint_support_byte_ranges(tmp_path, monkeypatc
     assert variants.sample_igv_gnomad_region(
         record["id"], sample_id, chr="chr1", start=99, end=120,
     ) == [{"chr": "chr1", "start": 99, "end": 120}]
+    assert variants.sample_igv_gnomad_region(
+        record["id"], sample_id, chr="chr2", start=189912858.65, end=189915306.35,
+    ) == [{"chr": "chr2", "start": 189912858, "end": 189915307}]
 
     request = Request({
         "type": "http", "method": "GET", "path": "/", "query_string": b"",

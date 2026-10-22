@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ClinVar regional variants</title>
+    <link rel="stylesheet" href="./clinical-browser.css?v=20261009-1">
+    <script
+      src="https://unpkg.com/@jbrowse/react-linear-genome-view2@4.3.0/dist/react-linear-genome-view.umd.production.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script type="module" src="./clinical-browser.js?v=20261009-4"></script>
+  </head>
+  <body>
+    <div class="clinical-toolbar">
+      <div>
+        <strong>ClinVar clinical significance</strong>
+        <span id="clinical-region">Loading region…</span>
+      </div>
+      <div class="clinical-legend" aria-label="Clinical significance colors">
+        <span><i class="pathogenic"></i>Pathogenic</span>
+        <span><i class="vus"></i>VUS</span>
+        <span><i class="conflicting"></i>Conflicting</span>
+        <span><i class="benign"></i>Benign</span>
+        <span><i class="other"></i>Other</span>
+      </div>
+    </div>
+    <p id="clinical-status" class="clinical-status" role="status">Loading JBrowse and ClinVar…</p>
+    <div id="jbrowse-clinical-view"></div>
+  </body>
+</html>

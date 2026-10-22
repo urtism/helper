@@ -903,6 +903,7 @@ def query_gene(gene_symbol, hgnc_id="", database=None):
         dosage_sensitivity = _query_clingen_dosage(connection, gene_symbol)
     return {
         "gene": gene_symbol, "hgnc_id": normalized_hgnc,
+        "gene_identifiers": sorted({row["gene_curie"] for row in rows if row["gene_curie"]}),
         "associations": associations, "association_count": len(associations),
         "assertion_count": sum(len(item["assertions"]) for item in associations),
         "gene_constraint": gene_constraint,
@@ -1255,6 +1256,7 @@ def _aggregate_assertions(rows):
             association["strongest_classification"] = classification
         association["assertions"].append({
             "id": row["sgc_id"], "version": row["version_number"],
+            "gene_id": row["gene_curie"], "inheritance_id": row["moi_curie"],
             "source": row["submitter_title"], "classification": classification,
             "inheritance": row["moi_title"], "submitted_at": row["submitted_as_date"],
             "report_url": row["public_report_url"], "pmids": row["pmids"],

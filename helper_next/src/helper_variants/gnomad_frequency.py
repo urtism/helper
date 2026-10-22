@@ -213,14 +213,29 @@ def region_variants(reference_build, chromosome, start, end, timeout=12):
     return features
 
 
-def cached_context(reference_build, chromosome, position, reference, alternate, database=None):
-    """Return priority-engine fields for an already cached exact allele only."""
+def cached_variant(reference_build, chromosome, position, reference, alternate, database=None):
+    """Return the full existing allele-specific lookup, without a network request."""
     try:
         key = cache_key(reference_build, chromosome, position, reference, alternate)
     except (TypeError, ValueError):
-        return {}
+        return None
     result = _cached(Path(database or cache_path()), key)
-    return priority_context(result)
+    if not isinstance(result, dict):
+        return None
+    try:
+        stored_key = cache_key(*(result.get(k) for k in (
+            "reference_build", "chromosome", "position", "reference", "alternate"
+        )))
+    except (TypeError, ValueError):
+        return None
+    return result if stored_key == key else None
+
+
+def cached_context(reference_build, chromosome, position, reference, alternate, database=None):
+    """Return priority-engine fields for an already cached exact allele only."""
+    return priority_context(cached_variant(
+        reference_build, chromosome, position, reference, alternate, database
+    ))
 
 
 def cached_contexts(alleles, database=None):

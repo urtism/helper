@@ -1,0 +1,43 @@
+.acmg-workbench { width: min(1120px, 94vw); max-height: 92vh; box-sizing: border-box; overflow: auto; background: #fff; color: #17283b; padding: 20px; border-radius: 8px; font: 13px/1.45 system-ui, sans-serif; }
+.acmg-workbench [hidden] { display: none !important; }
+.acmg-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.acmg-workbench .status { font-size: 12px; color: #526579; overflow-wrap: anywhere; }
+.acmg-variant { font-weight: 600; }
+.acmg-workbench h3, .acmg-workbench h4 { margin: 10px 0; }
+.acmg-workbench button, .acmg-workbench input, .acmg-workbench select, .acmg-workbench textarea { font: inherit; padding: 7px; }
+.acmg-workbench select { min-width: 0; width: 100%; }
+.acmg-workbench details { border: 1px solid #dbe2ea; padding: 9px; margin: 8px 0; border-radius: 4px; }
+.acmg-workbench summary { cursor: pointer; font-weight: 600; }
+.acmg-workbench table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.acmg-workbench th, .acmg-workbench td { text-align: left; vertical-align: top; border: 1px solid #dbe2ea; padding: 4px; overflow-wrap: anywhere; }
+.acmg-workbench th { background: #edf2f6; }
+.acmg-warning { background: #fff5de; border-left: 3px solid #a8650a; padding: 7px 10px; font-size: 12px; }
+.acmg-config { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 12px 0; }
+.acmg-config label { display: flex; flex-direction: column; gap: 4px; max-width: 100%; min-width: 0; }
+.acmg-config > label { flex: 1 1 260px; }
+.acmg-config > p, .acmg-config > details { flex-basis: 100%; margin: 0; }
+.acmg-config > details > .acmg-config { margin-top: 12px; }
+.acmg-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 10px 0; }
+.acmg-actions details { margin: 0; }
+.acmg-actions details a { display: block; margin: 6px; }
+.acmg-workbench .acmg-primary { background: #234e70; border: 1px solid #234e70; border-radius: 4px; color: #fff; padding: 8px 16px; cursor: pointer; }
+.acmg-workbench .acmg-primary:disabled { opacity: .5; cursor: default; }
+.acmg-checkbox { display: inline-flex; align-items: center; gap: 5px; }
+.acmg-outcome { background: #f1f6fa; border-left: 3px solid #234e70; padding: 10px 14px; margin-top: 16px; }
+.acmg-outcome h4 { font-size: 18px; }
+.acmg-outcome p { margin: 6px 0; }
+.acmg-table-scroll { overflow: auto; max-height: 420px; }
+.acmg-table-scroll table { min-width: 720px; }
+.acmg-table-scroll th { position: sticky; top: 0; z-index: 1; }
+.acmg-inspector { margin: 12px 0; overflow-wrap: anywhere; }
+.acmg-inspector:not(:empty) { border: 1px solid #cad5df; border-radius: 4px; padding: 12px; }
+.acmg-reason { color: #526579; font-size: 12px; }
+.acmg-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.acmg-review { display: grid; gap: 6px; }
+.acmg-workbench textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
+.acmg-values td { min-width: 90px; }
+.acmg-summary { display: grid; grid-template-columns: 100px minmax(0, 1fr) 100px minmax(0, 1fr); gap: 4px 8px; margin: 6px 0; }
+.acmg-summary dt { font-weight: 600; }
+.acmg-summary dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 850px) { .acmg-comparison { grid-template-columns: 1fr; } .acmg-summary { grid-template-columns: 100px minmax(0, 1fr); } }
+@media (max-width: 600px) { .acmg-workbench { padding: 12px; } .acmg-config > label { flex-basis: 100%; } .acmg-config .acmg-actions { margin: 0; } }

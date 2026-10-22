@@ -1,0 +1,11 @@
+{
+  "enable_research_interpretation": true,
+  "profile_files": [
+    "../../acmg-engine/docs/examples/task20/population_generic_profile.json",
+    "../../acmg-engine/docs/examples/task20/population_myh7_profile.json",
+    "../../acmg-engine/docs/examples/task20/population_custom_profile.json",
+    "../../acmg-engine/docs/examples/task20/population_custom_genome_profile.json",
+    "../../acmg-engine/docs/examples/task20/splice_ps1_generic_profile.json",
+    "../../acmg-engine/docs/examples/task20/splice_ps1_custom_profile.json"
+  ]
+}

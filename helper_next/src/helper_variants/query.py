@@ -501,7 +501,7 @@ def variant_detail(database, sample_id, variant_id):
         annotations = [dict(row) for row in db.execute(
             "SELECT an.id, ar.release_key, ar.annotator, ar.annotator_version, ar.created_at, "
             "an.allele, an.gene, an.transcript, an.consequence, an.impact, an.hgvsc, an.hgvsp, "
-            "an.clinical_significance, an.population_af, an.canonical, an.metadata_json "
+            "an.clinical_significance, an.population_af, an.canonical, an.metadata_json, ar.resources_json "
             "FROM annotations an JOIN annotation_releases ar ON ar.id = an.release_id "
             "WHERE an.variant_id = ? ORDER BY ar.id DESC, an.canonical DESC, an.id",
             (int(variant_id),),
@@ -513,6 +513,7 @@ def variant_detail(database, sample_id, variant_id):
             call["metadata"] = _json_value(call.pop("metadata_json"))
         for annotation in annotations:
             annotation["canonical"] = bool(annotation["canonical"])
+            annotation["release_resources"] = _json_value(annotation.pop("resources_json"))
             annotation["metadata"] = _json_value(annotation.pop("metadata_json"))
             annotation["exon_intron"] = _annotation_exon_intron(
                 annotation["metadata"], annotation["consequence"]
@@ -524,6 +525,10 @@ def variant_detail(database, sample_id, variant_id):
         })
         result["clinvar_evidence"] = _clinvar_evidence(
             result["metadata"], annotations, result["database_ids"].get("clinvar", [])
+        )
+        result["gnomad_frequency"] = gnomad_frequency.cached_variant(
+            result["reference_build"], result["chromosome"], result["position"],
+            result["reference"], result["alternate"],
         )
         return result
 

@@ -375,6 +375,8 @@ def read_vcf(path):
     handle = gzip.open(str(path), "rt", encoding="utf-8", errors="replace") \
         if str(path).endswith(".gz") else open(str(path), "r", encoding="utf-8", errors="replace")
     info_layouts = {}
+    info_definitions = {}
+    metadata = []
     samples = []
 
     def records():
@@ -382,11 +384,14 @@ def read_vcf(path):
             for line_number, line in enumerate(handle, 1):
                 if line.startswith("##INFO=<"):
                     info_id = _header_value(line, "ID")
+                    info_definitions[info_id] = {"number": _header_value(line, "Number"), "definition": line.strip()}
                     if info_id in ("ANN", "CSQ"):
                         match = FORMAT_RE.search(line)
                         if match:
                             info_layouts[info_id] = [item.strip() for item in match.group(1).strip().split("|")]
                     continue
+                if line.startswith("##"):
+                    metadata.append(line.strip())
                 if line.startswith("#CHROM"):
                     columns = line.rstrip("\r\n").split("\t")
                     samples[:] = columns[9:]
@@ -416,7 +421,7 @@ def read_vcf(path):
         for item in iterator:
             yield item
 
-    return {"info_layouts": info_layouts, "samples": samples}, with_first()
+    return {"info_layouts": info_layouts, "info_definitions": info_definitions, "metadata": metadata, "samples": samples}, with_first()
 
 
 def normalize_allele(position, reference, alternate, chromosome=None, reference_reader=None):
@@ -481,6 +486,12 @@ def _index_record(db, fields, header, build, analyses, release_id, caller, refer
         )
         variant_metadata = {
             "vcf_id": identifier,
+            "original_vcf": {
+                "chromosome": chromosome, "position": position, "reference": reference,
+                "alternate": alternate, "alt_index": alt_index,
+                "alternates": alternatives, "qual": quality, "filter": filter_status,
+                "info": info, "format_keys": format_keys,
+            },
             "quality_metrics": {
                 key: info[key] for key in ("FS", "SOR") if info.get(key) not in (None, "")
             },
@@ -493,7 +504,7 @@ def _index_record(db, fields, header, build, analyses, release_id, caller, refer
             _variant_type(normalized_ref, normalized_alt), variant_metadata,
         )
         _record_annotations(
-            db, variant_id, release_id, alternate, alternatives, info, header["info_layouts"]
+            db, variant_id, release_id, alternate, alternatives, info, header["info_layouts"], reference
         )
         if sample_fields:
             for sample_name, sample_field in zip(header["samples"], sample_fields):
@@ -536,7 +547,7 @@ def _record_call(db, analysis_id, variant_id, call, alt_index, quality, filter_s
     )
 
 
-def _record_annotations(db, variant_id, release_id, alternate, alternatives, info, layouts):
+def _record_annotations(db, variant_id, release_id, alternate, alternatives, info, layouts, reference=""):
     for tag in ("ANN", "CSQ"):
         raw = info.get(tag)
         layout = layouts.get(tag)
@@ -546,8 +557,17 @@ def _record_annotations(db, variant_id, release_id, alternate, alternatives, inf
             values = value.split("|")
             data = dict(zip(layout, values))
             allele = _pick(data, "Allele")
-            if len(alternatives) > 1 and allele not in (alternate, _trimmed_alt(alternate)):
-                continue
+            if len(alternatives) > 1:
+                allele_number = data.get("ALLELE_NUM")
+                if allele_number:
+                    if allele_number != str(alternatives.index(alternate) + 1):
+                        continue
+                else:
+                    # VEP may minimize indels; ambiguous labels are not assigned to
+                    # multiple ALT alleles. The original INFO remains available.
+                    matches = [a for a in alternatives if allele in (a, _annotation_allele(reference, a))]
+                    if matches != [alternate]:
+                        continue
             consequence = _pick(data, "Annotation", "Consequence")
             population_af = _float_or_none(_pick(data, "MAX_AF", "gnomAD_AF", "AF"))
             variant_store.record_annotation(
@@ -569,7 +589,8 @@ def _annotation_release(db, run_key, build, digest, header):
     annotator = "+".join(tags) if tags else "unannotated"
     return variant_store.register_annotation_release(
         db, "{}:original:{}".format(run_key, digest[:16]), annotator, build,
-        resources={"source_sha256": digest, "info_tags": tags},
+        resources={"source_sha256": digest, "info_tags": tags,
+                   "info_definitions": header.get("info_definitions", {}), "header_metadata": header.get("metadata", [])},
     )
 
 
@@ -676,6 +697,15 @@ def _variant_type(reference, alternate):
 
 def _trimmed_alt(alternate):
     return alternate[1:] if len(alternate) > 1 else alternate
+
+
+def _annotation_allele(reference, alternate):
+    ref, alt = reference, alternate
+    while ref and alt and ref[0] == alt[0]:
+        ref, alt = ref[1:], alt[1:]
+    while ref and alt and ref[-1] == alt[-1]:
+        ref, alt = ref[:-1], alt[:-1]
+    return alt or "-"
 
 
 def _sample_name_from_path(path):

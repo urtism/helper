@@ -1,9 +1,40 @@
 from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
 
 from helper_next.api.app import create_app
 
 
 STATIC = Path(__file__).resolve().parents[1] / "src"
+
+
+def test_igv_custom_track_rounds_fractional_query_coordinates():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required to exercise the IGV track configuration")
+    script = r"""
+      const fs = require('node:fs');
+      const assert = require('node:assert/strict');
+      const source = fs.readFileSync(process.argv[1], 'utf8');
+      const method = source.slice(source.indexOf('  igvTrackConfig(track, workspace) {'),
+        source.indexOf('  igvChromosome(workspace) {'));
+      const viewer = Function(`return ({${method}})`)();
+      const config = viewer.igvTrackConfig({id: 'gnomad-regional', source_type: 'custom',
+        url: '/igv-gnomad?chr=$CHR&start=$START&end=$END'}, {});
+      assert.equal(config.source.url({chr: 'chr1', start: 98.25, end: 120.75}),
+        '/igv-gnomad?chr=chr1&start=98&end=121');
+      assert.equal(config.source.url({chr: 'chr1', start: -0.5, end: 120.1}),
+        '/igv-gnomad?chr=chr1&start=0&end=121');
+      const url = new URL(config.source.url({chr: 'chr1', start: 100.5,
+        end: 100.5 + config.visibilityWindow}), 'http://localhost');
+      assert.ok(Number(url.searchParams.get('end')) - Number(url.searchParams.get('start')) <= 100000);
+    """
+    subprocess.run(
+        [node, "-e", script, str(STATIC / "helper_variants/web/static/variant-browser.js")],
+        check=True, capture_output=True, text=True,
+    )
 
 
 def test_helper_mounts_standalone_variant_assets_and_only_hosts_the_component():
