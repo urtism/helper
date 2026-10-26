@@ -4,6 +4,11 @@ ACMG Interpretation Workbench (research): [installazione e uso](../docs/TASK22_W
 [stato e verifiche TASK 22](../docs/TASK22_STATUS.md),
 [contratto ACMG Engine e limiti dell'audit](../docs/TASK22_ACMG_CONTRACT.md).
 
+Task 23 criteria-only workspace: [audit, compatibility matrix, setup and validation](../docs/TASK23_ACMG_INTEGRATION.md).
+The Task 22 engine protocols appear inside the existing variant detail, with
+criteria status/strength, actual decision graphs and trace inspection, protocol
+comparison, separate reviews, typed evidence corrections and JSON/CSV exports.
+
 Prototype for the next Helper interface.
 
 The goal is to develop a local web app without touching the existing PyQt GUI.

@@ -41,3 +41,17 @@
 .acmg-summary dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 850px) { .acmg-comparison { grid-template-columns: 1fr; } .acmg-summary { grid-template-columns: 100px minmax(0, 1fr); } }
 @media (max-width: 600px) { .acmg-workbench { padding: 12px; } .acmg-config > label { flex-basis: 100%; } .acmg-config .acmg-actions { margin: 0; } }
+.acmg-decision-graph svg { display: block; width: 100%; height: 480px; background: #f7f9fc; border: 1px solid #aab7c8; touch-action: none; }
+.acmg-decision-graph path { fill: none; }
+.acmg-decision-graph .skipped-edge { stroke: #c5cad1; stroke-width: 1; }
+.acmg-decision-graph .executed-edge { stroke: #21805b; stroke-width: 3; }
+.acmg-decision-graph .decision-node { cursor: pointer; }
+.acmg-decision-graph .decision-node rect { fill: #e9edf1; stroke: #8b99aa; }
+.acmg-decision-graph .decision-node.executed rect { fill: #dbf3e7; stroke: #21805b; }
+.acmg-decision-graph .decision-node.problem rect { fill: #fff0c8; stroke: #9c6600; }
+.acmg-decision-graph .decision-node.terminal rect { stroke: #2266b8; stroke-width: 4; }
+.acmg-decision-graph .decision-node text { fill: #182432; font-size: 11px; }
+.acmg-workbench pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 520px; overflow: auto; }
+.acmg-workbench fieldset { min-width: 0; margin: 6px 0; border: 1px solid #cad5df; }
+.acmg-workbench fieldset label { display: block; margin: 4px 0; }
+.acmg-workbench fieldset input:not([type=checkbox]) { max-width: 100%; box-sizing: border-box; }

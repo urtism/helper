@@ -2,14 +2,31 @@
 import errno
 import hashlib
 import json
+import logging
+import math
 import os
 import socket
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
+from uuid import uuid4
 
 
 MAX_RESPONSE = 16 * 1024 * 1024
+logger = logging.getLogger(__name__)
+
+
+def strict_json(raw):
+    def reject_constant(value):
+        raise ValueError("Nonfinite JSON")
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate JSON key")
+            result[key] = value
+        return result
+    return json.loads(raw, parse_constant=reject_constant, object_pairs_hook=unique)
 
 
 def digest(value):
@@ -35,17 +52,26 @@ class ACMGClient:
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise EngineError("CONFIGURATION_ERROR", "Invalid ACMG_ENGINE_URL", 503)
         self.timeout = float(os.environ.get("ACMG_ENGINE_TIMEOUT", "15"))
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise EngineError("CONFIGURATION_ERROR", "ACMG_ENGINE_TIMEOUT must be a positive finite number", 503)
+        self.correlation_id = uuid4().hex
+        self.last_request_id = None
 
-    def call(self, path, payload=None):
+    def call(self, path, payload=None, allow_array=False):
         data = json.dumps(payload, allow_nan=False).encode() if payload is not None else None
-        request = Request(self.url + path, data=data, headers={"Content-Type": "application/json", "Accept": "application/json"})
+        headers = {"Content-Type": "application/json", "Accept": "application/json", "X-Correlation-ID": self.correlation_id}
+        token = os.environ.get("ACMG_ENGINE_TOKEN")
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        request = Request(self.url + path, data=data, headers=headers)
         try:
             with build_opener(NoRedirect).open(request, timeout=self.timeout) as response:
+                self.last_request_id = getattr(response, "headers", {}).get("X-Request-ID")
                 raw = response.read(MAX_RESPONSE + 1)
                 if len(raw) > MAX_RESPONSE:
                     raise EngineError("RESPONSE_TOO_LARGE", "ACMG response exceeds local limit")
-                document = json.loads(raw)
-                if not isinstance(document, dict):
+                document = strict_json(raw)
+                if not isinstance(document, dict) and not (allow_array and isinstance(document, list)):
                     raise EngineError("INVALID_RESPONSE", "ACMG Engine response must be a JSON object")
                 return document
         except HTTPError as exc:

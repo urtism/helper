@@ -10,6 +10,7 @@ from helper_next.api.samplesheet import router as samplesheet_router
 from helper_next.api.tools import router as tools_router
 from helper_next.api.variants import router as variants_router
 from helper_next.api.acmg import router as acmg_router
+from helper_next.api.acmg_task22 import router as acmg_task22_router
 from helper_next.core.panels import load_panel_registry
 from helper_next.core.acmg_service import ACMGService
 from helper_next.core.project import get_project_paths, list_named_files
@@ -27,6 +28,7 @@ def create_app():
     app.include_router(tools_router)
     app.include_router(variants_router)
     app.include_router(acmg_router)
+    app.include_router(acmg_task22_router)
 
     static_dir = Path(__file__).resolve().parents[1] / "web" / "static"
     variant_static_dir = Path(helper_variants.__file__).resolve().parent / "web" / "static"

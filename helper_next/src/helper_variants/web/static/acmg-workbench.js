@@ -1,4 +1,5 @@
 /* Criterion audit UI. Scientific values are displayed exactly as returned by ACMG Engine. */
+import {mountTask22} from "./acmg-task22.js";
 const CSS = new URL("./acmg-workbench.css", import.meta.url).href;
 const CODES = "PVS1 PS1 PS2 PS3 PS4 PM1 PM2 PM3 PM4 PM5 PM6 PP1 PP2 PP3 PP4 PP5 BA1 BS1 BS2 BS3 BS4 BP1 BP2 BP3 BP4 BP5 BP6 BP7".split(" ");
 const CATEGORIES = "EVIDENCE_MAPPING_ERROR WRONG_THRESHOLD WRONG_CALCULATION WRONG_RULE_PROFILE INCORRECT_APPLICABILITY INCORRECT_STRENGTH MISSING_EVIDENCE SCIENTIFIC_RULE_DISAGREEMENT DEPENDENCY_ERROR OTHER".split(" ");
@@ -66,7 +67,7 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
   panel.setAttribute("role", "dialog"); panel.setAttribute("aria-modal", "true"); panel.setAttribute("aria-label", "ACMG Interpretation Workbench");
   const link = document.createElement("link"); link.rel = "stylesheet"; link.href = CSS;
   const close = el("button", "Close"); close.onclick = () => layer.replaceChildren();
-  const heading = el("div", undefined, "acmg-heading"); heading.append(el("h3", "ACMG classification"), close);
+  const heading = el("div", undefined, "acmg-heading"); heading.append(el("h3", "ACMG review"), close);
   panel.append(link, heading, el("p", "Research only · Experimental profiles, not clinically validated.", "acmg-warning"));
   const status = el("p", "Connecting to ACMG Engine…", "status"); status.setAttribute("aria-live", "polite"); panel.append(status);
   const detail = sourceWorkspace.detail;
@@ -97,7 +98,7 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
   const transcriptField = field("Transcript", tx);
   const diseaseField = field("Disease", contextSelect);
   const inheritanceField = field("Inheritance", inheritance);
-  const prepare = el("button", "Continue to classification"); prepare.className = "acmg-primary"; prepare.type = "submit"; prepare.disabled = true;
+  const prepare = el("button", "Continue to ACMG review"); prepare.className = "acmg-primary"; prepare.type = "submit"; prepare.disabled = true;
   const contextStatus = el("p", "Loading structured HELPER interpretation context…"); contextStatus.setAttribute("aria-live", "polite");
   const reloadContext = el("button", "Reload HELPER context"); reloadContext.type = "button";
   const contextSources = el("div");
@@ -106,6 +107,15 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
   const body = el("div"); panel.append(body); backdrop.append(panel); layer.replaceChildren(backdrop); close.focus();
   const state = {workspace: null, profiles: [], selected: null, history: [], capability: null, criteria: [],
     catalog: detail.interpretation_context || null, contextChoice: null, inheritanceModes: [], loadingDiscovery: true};
+  const manualBox = section("Manual gene-disease context (when HELPER has no association)");
+  const manualEnabled = el("input"); manualEnabled.type = "checkbox"; manualEnabled.setAttribute("aria-label", "Use manual interpretation context");
+  const manualLabel = el("label", "Use explicitly supplied stable identifiers"); manualLabel.prepend(manualEnabled);
+  const manualFields = el("div", undefined, "acmg-config"); manualFields.hidden = true;
+  const manualInput = (label, value) => { const wrap = el("label", label), control = el("input"); control.value = value; control.required = true; control.pattern = "\\S+"; control.setAttribute("aria-label", label); wrap.append(control); manualFields.append(wrap); return control; };
+  const manualGeneNS = manualInput("Manual gene namespace", "HGNC"), manualGeneID = manualInput("Manual stable gene identifier", "");
+  const manualDiseaseNS = manualInput("Manual disease namespace", "MONDO"), manualDiseaseID = manualInput("Manual disease identifier", "");
+  manualBox.append(el("p", "Manual context is recorded with its original values and unverified provenance. A gene symbol does not establish a stable identifier or a gene-disease association."), manualLabel, manualFields); config.before(manualBox);
+  manualEnabled.onchange = () => { state.manualMode = manualEnabled.checked; manualFields.hidden = !state.manualMode; chooseContext(); };
   const storageKey = `helper-acmg:${sourceWorkspace.runId}:${sourceWorkspace.sample.sample_id}:${detail.id}`;
   const busy = async action => { status.textContent = "Working…"; try { await action(); status.textContent = "Ready · research only"; } catch (error) { status.textContent = error.message; } };
   function chooseContext() {
@@ -116,7 +126,7 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
     geneNS.value = gene?.namespace || ""; geneID.value = gene?.identifier || "";
     diseaseNS.value = choice?.context.disease.namespace || ""; diseaseID.value = choice?.context.disease.identifier || "";
     inheritance.replaceChildren(option("", "Inheritance missing / unresolved"));
-    const modes = (choice?.context.inheritance_modes || []).filter(mode => !state.inheritanceModes.length || state.inheritanceModes.includes(mode));
+    const modes = state.manualMode ? state.inheritanceModes : (choice?.context.inheritance_modes || []).filter(mode => !state.inheritanceModes.length || state.inheritanceModes.includes(mode));
     modes.forEach(mode => inheritance.append(option(mode)));
     if (modes.length === 1) inheritance.value = modes[0];
     (modes.length > 1 ? config : automatic).append(inheritanceField);
@@ -127,8 +137,9 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
     if (record?.contexts.length !== 1) config.insertBefore(diseaseField, contextStatus);
     const annotation = detail.annotations.find(a => String(a.id) === tx.value);
     contextSummary.textContent = `1. Context · ${annotation?.gene || gene?.identifier || 'Select transcript'}${choice ? ' · ' + (choice.context.disease.label || choice.context.disease.identifier) : ''}${annotation?.transcript ? ' · ' + annotation.transcript : ''}`;
-    prepare.disabled = !choice || state.loadingDiscovery;
-    contextStatus.textContent = choice
+    contextSelect.required = !state.manualMode;
+    prepare.disabled = (!choice && !state.manualMode) || state.loadingDiscovery;
+    contextStatus.textContent = state.manualMode ? "Supply stable gene and disease identifiers explicitly; scientific association remains unverified." : choice
       ? `Context supplied by HELPER${choice.origin?.stale ? ' · source snapshot is stale' : ''}${modes.length > 1 ? ' · select inheritance or leave unresolved' : ''}`
       : record?.contexts.length > 1 ? "Select the relevant disease association; HELPER supplies its identifiers automatically."
         : `HELPER context unavailable (${record?.status || 'select a transcript'}). Update HELPER gene-disease sources and reload; no identifiers or disease are inferred.`;
@@ -165,11 +176,14 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
   config.onsubmit = event => { event.preventDefault(); busy(async () => {
     const annotation = detail.annotations.find(a => String(a.id) === tx.value);
     if (!annotation) throw new Error("Select the relevant transcript annotation explicitly");
-    if (!state.contextChoice) throw new Error("Select an available structured HELPER gene-disease context");
+    if (!state.contextChoice && !state.manualMode) throw new Error("Select an available structured HELPER gene-disease context");
+    if (state.manualMode && ![manualGeneNS, manualGeneID, manualDiseaseNS, manualDiseaseID].every(control => control.reportValidity())) return;
+    const selection = state.manualMode ? {context: {gene: {namespace: manualGeneNS.value, identifier: manualGeneID.value},
+      disease: {namespace: manualDiseaseNS.value, identifier: manualDiseaseID.value}, inheritance_modes: inheritance.value ? [inheritance.value] : []}}
+      : {context_id: state.contextChoice.id, context_fingerprint: state.contextChoice.fingerprint.value, inheritance_mode: inheritance.value};
     state.workspace = await api("/workspaces", {source_id: sourceWorkspace.runId, sample_id: sourceWorkspace.sample.sample_id,
       variant_id: detail.id, transcript: annotation.transcript, annotation_id: annotation.id, assembly: assembly.value,
-      context_id: state.contextChoice.id, context_fingerprint: state.contextChoice.fingerprint.value,
-      inheritance_mode: inheritance.value});
+      ...selection});
     localStorage.setItem(storageKey, state.workspace.id); state.selected = null; await load(); await refreshSaved();
   }); };
 
@@ -177,6 +191,11 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
     const workspace = await api(`/workspaces/${state.workspace.id}`);
     state.workspace = workspace.workspace; state.history = workspace.history;
     const snapshot = state.workspace.document.normalized_evidence.snapshot;
+    if (!state.workspace.document.context_resolution) {
+      state.manualMode = true; manualEnabled.checked = true; manualFields.hidden = false;
+      manualGeneNS.value = snapshot.context.gene.namespace; manualGeneID.value = snapshot.context.gene.identifier;
+      manualDiseaseNS.value = snapshot.context.disease.namespace; manualDiseaseID.value = snapshot.context.disease.identifier;
+    }
     geneNS.value = snapshot.context.gene.namespace; geneID.value = snapshot.context.gene.identifier;
     diseaseNS.value = snapshot.context.disease.namespace; diseaseID.value = snapshot.context.disease.identifier;
     assembly.value = snapshot.variant.identity.assembly;
@@ -184,7 +203,7 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
     if (selectedTx) tx.value = String(state.workspace.document.selected_annotation_id || '');
     annotationContext(state.workspace.document.context_resolution?.id || "");
     inheritance.value = snapshot.context.gene_disease?.inheritance_modes?.[0] || "";
-    state.profiles = (await api(`/workspaces/${state.workspace.id}/profiles`)).profiles;
+    if (!state.task22) state.profiles = (await api(`/workspaces/${state.workspace.id}/profiles`)).profiles;
     contextBox.open = false;
     render();
   }
@@ -202,6 +221,14 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
 
   function render() {
     body.replaceChildren();
+    if (state.task22 && !state.legacyMode) {
+      const host = el("div"), legacy = el("button", "Earlier interpretation workspace");
+      legacy.onclick = () => busy(async () => { state.profiles = (await api(`/workspaces/${state.workspace.id}/profiles`)).profiles; state.legacyMode = true; render(); });
+      body.append(host, legacy);
+      mountTask22(host, state.workspace, state.task22, status).catch(error => { status.textContent = error.message; });
+      return;
+    }
+    if (state.task22) { const current = el("button", "Task 22 criteria workspace"); current.onclick = () => { state.legacyMode = false; render(); }; body.append(current); }
     const packet = state.workspace.document.normalized_evidence;
     const advanced = section("Advanced tools and evidence",
       el("p", `Evidence saved: ${state.workspace.created_at}. Prepare again to capture changed annotations or context.`),
@@ -429,7 +456,13 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
 
   await refreshContext().catch(error => { contextStatus.textContent = error.message; });
   await busy(async () => {
-    const discovery = await api("/discovery"); state.capability = discovery.capabilities; state.criteria = discovery.criteria.criteria;
+    let discovery;
+    const task22 = await fetch("/api/acmg/task22/discovery");
+    const candidate = await task22.json();
+    if (task22.ok) { discovery = candidate; state.task22 = candidate; }
+    else if (candidate.detail?.code === "UNSUPPORTED_TASK22_API" || task22.status === 404) discovery = await api("/discovery");
+    else throw new Error(candidate.detail?.message || JSON.stringify(candidate.detail || candidate));
+    state.capability = discovery.capabilities; state.criteria = discovery.criteria?.criteria || [];
     state.inheritanceModes = discovery.schemas.InheritanceMode?.enum || [];
     annotationContext(state.contextChoice?.id || "");
     const saved = localStorage.getItem(storageKey);
@@ -437,5 +470,5 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
     await refreshSaved();
   });
   state.loadingDiscovery = false;
-  prepare.disabled = !state.contextChoice;
+  prepare.disabled = !state.contextChoice && !state.manualMode;
 }

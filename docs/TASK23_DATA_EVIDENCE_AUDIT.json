@@ -1,0 +1,3056 @@
+{
+  "audit_date": "2026-10-26",
+  "scope": "offline source code, portable schemas and aggregate local cache metadata; no patient records exported",
+  "repositories": {
+    "HELPER": {
+      "head": "6a2d0d458448237e8d2b6be5f78a97e3cbaec794",
+      "dirty": true
+    },
+    "acmg-engine": {
+      "head": "4640af454c20502ebd09a1da074009959bc5b730",
+      "dirty": false
+    }
+  },
+  "source_catalog": {
+    "schema_version": "1",
+    "generated_at": "2026-10-26T09:53:34.501648+00:00",
+    "sources": [
+      {
+        "id": "clinvar",
+        "name": "ClinVar",
+        "role": "Variant classifications and review status",
+        "release": "Current NCBI weekly aggregate",
+        "data_updated_at": "2026-09-27",
+        "synchronized_at": "2026-10-21T14:51:17Z",
+        "record_count": 38,
+        "status": "on_demand",
+        "source_url": "https://www.ncbi.nlm.nih.gov/clinvar/",
+        "note": "E-utilities does not expose a numbered global release; exact alleles are cached for 7 days."
+      },
+      {
+        "id": "gencc",
+        "name": "GenCC",
+        "role": "Gene–disease validity",
+        "release": "Continuous submissions export",
+        "data_updated_at": "2026-10-11",
+        "synchronized_at": "2026-10-21T12:33:28Z",
+        "record_count": 30345,
+        "status": "synchronized",
+        "source_url": "https://thegencc.org/download/action/submissions-export-csv?format=new",
+        "note": "Assertions are individually versioned; no single numbered database release is published in the export."
+      },
+      {
+        "id": "g2p",
+        "name": "Gene2Phenotype",
+        "role": "Disease mechanism and allelic requirement",
+        "release": "Full panel export snapshot",
+        "data_updated_at": "2026-10-21 11:41:25+00:00",
+        "synchronized_at": "2026-10-21T12:33:28Z",
+        "record_count": 3856,
+        "status": "synchronized",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download/",
+        "note": "The date shown is the newest record review date in the imported snapshot."
+      },
+      {
+        "id": "hpo",
+        "name": "Human Phenotype Ontology",
+        "role": "Disease phenotypic features",
+        "release": "phenotype.hpoa latest snapshot",
+        "data_updated_at": "",
+        "synchronized_at": "2026-10-21T12:33:28Z",
+        "record_count": 268791,
+        "status": "synchronized",
+        "source_url": "https://github.com/obophenotype/human-phenotype-ontology/releases/latest/download/phenotype.hpoa",
+        "note": "The current importer did not retain the upstream HPO release identifier."
+      },
+      {
+        "id": "clingen_dosage",
+        "name": "ClinGen Dosage Sensitivity",
+        "role": "Haploinsufficiency and triplosensitivity",
+        "release": "GRCh38 gene curation export snapshot",
+        "data_updated_at": "2026-10-14",
+        "synchronized_at": "2026-10-21T12:33:28Z",
+        "record_count": 1537,
+        "status": "synchronized",
+        "source_url": "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv",
+        "note": "The date shown is the newest evaluation date in the imported snapshot."
+      },
+      {
+        "id": "orphadata",
+        "name": "Orphadata",
+        "role": "ORPHA, ICD-10 and cross-reference mappings",
+        "release": "Product 1 XML snapshot",
+        "data_updated_at": "",
+        "synchronized_at": "2026-10-21T12:33:28Z",
+        "record_count": 15318,
+        "status": "synchronized",
+        "source_url": "https://www.orphadata.com/data/xml/en_product1.xml",
+        "note": "The current importer did not retain the upstream Orphadata release identifier."
+      },
+      {
+        "id": "gnomad",
+        "name": "gnomAD",
+        "role": "Gene constraint metrics",
+        "release": "v4.1.2",
+        "data_updated_at": "2026-10-21T14:54:55Z",
+        "synchronized_at": "2026-10-21T14:54:55Z",
+        "record_count": 10,
+        "status": "on_demand",
+        "source_url": "https://gnomad.broadinstitute.org/",
+        "note": "Constraint is retrieved per gene and cached locally for 30 days."
+      },
+      {
+        "id": "gnomad_frequency",
+        "name": "gnomAD genomes",
+        "role": "Allele frequency and locus coverage",
+        "release": "v2.1.1 (GRCh37); v4.1 (GRCh38)",
+        "data_updated_at": "",
+        "synchronized_at": "2026-10-21T15:54:50.291643+00:00",
+        "record_count": 14,
+        "status": "on_demand",
+        "source_url": "https://gnomad.broadinstitute.org/",
+        "note": "Exact alleles are retrieved from the assembly-matched genomes dataset and cached locally. Absence is distinguished from missing data using locus coverage."
+      },
+      {
+        "id": "ncbi_variation",
+        "name": "NCBI Variation Services",
+        "role": "GRCh37/GRCh38 allele projection",
+        "release": "SPDI API v0 · fixed RefSeq assembly accessions",
+        "data_updated_at": "",
+        "synchronized_at": "2026-10-21T15:54:54.396797+00:00",
+        "record_count": 22,
+        "status": "on_demand",
+        "source_url": "https://www.ncbi.nlm.nih.gov/variation/services/",
+        "note": "Exact sequence alleles are projected and normalized on demand; successful and negative mappings are cached locally."
+      },
+      {
+        "id": "panelapp",
+        "name": "PanelApp",
+        "role": "Versioned diagnostic gene panels",
+        "release": "Per-panel versions in catalogue snapshot",
+        "data_updated_at": "2026-10-05T15:42:16.564450Z",
+        "synchronized_at": "2026-10-06T08:27:01.374921+00:00",
+        "record_count": 433,
+        "status": "stale",
+        "source_url": "https://panelapp.genomicsengland.co.uk/",
+        "note": "Each panel retains its own version; the date shown is the newest panel update in the catalogue."
+      },
+      {
+        "id": "acmg_sf",
+        "name": "ACMG Secondary Findings",
+        "role": "Secondary findings gene lists",
+        "release": "v3.3 (bundled; v3.0–v3.3 available)",
+        "data_updated_at": "2025",
+        "synchronized_at": "",
+        "record_count": 84,
+        "status": "bundled",
+        "source_url": "https://pubmed.ncbi.nlm.nih.gov/40568962/",
+        "note": "Versioned snapshots are shipped with the application and do not require synchronization."
+      }
+    ],
+    "summary": {
+      "total": 11,
+      "on_demand": 4,
+      "synchronized": 5,
+      "stale": 1,
+      "bundled": 1
+    }
+  },
+  "cache_observations": {
+    "gene_phenotype": {
+      "status": "ready",
+      "refreshing": false,
+      "stale": false,
+      "updated_at": "2026-10-21T12:33:28Z",
+      "schema_version": "4",
+      "source": "GenCC + HPO + G2P + ClinGen Dosage + Orphadata",
+      "etag": "\"794f9f3b1ba6ae6b344cd18bcbca6f59\"",
+      "last_modified": "Wed, 14 Oct 2026 19:15:08 GMT",
+      "row_count": 30345,
+      "hpo_row_count": 268791,
+      "g2p_row_count": 3856,
+      "dosage_row_count": 1537,
+      "constraint_row_count": 10,
+      "disease_code_count": 15318
+    },
+    "gnomad_frequency": {
+      "status": "ready",
+      "record_count": 14,
+      "synchronized_at": "2026-10-21T15:54:50.291643+00:00",
+      "releases": [
+        "2.1.1"
+      ]
+    },
+    "clinvar": {
+      "status": "ready",
+      "record_count": 38,
+      "synchronized_at": "2026-10-21T14:51:17Z",
+      "latest_record_update": "2026-09-27",
+      "cache_max_age_days": 7
+    },
+    "panelapp": {
+      "status": "ready",
+      "schema_version": "1",
+      "synced_at": "2026-10-06T08:27:01.374921+00:00",
+      "latest_panel_update": "2026-10-05T15:42:16.564450Z",
+      "panel_count": 433,
+      "stale": true
+    },
+    "liftover": {
+      "status": "ready",
+      "record_count": 22,
+      "synchronized_at": "2026-10-21T15:54:54.396797+00:00"
+    }
+  },
+  "reference_config_in_auditor_environment": {
+    "configured": false,
+    "note": "Does not determine the configuration of a separately running HELPER process; no FASTA was read or hashed."
+  },
+  "contract": {
+    "version": "evidence-contract-1.0",
+    "schema_path": "/home/jarvis/git/acmg-engine/docs/schemas/evidence-contract-1.0.json",
+    "schema_sha256": "b9bc8f2b4a7ff8b07af4554b77e4810eb1a017ccb7860dad861fff5606c1c141",
+    "schema_bytes": 262525,
+    "definition_count": 141,
+    "runtime_verification": {
+      "schema_matches_runtime": true,
+      "engine_package_version": "0.1.0",
+      "pydantic_version": "2.14.1",
+      "checks": {
+        "partial_valid": {
+          "accepted": true,
+          "json_schema_accepted": true
+        },
+        "empty_context_valid": {
+          "accepted": true,
+          "json_schema_accepted": true
+        },
+        "normalized_without_reference_validation": {
+          "accepted": false,
+          "error_types": [
+            "value_error"
+          ],
+          "json_schema_accepted": true
+        },
+        "non_pinned_source_version": {
+          "accepted": false,
+          "error_types": [
+            "value_error"
+          ],
+          "json_schema_accepted": true
+        },
+        "wrong_contract_version": {
+          "accepted": false,
+          "error_types": [
+            "literal_error"
+          ],
+          "json_schema_accepted": false
+        },
+        "missing_root_context": {
+          "accepted": false,
+          "error_types": [
+            "missing"
+          ],
+          "json_schema_accepted": false
+        }
+      }
+    },
+    "openapi_request_schema": {
+      "$ref": "#/components/schemas/EvidenceContract-Input"
+    },
+    "openapi_contract_components": [
+      "EvidenceContract-Input",
+      "EvidenceContract-Output"
+    ],
+    "core_models": {
+      "EvidenceContract": {
+        "required": [
+          "variant",
+          "context",
+          "evidence"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "$ref": "#/$defs/InterpretationContext"
+          },
+          "dependencies": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/EvidenceDependency"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/$defs/ProviderEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": "evidence-contract-1.0",
+            "default": "evidence-contract-1.0",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "variant": {
+            "$ref": "#/$defs/Variant"
+          }
+        }
+      },
+      "ProviderEvidence": {
+        "required": [
+          "value",
+          "received_json",
+          "quality_status",
+          "validation_status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "af_consistency_tolerance": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Af Consistency Tolerance"
+          },
+          "quality_status": {
+            "enum": [
+              "PASS",
+              "FAIL",
+              "UNKNOWN"
+            ],
+            "title": "Quality Status",
+            "type": "string"
+          },
+          "received_json": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Received Json",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "provider-evidence-1.0",
+            "default": "provider-evidence-1.0",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "transformations": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/EvidenceTransformation"
+            },
+            "title": "Transformations",
+            "type": "array"
+          },
+          "validation_status": {
+            "enum": [
+              "UNVERIFIED",
+              "VERIFIED",
+              "REJECTED"
+            ],
+            "title": "Validation Status",
+            "type": "string"
+          },
+          "value": {
+            "discriminator": {
+              "mapping": {
+                "ALLELIC": "#/$defs/AllelicEvidence",
+                "BENIGN": "#/$defs/BenignEvidence",
+                "CASE": "#/$defs/CaseEvidence",
+                "COMPUTATIONAL": "#/$defs/ComputationalEvidence",
+                "DE_NOVO": "#/$defs/DeNovoEvidence",
+                "EXTENSION": "#/$defs/ExtensionEvidence",
+                "FAMILY": "#/$defs/FamilyEvidence",
+                "FUNCTIONAL": "#/$defs/FunctionalEvidence",
+                "LITERATURE": "#/$defs/LiteratureEvidence",
+                "MISSENSE": "#/$defs/MissenseEvidence",
+                "PHENOTYPIC": "#/$defs/PhenotypicEvidence",
+                "POPULATION": "#/$defs/PopulationEvidence",
+                "PROTEIN_LENGTH": "#/$defs/ProteinLengthEvidence",
+                "PVS1": "#/$defs/PVS1Evidence",
+                "SEGREGATION": "#/$defs/SegregationEvidence",
+                "SPLICE_EQUIVALENCE": "#/$defs/SpliceEquivalenceEvidence"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/SpliceEquivalenceEvidence"
+              },
+              {
+                "$ref": "#/$defs/BenignEvidence"
+              },
+              {
+                "$ref": "#/$defs/PopulationEvidence"
+              },
+              {
+                "$ref": "#/$defs/ComputationalEvidence"
+              },
+              {
+                "$ref": "#/$defs/PVS1Evidence"
+              },
+              {
+                "$ref": "#/$defs/FunctionalEvidence"
+              },
+              {
+                "$ref": "#/$defs/FamilyEvidence"
+              },
+              {
+                "$ref": "#/$defs/SegregationEvidence"
+              },
+              {
+                "$ref": "#/$defs/DeNovoEvidence"
+              },
+              {
+                "$ref": "#/$defs/AllelicEvidence"
+              },
+              {
+                "$ref": "#/$defs/ProteinLengthEvidence"
+              },
+              {
+                "$ref": "#/$defs/MissenseEvidence"
+              },
+              {
+                "$ref": "#/$defs/PhenotypicEvidence"
+              },
+              {
+                "$ref": "#/$defs/CaseEvidence"
+              },
+              {
+                "$ref": "#/$defs/LiteratureEvidence"
+              },
+              {
+                "$ref": "#/$defs/ExtensionEvidence"
+              }
+            ],
+            "title": "Value"
+          }
+        }
+      },
+      "Variant": {
+        "required": [
+          "identity",
+          "variant_type",
+          "normalization"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "annotations": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TranscriptAnnotation"
+            },
+            "title": "Annotations",
+            "type": "array"
+          },
+          "hgvs_genomic": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hgvs Genomic"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GenomicIdentity"
+              },
+              {
+                "$ref": "#/$defs/StructuralIdentity"
+              }
+            ],
+            "title": "Identity"
+          },
+          "normalization": {
+            "$ref": "#/$defs/Normalization"
+          },
+          "reference_resource": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReferenceResource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcript_selection": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TranscriptSelection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "variant_type": {
+            "$ref": "#/$defs/VariantType"
+          }
+        }
+      },
+      "GenomicIdentity": {
+        "required": [
+          "assembly",
+          "chromosome",
+          "position",
+          "reference",
+          "alternate"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "alternate": {
+            "pattern": "^[ACGTN]+$",
+            "title": "Alternate",
+            "type": "string"
+          },
+          "assembly": {
+            "pattern": "^\\S+$",
+            "title": "Assembly",
+            "type": "string"
+          },
+          "chromosome": {
+            "pattern": "^\\S+$",
+            "title": "Chromosome",
+            "type": "string"
+          },
+          "position": {
+            "exclusiveMinimum": 0,
+            "title": "Position",
+            "type": "integer"
+          },
+          "reference": {
+            "pattern": "^[ACGTN]+$",
+            "title": "Reference",
+            "type": "string"
+          }
+        }
+      },
+      "StructuralIdentity": {
+        "required": [
+          "assembly",
+          "chromosome",
+          "position",
+          "end",
+          "event_type"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "assembly": {
+            "pattern": "^\\S+$",
+            "title": "Assembly",
+            "type": "string"
+          },
+          "chromosome": {
+            "pattern": "^\\S+$",
+            "title": "Chromosome",
+            "type": "string"
+          },
+          "end": {
+            "exclusiveMinimum": 0,
+            "title": "End",
+            "type": "integer"
+          },
+          "end_confidence_interval": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Confidence Interval"
+          },
+          "event_type": {
+            "pattern": "^(DELETION|DUPLICATION)$",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "kind": {
+            "default": "STRUCTURAL",
+            "pattern": "^STRUCTURAL$",
+            "title": "Kind",
+            "type": "string"
+          },
+          "position": {
+            "exclusiveMinimum": 0,
+            "title": "Position",
+            "type": "integer"
+          },
+          "start_confidence_interval": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "exclusiveMinimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Confidence Interval"
+          }
+        }
+      },
+      "ReferenceResource": {
+        "required": [
+          "identifier",
+          "version",
+          "digest"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "$ref": "#/$defs/Digest"
+          },
+          "identifier": {
+            "pattern": "^\\S+$",
+            "title": "Identifier",
+            "type": "string"
+          },
+          "version": {
+            "pattern": "^\\S+$",
+            "title": "Version",
+            "type": "string"
+          }
+        }
+      },
+      "Normalization": {
+        "required": [
+          "status",
+          "reference_validated",
+          "provenance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "provenance": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "reference_validated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Validated"
+          },
+          "status": {
+            "$ref": "#/$defs/NormalizationStatus"
+          }
+        }
+      },
+      "TranscriptReference": {
+        "required": [
+          "namespace",
+          "accession",
+          "version"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "accession": {
+            "pattern": "^\\S+$",
+            "title": "Accession",
+            "type": "string"
+          },
+          "namespace": {
+            "pattern": "^\\S+$",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        }
+      },
+      "TranscriptAnnotation": {
+        "required": [
+          "gene",
+          "transcript",
+          "provenance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "consequence": {
+            "anyOf": [
+              {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Consequence"
+          },
+          "gene": {
+            "$ref": "#/$defs/GeneIdentifier"
+          },
+          "hgvs_coding": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hgvs Coding"
+          },
+          "hgvs_protein": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hgvs Protein"
+          },
+          "provenance": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "transcript": {
+            "$ref": "#/$defs/TranscriptReference"
+          }
+        }
+      },
+      "TranscriptSelection": {
+        "required": [
+          "transcript",
+          "rationale",
+          "provenance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "provenance": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "rationale": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rationale",
+            "type": "string"
+          },
+          "transcript": {
+            "$ref": "#/$defs/TranscriptReference"
+          }
+        }
+      },
+      "InterpretationContext": {
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "disease": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Identifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "gene": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GeneIdentifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "gene_disease": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GeneDiseaseContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcripts": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TranscriptReference"
+            },
+            "title": "Transcripts",
+            "type": "array"
+          }
+        }
+      },
+      "GeneDiseaseContext": {
+        "required": [
+          "gene",
+          "disease",
+          "provenance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "disease": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "disease_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Disease Name"
+          },
+          "gene": {
+            "$ref": "#/$defs/GeneIdentifier"
+          },
+          "inheritance_modes": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/InheritanceMode"
+            },
+            "title": "Inheritance Modes",
+            "type": "array"
+          },
+          "mechanism": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DiseaseMechanism"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "provenance": {
+            "$ref": "#/$defs/Provenance"
+          },
+          "relevant_transcripts": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TranscriptReference"
+            },
+            "title": "Relevant Transcripts",
+            "type": "array"
+          },
+          "validity": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GeneDiseaseValidity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        }
+      },
+      "Provenance": {
+        "required": [
+          "source",
+          "source_identifier",
+          "source_version",
+          "acquired_at",
+          "extraction_method",
+          "software_version",
+          "verification_status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "acquired_at": {
+            "format": "date-time",
+            "title": "Acquired At",
+            "type": "string"
+          },
+          "artifact_digest": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "extraction_method": {
+            "$ref": "#/$defs/ExtractionMethod"
+          },
+          "limitations": {
+            "default": [],
+            "items": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "references": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ScientificReference"
+            },
+            "title": "References",
+            "type": "array"
+          },
+          "software_version": {
+            "anyOf": [
+              {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Software Version"
+          },
+          "source": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Source",
+            "type": "string"
+          },
+          "source_identifier": {
+            "pattern": "^\\S+$",
+            "title": "Source Identifier",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Url"
+          },
+          "source_version": {
+            "anyOf": [
+              {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Version"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/HumanVerification"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "verification_status": {
+            "$ref": "#/$defs/VerificationStatus"
+          }
+        }
+      },
+      "HumanVerification": {
+        "required": [
+          "reviewer_id",
+          "verified_at",
+          "rationale"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "rationale": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rationale",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "pattern": "^\\S+$",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "verified_at": {
+            "format": "date-time",
+            "title": "Verified At",
+            "type": "string"
+          }
+        }
+      },
+      "ScientificReference": {
+        "required": [
+          "identifier"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "identifier": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Section"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        }
+      },
+      "EvidenceTransformation": {
+        "required": [
+          "method",
+          "software_version",
+          "formula",
+          "input_json",
+          "output_json",
+          "performed_at",
+          "validation_checks"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "formula": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Formula",
+            "type": "string"
+          },
+          "input_json": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Input Json",
+            "type": "string"
+          },
+          "method": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Method",
+            "type": "string"
+          },
+          "output_json": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Output Json",
+            "type": "string"
+          },
+          "performed_at": {
+            "format": "date-time",
+            "title": "Performed At",
+            "type": "string"
+          },
+          "software_version": {
+            "pattern": "^\\S+$",
+            "title": "Software Version",
+            "type": "string"
+          },
+          "validation_checks": {
+            "items": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Validation Checks",
+            "type": "array"
+          }
+        }
+      },
+      "EvidenceDependency": {
+        "required": [
+          "id",
+          "kind",
+          "evidence_ids",
+          "explanation",
+          "provenance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "dependent_evidence_id": {
+            "anyOf": [
+              {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Dependent Evidence Id"
+          },
+          "evidence_ids": {
+            "items": {
+              "pattern": "^\\S+$",
+              "type": "string"
+            },
+            "minItems": 2,
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "explanation": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Explanation",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^\\S+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/DependencyKind"
+          },
+          "provenance": {
+            "$ref": "#/$defs/Provenance"
+          }
+        }
+      },
+      "PVS1Observation": {
+        "required": [
+          "variant_identity"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "mechanism": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MechanismAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "structural": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StructuralAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "transcript_effects": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TranscriptEffect"
+            },
+            "title": "Transcript Effects",
+            "type": "array"
+          },
+          "used_by_criteria": {
+            "default": [],
+            "items": {
+              "pattern": "^\\S+$",
+              "type": "string"
+            },
+            "title": "Used By Criteria",
+            "type": "array"
+          },
+          "variant_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GenomicIdentity"
+              },
+              {
+                "$ref": "#/$defs/StructuralIdentity"
+              }
+            ],
+            "title": "Variant Identity"
+          }
+        }
+      }
+    },
+    "evidence_families": [
+      {
+        "kind": "ALLELIC",
+        "model": "AllelicEvidence",
+        "observation_model": "AllelicObservation",
+        "observation": {
+          "required": [
+            "phase"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "genotype_context": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Genotype Context"
+            },
+            "paired_variant": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GenomicIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "phase": {
+              "$ref": "#/$defs/Phase"
+            },
+            "phase_method": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Phase Method"
+            },
+            "structured": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AllelicConfigurationEvidence"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "uncertainty": {
+              "default": [],
+              "items": {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "title": "Uncertainty",
+              "type": "array"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BP2",
+          "PM3"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "BENIGN",
+        "model": "BenignEvidence",
+        "observation_model": "BenignEvidenceSet",
+        "observation": {
+          "required": [],
+          "additionalProperties": false,
+          "properties": {
+            "alternative_diagnoses": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/AlternativeMolecularDiagnosis"
+              },
+              "title": "Alternative Diagnoses",
+              "type": "array"
+            },
+            "bp7": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/BP7Evidence"
+              },
+              "title": "Bp7",
+              "type": "array"
+            },
+            "unaffected": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/UnaffectedIndividualObservation"
+              },
+              "title": "Unaffected",
+              "type": "array"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BP5",
+          "BP7",
+          "BS2"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "CASE",
+        "model": "CaseEvidence",
+        "observation_model": "CaseObservation",
+        "observation": {
+          "required": [
+            "cohort_key"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "affected_carriers": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Affected Carriers"
+            },
+            "affected_individuals": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Affected Individuals"
+            },
+            "cohort_key": {
+              "pattern": "^\\S+$",
+              "title": "Cohort Key",
+              "type": "string"
+            },
+            "cohort_results": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/NamedValue"
+              },
+              "title": "Cohort Results",
+              "type": "array"
+            },
+            "control_carriers": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Control Carriers"
+            },
+            "control_individuals": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Control Individuals"
+            },
+            "enrichment_measure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Measurement"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "references": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ScientificReference"
+              },
+              "title": "References",
+              "type": "array"
+            },
+            "structured": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PS4EvidenceSet"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "uncertainty": {
+              "default": [],
+              "items": {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "title": "Uncertainty",
+              "type": "array"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "PS4"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "COMPUTATIONAL",
+        "model": "ComputationalEvidence",
+        "observation_model": "ComputationalObservation",
+        "observation": {
+          "required": [
+            "predictor",
+            "predictor_version",
+            "score"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "annotation_pipeline_version": {
+              "anyOf": [
+                {
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Annotation Pipeline Version"
+            },
+            "applicable_transcript": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TranscriptReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "calibration_reference": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScientificReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PredictionCategory"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "consequence": {
+              "anyOf": [
+                {
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Consequence"
+            },
+            "gene": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "interpretation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CalibratedInterpretation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "predictor": {
+              "pattern": "^\\S+$",
+              "title": "Predictor",
+              "type": "string"
+            },
+            "predictor_name": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Predictor Name"
+            },
+            "predictor_version": {
+              "anyOf": [
+                {
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Predictor Version"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Score"
+            },
+            "score_direction": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScoreDirection"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "score_range": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScoreRange"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "score_type": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "RAW",
+                    "SPLICEAI_MAX_DELTA"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Score Type"
+            },
+            "source_database_version": {
+              "anyOf": [
+                {
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Database Version"
+            },
+            "spliceai": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SpliceAIResult"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "transcript": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TranscriptReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "used_by_criteria": {
+              "default": [],
+              "items": {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "title": "Used By Criteria",
+              "type": "array"
+            },
+            "variant_identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GenomicIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BP4",
+          "PP3"
+        ],
+        "automatic_helper_mapping": true,
+        "manual_typed_ui": true
+      },
+      {
+        "kind": "DE_NOVO",
+        "model": "DeNovoEvidence",
+        "observation_model": "acmg_engine__domain__evidence__DeNovoObservation",
+        "observation": {
+          "required": [
+            "status",
+            "parentage"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "parentage": {
+              "$ref": "#/$defs/ParentageStatus"
+            },
+            "status": {
+              "$ref": "#/$defs/DeNovoStatus"
+            },
+            "supporting_evidence_ids": {
+              "default": [],
+              "items": {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "title": "Supporting Evidence Ids",
+              "type": "array"
+            },
+            "uncertainty": {
+              "default": [],
+              "items": {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "title": "Uncertainty",
+              "type": "array"
+            }
+          }
+        },
+        "catalog_consumers": [],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "EXTENSION",
+        "model": "ExtensionEvidence",
+        "observation_model": "ExtensionObservation",
+        "observation": {
+          "required": [
+            "schema_id",
+            "schema_version",
+            "fields"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/NamedValue"
+              },
+              "title": "Fields",
+              "type": "array"
+            },
+            "schema_id": {
+              "pattern": "^\\S+$",
+              "title": "Schema Id",
+              "type": "string"
+            },
+            "schema_version": {
+              "pattern": "^\\S+$",
+              "title": "Schema Version",
+              "type": "string"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BP6",
+          "PP5"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "FAMILY",
+        "model": "FamilyEvidence",
+        "observation_model": "FamilyEvidenceSet",
+        "observation": {
+          "required": [
+            "families",
+            "members"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "de_novo": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/acmg_engine__domain__family__DeNovoObservation"
+              },
+              "title": "De Novo",
+              "type": "array"
+            },
+            "families": {
+              "items": {
+                "$ref": "#/$defs/Family"
+              },
+              "title": "Families",
+              "type": "array"
+            },
+            "genotypes": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/FamilyVariantObservation"
+              },
+              "title": "Genotypes",
+              "type": "array"
+            },
+            "members": {
+              "items": {
+                "$ref": "#/$defs/FamilyMember"
+              },
+              "title": "Members",
+              "type": "array"
+            },
+            "phenotypes": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/FamilyPhenotypeObservation"
+              },
+              "title": "Phenotypes",
+              "type": "array"
+            },
+            "relationships": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ParentChildRelationship"
+              },
+              "title": "Relationships",
+              "type": "array"
+            },
+            "schema_version": {
+              "const": "family-evidence-v1",
+              "default": "family-evidence-v1",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "segregation": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/acmg_engine__domain__family__SegregationObservation"
+              },
+              "title": "Segregation",
+              "type": "array"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BS4",
+          "PM6",
+          "PP1",
+          "PS2"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "FUNCTIONAL",
+        "model": "FunctionalEvidence",
+        "observation_model": "FunctionalObservation",
+        "observation": {
+          "required": [
+            "assay_id",
+            "assay_version",
+            "result",
+            "assay_validity"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "assay_id": {
+              "pattern": "^\\S+$",
+              "title": "Assay Id",
+              "type": "string"
+            },
+            "assay_validity": {
+              "$ref": "#/$defs/AssayValidity"
+            },
+            "assay_version": {
+              "anyOf": [
+                {
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Assay Version"
+            },
+            "controls": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/AssayControl"
+              },
+              "title": "Controls",
+              "type": "array"
+            },
+            "measurements": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/Measurement"
+              },
+              "title": "Measurements",
+              "type": "array"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Result"
+            },
+            "structured_result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FunctionalAssayResult"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "transcript": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TranscriptReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "validity_explanation": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Validity Explanation"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BS3",
+          "PS3"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "LITERATURE",
+        "model": "LiteratureEvidence",
+        "observation_model": "LiteratureObservation",
+        "observation": {
+          "required": [
+            "publications",
+            "extraction_status"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "extracted_evidence_ids": {
+              "default": [],
+              "items": {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "title": "Extracted Evidence Ids",
+              "type": "array"
+            },
+            "extraction_status": {
+              "$ref": "#/$defs/ExtractionStatus"
+            },
+            "publications": {
+              "items": {
+                "$ref": "#/$defs/ScientificReference"
+              },
+              "title": "Publications",
+              "type": "array"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Summary"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BP6",
+          "PP5"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "MISSENSE",
+        "model": "MissenseEvidence",
+        "observation_model": "MissenseObservation",
+        "observation": {
+          "required": [
+            "protein_consequence",
+            "disease"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "biological_review": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Provenance"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "comparisons": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SubstitutionComparison"
+              },
+              "title": "Comparisons",
+              "type": "array"
+            },
+            "disease": {
+              "$ref": "#/$defs/Identifier"
+            },
+            "mechanism": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Identifier"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "mechanism_branch": {
+              "default": "PROTEIN_CHANGE_EQUIVALENCE",
+              "enum": [
+                "PROTEIN_CHANGE_EQUIVALENCE",
+                "SPLICE_EVENT_EQUIVALENCE"
+              ],
+              "title": "Mechanism Branch",
+              "type": "string"
+            },
+            "mechanism_compatible": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mechanism Compatible"
+            },
+            "non_hcm_evidence": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Non Hcm Evidence"
+            },
+            "protein_consequence": {
+              "$ref": "#/$defs/ProteinVariantConsequence"
+            },
+            "references": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ReferenceVariantEvidence"
+              },
+              "title": "References",
+              "type": "array"
+            },
+            "region_ids": {
+              "default": [],
+              "items": {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "title": "Region Ids",
+              "type": "array"
+            },
+            "splicing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MissenseSplicingAssessment"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          }
+        },
+        "catalog_consumers": [
+          "PM1",
+          "PM5",
+          "PS1"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "PHENOTYPIC",
+        "model": "PhenotypicEvidence",
+        "observation_model": "PhenotypicObservation",
+        "observation": {
+          "required": [],
+          "additionalProperties": false,
+          "properties": {
+            "clinical_information": {
+              "default": [],
+              "items": {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "title": "Clinical Information",
+              "type": "array"
+            },
+            "hpo_terms": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/Identifier"
+              },
+              "title": "Hpo Terms",
+              "type": "array"
+            },
+            "specificity": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Specificity"
+            },
+            "structured": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ClinicalEvidenceSet"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BP1",
+          "PP2",
+          "PP4"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "POPULATION",
+        "model": "PopulationEvidence",
+        "observation_model": "PopulationObservation",
+        "observation": {
+          "required": [],
+          "additionalProperties": false,
+          "properties": {
+            "aggregate": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PopulationFrequency"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "clingen_applicability": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ClinGenApplicabilityAssessment"
+              },
+              "title": "Clingen Applicability",
+              "type": "array"
+            },
+            "coverage_notes": {
+              "default": [],
+              "items": {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "title": "Coverage Notes",
+              "type": "array"
+            },
+            "dataset_id": {
+              "anyOf": [
+                {
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dataset Id"
+            },
+            "dataset_kind": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "EXOME",
+                    "GENOME",
+                    "JOINT",
+                    "OTHER"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dataset Kind"
+            },
+            "exception_assessments": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/PopulationExceptionAssessment"
+              },
+              "title": "Exception Assessments",
+              "type": "array"
+            },
+            "populations": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/PopulationFrequency"
+              },
+              "title": "Populations",
+              "type": "array"
+            },
+            "variant_identifier": {
+              "anyOf": [
+                {
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Variant Identifier"
+            },
+            "variant_identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GenomicIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "vcep_population_scope": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/VCEPPopulationScopeAssessment"
+              },
+              "title": "Vcep Population Scope",
+              "type": "array"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BA1",
+          "BS1",
+          "PM2"
+        ],
+        "automatic_helper_mapping": true,
+        "manual_typed_ui": true
+      },
+      {
+        "kind": "PROTEIN_LENGTH",
+        "model": "ProteinLengthEvidence",
+        "observation_model": "ProteinLengthObservation",
+        "observation": {
+          "required": [
+            "variant_id",
+            "variant_identity",
+            "gene",
+            "disease",
+            "consequence",
+            "annotation_version",
+            "provenance"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "alternative_length": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Alternative Length"
+            },
+            "alternative_sequence": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Alternative Sequence"
+            },
+            "annotation_confidence": {
+              "default": "UNKNOWN",
+              "enum": [
+                "HIGH",
+                "LOW",
+                "UNKNOWN"
+              ],
+              "title": "Annotation Confidence",
+              "type": "string"
+            },
+            "annotation_version": {
+              "pattern": "^\\S+$",
+              "title": "Annotation Version",
+              "type": "string"
+            },
+            "biological_relevance": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Biological Relevance"
+            },
+            "biological_review": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Provenance"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "consequence": {
+              "enum": [
+                "INFRAME_INSERTION",
+                "INFRAME_DELETION",
+                "INFRAME_DUPLICATION",
+                "STOP_LOSS",
+                "OTHER"
+              ],
+              "title": "Consequence",
+              "type": "string"
+            },
+            "conservation": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Conservation"
+            },
+            "deleted_residues": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deleted Residues"
+            },
+            "deleted_sequence": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Deleted Sequence"
+            },
+            "disease": {
+              "$ref": "#/$defs/Identifier"
+            },
+            "domains": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ProteinRegion"
+              },
+              "title": "Domains",
+              "type": "array"
+            },
+            "frame_preserved": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Frame Preserved"
+            },
+            "functional_regions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ProteinRegion"
+              },
+              "title": "Functional Regions",
+              "type": "array"
+            },
+            "gene": {
+              "$ref": "#/$defs/GeneIdentifier"
+            },
+            "hgvs_protein": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Hgvs Protein"
+            },
+            "inserted_residues": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Inserted Residues"
+            },
+            "inserted_sequence": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Inserted Sequence"
+            },
+            "mechanism_compatible": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mechanism Compatible"
+            },
+            "protein": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReferenceResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "protein_consequence_validated": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Protein Consequence Validated"
+            },
+            "protein_end": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Protein End"
+            },
+            "protein_start": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Protein Start"
+            },
+            "provenance": {
+              "$ref": "#/$defs/Provenance"
+            },
+            "reference_length": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reference Length"
+            },
+            "reference_sequence": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reference Sequence"
+            },
+            "repeat": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RepetitiveRegionAssessment"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "splice_assessment": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Provenance"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "splice_effect": {
+              "default": "UNKNOWN",
+              "enum": [
+                "EXCLUDED",
+                "SUSPECTED",
+                "CONFIRMED",
+                "UNKNOWN"
+              ],
+              "title": "Splice Effect",
+              "type": "string"
+            },
+            "splicing_evidence_ids": {
+              "default": [],
+              "items": {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "title": "Splicing Evidence Ids",
+              "type": "array"
+            },
+            "transcript": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PVS1Transcript"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "variant_id": {
+              "pattern": "^\\S+$",
+              "title": "Variant Id",
+              "type": "string"
+            },
+            "variant_identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GenomicIdentity"
+                },
+                {
+                  "$ref": "#/$defs/StructuralIdentity"
+                }
+              ],
+              "title": "Variant Identity"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "BP3",
+          "PM4"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "PVS1",
+        "model": "PVS1Evidence",
+        "observation_model": "PVS1Observation",
+        "observation": {
+          "required": [
+            "variant_identity"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "mechanism": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MechanismAssessment"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "structural": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StructuralAssessment"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "transcript_effects": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/TranscriptEffect"
+              },
+              "title": "Transcript Effects",
+              "type": "array"
+            },
+            "used_by_criteria": {
+              "default": [],
+              "items": {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "title": "Used By Criteria",
+              "type": "array"
+            },
+            "variant_identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GenomicIdentity"
+                },
+                {
+                  "$ref": "#/$defs/StructuralIdentity"
+                }
+              ],
+              "title": "Variant Identity"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "PVS1"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "SEGREGATION",
+        "model": "SegregationEvidence",
+        "observation_model": "acmg_engine__domain__evidence__SegregationObservation",
+        "observation": {
+          "required": [],
+          "additionalProperties": false,
+          "properties": {
+            "affected_relatives": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Affected Relatives"
+            },
+            "family_key": {
+              "anyOf": [
+                {
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Family Key"
+            },
+            "informative_meioses": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Informative Meioses"
+            },
+            "pattern": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pattern"
+            },
+            "relatives": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/RelativeObservation"
+              },
+              "title": "Relatives",
+              "type": "array"
+            },
+            "unaffected_relatives": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unaffected Relatives"
+            },
+            "uncertainty": {
+              "default": [],
+              "items": {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "title": "Uncertainty",
+              "type": "array"
+            }
+          }
+        },
+        "catalog_consumers": [],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      },
+      {
+        "kind": "SPLICE_EQUIVALENCE",
+        "model": "SpliceEquivalenceEvidence",
+        "observation_model": "SpliceEquivalenceObservation",
+        "observation": {
+          "required": [
+            "gene",
+            "disease",
+            "mechanism",
+            "current",
+            "comparison",
+            "reference_classification",
+            "baseline",
+            "baseline_evidence_ids",
+            "context_review"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "baseline": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PP3",
+                    "PVS1",
+                    "PVS1_STRONG",
+                    "PVS1_MODERATE",
+                    "PVS1_SUPPORTING"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Baseline"
+            },
+            "baseline_evidence_ids": {
+              "items": {
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              "title": "Baseline Evidence Ids",
+              "type": "array"
+            },
+            "comparison": {
+              "$ref": "#/$defs/SpliceEventPrediction"
+            },
+            "context_review": {
+              "$ref": "#/$defs/Provenance"
+            },
+            "current": {
+              "$ref": "#/$defs/SpliceEventPrediction"
+            },
+            "disease": {
+              "$ref": "#/$defs/Identifier"
+            },
+            "gene": {
+              "$ref": "#/$defs/GeneIdentifier"
+            },
+            "mechanism": {
+              "$ref": "#/$defs/Identifier"
+            },
+            "mechanism_branch": {
+              "const": "SPLICE_EVENT_EQUIVALENCE",
+              "default": "SPLICE_EVENT_EQUIVALENCE",
+              "title": "Mechanism Branch",
+              "type": "string"
+            },
+            "protein_effect_considered": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Protein Effect Considered"
+            },
+            "reference_classification": {
+              "$ref": "#/$defs/SpliceReferenceClassification"
+            }
+          }
+        },
+        "catalog_consumers": [
+          "PS1"
+        ],
+        "automatic_helper_mapping": false,
+        "manual_typed_ui": false
+      }
+    ]
+  },
+  "inspected_source_sha256": {
+    "HELPER/helper_next/src/helper_variants/source_registry.py": "6fd31a0accc582cbe9ad0c3ae4a848cc7a28a59ad2223304e87d12d423b8be50",
+    "HELPER/helper_next/src/helper_variants/gene_phenotype.py": "1ed55e131c1bbaef86bb6418468ecb88441f59861602c3c680968411c5e80db9",
+    "HELPER/helper_next/src/helper_variants/gnomad_frequency.py": "e9b6463786457b52762d774e654aca5abb2fc25f641214327a02670f6112eef7",
+    "HELPER/helper_next/src/helper_variants/clinvar.py": "c2334190984c728a0701f8fd9ce50edb2e6fc10322e0a429965ee1a6c0f7c113",
+    "HELPER/helper_next/src/helper_variants/panelapp.py": "616a340be8e0d8571121227f66fa285a6025c62030702ea6d0e13ee91555220a",
+    "HELPER/helper_next/src/helper_variants/indexer.py": "2621994232a5e52a9a1ce135756e42c6296c143b6b53160934420ab0da3e35ea",
+    "HELPER/helper_next/src/helper_variants/query.py": "87e55f680c571ddc8d815f5c9aa163cb381af181f288cdeb2557054143963e15",
+    "HELPER/helper_next/src/helper_next/core/acmg_context.py": "769b65d826735c4a7900928bea6ad9ef40a290b818f2823041acf6be45f701c4",
+    "HELPER/helper_next/src/helper_next/core/acmg_population.py": "8548c1ae26d307e024882f1dac01ead226d0ba936c0779b30bb22c6884a928fc",
+    "HELPER/helper_next/src/helper_next/core/acmg_workbench.py": "b48408ab289bc4d0ada80c0e4197919475e95449c7e58145eec3b12abf6198d7",
+    "HELPER/helper_next/src/helper_next/core/acmg_task22.py": "e631f9febbde9b627adf4570041f7cd81ad255911f11c691f43735744cc00087",
+    "HELPER/helper_next/src/helper_next/core/acmg_reference.py": "5e790e57310012e7ab0af2e62e0124798e2fd52baaf4de8582f8dabab56980b2",
+    "HELPER/helper_next/src/helper_next/api/acmg.py": "dba5d0b75f9fc0843680a10f8c3e87950db49b204e1eb3e3c197d0b58f36f446",
+    "HELPER/helper_next/src/helper_next/api/acmg_task22.py": "35ecb4a5f899bf8adfe1a9c45684923494be9a85ee4d57e90d6151ef8ba0eef5",
+    "acmg-engine/docs/schemas/evidence-contract-1.0.json": "b9bc8f2b4a7ff8b07af4554b77e4810eb1a017ccb7860dad861fff5606c1c141",
+    "acmg-engine/docs/openapi.json": "a2e9fc5bc9aa8da65200a54c89cea4b7f275abed631bf6927bef082b3d1594a6",
+    "acmg-engine/src/acmg_engine/domain/evidence_contract.py": "0bcfaf084e6c15907d72ad6d5658be8aef7cd71a3ac878f70bf3e8d45e63288e",
+    "acmg-engine/src/acmg_engine/domain/evidence.py": "dccb6b484e851f4b4372571ba3a2a5f99177cc9da54170731f0913718f346d68",
+    "acmg-engine/src/acmg_engine/domain/provenance.py": "b54d968bbfdf4309bb826b9e1c72fbc09e33a180095d8da52e2621e66005754a",
+    "acmg-engine/src/acmg_engine/domain/variant.py": "18fe91cfc60e5731dbadeba644add90dd6a58416acd3f9277e3c466d12f7143f",
+    "acmg-engine/src/acmg_engine/domain/gene_disease.py": "514d3f14a2fed9a60d7e704ed628e10d3b069146b3774622488686352633e23f",
+    "acmg-engine/src/acmg_engine/domain/snapshot.py": "57a94dc8a6277e58dc536e2778a806403b81dc6c64fd4d572d2b7da9d2f554a2",
+    "acmg-engine/src/acmg_engine/services/evidence_contract.py": "f9d73483b582fc24d7f104ce23d5477c1eac951b54d4834306d3d141c6c3792d",
+    "acmg-engine/src/acmg_engine/resources/evidence_requirements_v1.json": "6abd168a2b2b18565fb34b269847f3770ab24c6bde696f74aafcfcceb71f3ac4"
+  },
+  "not_performed": [
+    "external HTTP checks or downloads",
+    "VCF/patient record inspection",
+    "FASTA hashing",
+    "engine criterion evaluations",
+    "full or computationally heavy test suites"
+  ]
+}

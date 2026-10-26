@@ -91,6 +91,7 @@ def test_criterion_inspection_review_rerun_and_profile_comparison(tmp_path):
             if(!String(url).startsWith('/api/acmg'))return original(url,options);
             const path=String(url).slice('/api/acmg'.length), body=options.body?JSON.parse(options.body):null;
             requests.push({path,body}); let value;
+            if(path==='/task22/discovery')return new Response(JSON.stringify({detail:{code:'UNSUPPORTED_TASK22_API',message:'Legacy fixture has no Task 22 API'}}),{status:409,headers:{'Content-Type':'application/json'}});
             if(path==='/discovery')value={capabilities:{research_execution_enabled:researchEnabled},schemas:{},criteria:{criteria:[]}};
             else if(path==='/workspaces'&&body)value=workspace;
             else if(path.startsWith('/workspaces?'))value={workspaces:[]};
