@@ -642,6 +642,13 @@ def test_preprocessing_module_runs_selected_bam_qc_on_final_bams():
     assert "bam_qc_resolved_container_cfg instanceof Map" in module
 
 
+def test_gatk3_preprocessing_heap_leaves_task_memory_for_non_heap_use():
+    module = (Path(__file__).resolve().parents[2] / "workflows/nextflow/modules/preprocessing.nf").read_text()
+
+    assert module.count("def java_heap_mb = (task.memory.toMega() * 4 / 5) as int") == 2
+    assert module.count("-Xmx${java_heap_mb}m -jar ${gatk3_path}") == 2
+
+
 def test_validate_nextflow_inputs_accepts_gatk3_preprocessing_databases():
     samplesheet = {
         "sample_list": ["S1"],

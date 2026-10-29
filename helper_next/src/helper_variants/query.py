@@ -6,9 +6,10 @@ import json
 import os
 import re
 import threading
+import time
 
-from helper_prioritization import RULESET_VERSION, score_variant
-from helper_variants import gene_phenotype, gnomad_frequency, store
+from helper_prioritization import RULESET_VERSION, apply_clinvar_evidence, score_variant
+from helper_variants import clinvar, gene_phenotype, gnomad_frequency, store
 
 
 DEFAULT_PAGE_SIZE = 100
@@ -375,6 +376,14 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             )
             for row in score_rows
         ))
+        clinvar_evidence = clinvar.cached_evidence((
+            (row["reference_build"], row["chromosome"], row["position"],
+             row["reference"], row["alternate"])
+            for row in score_rows
+        ))
+        occurrence_counts = _run_occurrence_counts(
+            db, sample_id, [row["variant_id"] for row in score_rows]
+        )
         compound_genes = _possible_compound_genes(db, sample_id)
         parental_evidence = _parental_evidence(
             database, db, sample_id, [row["variant_id"] for row in score_rows]
@@ -387,6 +396,8 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
                 and _compound_eligible(row),
                 parental_evidence.get(row["variant_id"], {}),
                 frequency_contexts[index],
+                occurrence_counts.get(row["variant_id"], {}),
+                clinvar_evidence[index],
             )
             for index, row in enumerate(score_rows)
         ]
@@ -562,12 +573,10 @@ def variant_carriers(database, reference_build, chromosome, position, reference,
 
 
 def _compact_variant(row, gene_context=None, compound_candidate=False, family_context=None,
-                     population_context=None):
+                     population_context=None, occurrence_context=None, clinvar_evidence=None):
     metadata = _json_value(row["metadata_json"])
     fields = (metadata or {}).get("fields") or {}
     zygosities = _csv(row["zygosities"])
-    review_values = _metadata_values(fields, "CLNREVSTAT", "ClinVar_CLNREVSTAT")
-    conflict_values = _metadata_values(fields, "CLNSIGCONF", "ClinVar_CLNSIGCONF")
     population_context = dict(population_context or {})
     population_values = [row["population_af"], population_context.get("population_af")]
     population_af = max(
@@ -593,19 +602,11 @@ def _compact_variant(row, gene_context=None, compound_candidate=False, family_co
     }
     context = dict(gene_context or {})
     family_context = dict(family_context or {})
+    occurrence_context = dict(occurrence_context or {})
     item["priority"] = score_variant({
         "chromosome": row["chromosome"],
         "population_af": population_af,
         "consequence": row["consequence"] or "",
-        "clinical_significance": row["clinical_significance"] or "",
-        "clinvar_stars": max(
-            [_clinvar_review_stars(review) for review in review_values] or [0]
-        ),
-        "clinvar_conflict": bool(conflict_values) or any(
-            _clinvar_has_conflict_text(value)
-            for value in review_values + [row["clinical_significance"] or ""]
-        ),
-        "clinvar_condition_match": "unknown",
         "prediction_fields": fields,
         "zygosities": zygosities,
         "compound_status": "phase_unknown" if compound_candidate else "",
@@ -613,10 +614,51 @@ def _compact_variant(row, gene_context=None, compound_candidate=False, family_co
         "filter_status": item["filter_status"],
         "depth": row["depth"],
         "quality": row["quality"],
+        **occurrence_context,
         **context,
         **population_context,
     })
+    if clinvar_evidence:
+        item["priority"] = apply_clinvar_evidence(item["priority"], clinvar_evidence)
     return item
+
+
+def _run_occurrence_counts(db, sample_id, variant_ids):
+    """Count alternate-allele carriers by sample and unrelated group in the current run."""
+    if not variant_ids:
+        return {}
+    rows = db.execute(
+        "SELECT DISTINCT c.variant_id, s.id AS sample_id, s.subject_id, s.metadata_json, "
+        "c.genotype, c.zygosity "
+        "FROM calls c JOIN analyses a ON a.id = c.analysis_id "
+        "JOIN samples s ON s.id = a.sample_id "
+        "WHERE a.run_id = (SELECT run_id FROM analyses WHERE sample_id = ? ORDER BY id LIMIT 1) "
+        "AND c.variant_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))",
+        (int(sample_id), json.dumps([int(value) for value in variant_ids])),
+    ).fetchall()
+    groups_by_variant = {}
+    samples_by_variant = {}
+    for row in rows:
+        if not _call_carries_alternate(row["genotype"], row["zygosity"]):
+            continue
+        variant_id = int(row["variant_id"])
+        samples_by_variant.setdefault(variant_id, set()).add(int(row["sample_id"]))
+        metadata = _json_value(row["metadata_json"])
+        analysis_group = str(metadata.get("analysis_id") or "").strip().casefold()
+        if analysis_group:
+            group = ("analysis", analysis_group)
+        elif row["subject_id"] is not None:
+            group = ("subject", int(row["subject_id"]))
+        else:
+            group = ("sample", int(row["sample_id"]))
+        groups_by_variant.setdefault(variant_id, set()).add(group)
+    return {
+        variant_id: {
+            "unrelated_subject_count": len(groups),
+            "sample_carrier_count": len(samples_by_variant.get(variant_id, set())),
+        }
+        for variant_id, groups in groups_by_variant.items()
+    }
 
 
 def _metadata_values(fields, *names):
@@ -1057,6 +1099,8 @@ def _priority_order_cache_key(database, sample_id, signature):
         _file_fingerprint(database),
         _file_fingerprint(gene_phenotype.cache_path()),
         _file_fingerprint(gnomad_frequency.cache_path()),
+        _file_fingerprint(clinvar.cache_path()),
+        int(time.time() // 60),  # Revisit ordering as cached ClinVar evidence expires.
         int(sample_id),
         RULESET_VERSION,
         signature,

@@ -2503,8 +2503,17 @@ class VariantBrowser extends HTMLElement {
     try {
       const detail = await this.request(
         `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants/${variantId}`,
-        {signal: workspace.detailController.signal},
+        {signal: workspace.detailController.signal, cache: "no-store"},
       );
+      const priorityItem = workspace.items.find(
+        item => String(item.variant_id) === String(variantId),
+      );
+      if (priorityItem && detail.priority) {
+        priorityItem.priority = detail.priority;
+        if (workspace.priorityExplanation?.variant_id === variantId) {
+          workspace.priorityExplanation = priorityItem;
+        }
+      }
       workspace.detail = {
         ...detail, variant_id: variantId, carriers: null, carriersLoading: true,
         genePhenotypes: [], genePhenotypesLoading: true,
@@ -2663,6 +2672,13 @@ class VariantBrowser extends HTMLElement {
       this.renderWorkspace();
     });
     const headingActions = node("div", undefined, "detail-heading-actions");
+    const calculator = node("button", "Valuta ACMG", "new-acmg-open");
+    calculator.type = "button";
+    calculator.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
+    calculator.addEventListener("click", async () => {
+      const {openAcmgCalculator} = await import("./acmg-calculator.js");
+      openAcmgCalculator(this, workspace);
+    });
     const inspect = node("button", "Inspect reads", "igv-open");
     inspect.type = "button";
     inspect.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
@@ -2680,7 +2696,7 @@ class VariantBrowser extends HTMLElement {
       const {openAcmgWorkbench} = await import("./acmg-workbench.js");
       await openAcmgWorkbench(this, workspace);
     });
-    headingActions.append(acmg, clinical, inspect, close);
+    headingActions.append(calculator, acmg, clinical, inspect, close);
     heading.append(node("h4", "Variant detail"), headingActions);
     panel.append(heading);
     if (workspace.detail.loading) {

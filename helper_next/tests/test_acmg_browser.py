@@ -126,7 +126,7 @@ def test_criterion_inspection_review_rerun_and_profile_comparison(tmp_path):
           run.click();
           await until(()=>dialog.querySelector('.acmg-table-scroll button'));
           const count=dialog.querySelectorAll('.acmg-table-scroll tr').length-1;
-          if(dialog.querySelectorAll('.acmg-table-scroll th').length!==6)throw Error('Default criterion table should have six columns');
+          if(dialog.querySelectorAll('.acmg-table-scroll th').length!==5)throw Error('Default criterion table should have five columns');
           const technical=dialog.querySelector('input[type=checkbox]');technical.checked=true;technical.dispatchEvent(new Event('change'));
           if(dialog.querySelectorAll('.acmg-table-scroll th').length!==16)throw Error('Full criterion table should remain available');
           technical.checked=false;technical.dispatchEvent(new Event('change'));

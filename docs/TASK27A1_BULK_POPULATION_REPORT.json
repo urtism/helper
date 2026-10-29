@@ -1,0 +1,372 @@
+{
+  "dry_run": {
+    "source_index": "/home/jarvis/.local/share/helper_variants/gene_phenotype.sqlite3",
+    "source_status": {
+      "g2p": {
+        "status": "READY",
+        "records": 3856,
+        "dataset_version": null,
+        "index_acquired_at": "2026-10-21T12:33:28Z",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download/"
+      },
+      "gencc": {
+        "status": "READY",
+        "records": 30345,
+        "dataset_version": null,
+        "index_acquired_at": "2026-10-21T12:33:28Z",
+        "source_url": "https://thegencc.org/download/action/submissions-export-csv?format=new"
+      }
+    },
+    "source_records": {
+      "g2p": 3856,
+      "gencc": 30345
+    },
+    "source_associations": {
+      "g2p": 3614,
+      "gencc": 15350
+    },
+    "unique_associations": 18957,
+    "invalid_records": 232,
+    "invalid_record_reasons": {
+      "MISSING_DISEASE_ID": 232
+    },
+    "invalid_record_examples": [
+      {
+        "source": "g2p",
+        "record_id": "G2P00176",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00204",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00356",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00405",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00453",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00522",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00598",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00651",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00677",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00686",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00754",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00898",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01140",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01169",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01183",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01476",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01492",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01535",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01728",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01769",
+        "reason": "MISSING_DISEASE_ID"
+      }
+    ],
+    "ambiguous_mapping_associations": 2436,
+    "source_problems": [],
+    "index_stale": false,
+    "scope": "SYNCHRONIZED_LOCAL_INDEX_ONLY",
+    "global_dataset_completeness": "NOT_ATTESTED",
+    "dataset_versions": {
+      "g2p": null,
+      "gencc": null,
+      "clingen_dosage": null,
+      "gnomad": null
+    },
+    "gencc_record_versions": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "warnings": [
+      "Scientific dataset releases are not recorded by the existing local index",
+      "Completeness refers only to valid associations in the enumerated local indexes"
+    ],
+    "status": "DRY_RUN",
+    "cache": {
+      "database": "/home/jarvis/.local/share/helper_next/mechanisms.sqlite3",
+      "exists": false,
+      "matrices": 0,
+      "snapshots": 0,
+      "source_records": 0
+    },
+    "processed": 0,
+    "matrices_saved": 0,
+    "snapshots_created": 0,
+    "eligible": 18957,
+    "to_process": 20,
+    "inventory_hash": "5f821bab6f318b3adcd39e1c2c31d75a2b79456b734a2c0db613383aa9409426",
+    "elapsed_seconds": 11.16046347701922
+  },
+  "pilot_20": {
+    "cache": {
+      "database": "/home/jarvis/.local/share/helper_next/mechanisms.sqlite3",
+      "exists": true,
+      "matrices": 20,
+      "snapshots": 20,
+      "source_records": 37
+    },
+    "run_id": "58398746bc884b73831d400c5b7d134f",
+    "status": "LIMITED",
+    "ambiguous_mapping_associations": 2436,
+    "dataset_versions": {
+      "clingen_dosage": null,
+      "g2p": null,
+      "gencc": null,
+      "gnomad": null
+    },
+    "gencc_record_versions": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "global_dataset_completeness": "NOT_ATTESTED",
+    "index_stale": false,
+    "invalid_record_examples": [
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00176",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00204",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00356",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00405",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00453",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00522",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00598",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00651",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00677",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00686",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00754",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P00898",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P01140",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P01169",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P01183",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P01476",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P01492",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P01535",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P01728",
+        "source": "g2p"
+      },
+      {
+        "reason": "MISSING_DISEASE_ID",
+        "record_id": "G2P01769",
+        "source": "g2p"
+      }
+    ],
+    "invalid_record_reasons": {
+      "MISSING_DISEASE_ID": 232
+    },
+    "invalid_records": 232,
+    "scope": "SYNCHRONIZED_LOCAL_INDEX_ONLY",
+    "source_associations": {
+      "g2p": 3614,
+      "gencc": 15350
+    },
+    "source_index": "/home/jarvis/.local/share/helper_variants/gene_phenotype.sqlite3",
+    "source_problems": [],
+    "source_records": {
+      "g2p": 3856,
+      "gencc": 30345
+    },
+    "source_status": {
+      "g2p": {
+        "dataset_version": null,
+        "index_acquired_at": "2026-10-21T12:33:28Z",
+        "records": 3856,
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download/",
+        "status": "READY"
+      },
+      "gencc": {
+        "dataset_version": null,
+        "index_acquired_at": "2026-10-21T12:33:28Z",
+        "records": 30345,
+        "source_url": "https://thegencc.org/download/action/submissions-export-csv?format=new",
+        "status": "READY"
+      }
+    },
+    "unique_associations": 18957,
+    "warnings": [
+      "Scientific dataset releases are not recorded by the existing local index",
+      "Completeness refers only to valid associations in the enumerated local indexes"
+    ],
+    "planned": 18957,
+    "processed": 20,
+    "successful": 20,
+    "errors": 0,
+    "remaining": 18937,
+    "matrices_saved": 20,
+    "matrices_created": 20,
+    "matrices_updated": 0,
+    "matrices_with_direct_assertion": 4,
+    "matrices_context_only": 16,
+    "unresolved_associations": 17,
+    "mapping_ambiguous": 3,
+    "sources_unavailable": {
+      "clinvar:NOT_SUPPORTED": 20,
+      "gnomad:CACHE_MISS": 20
+    },
+    "snapshots_created": 20,
+    "error_examples": [],
+    "elapsed_seconds": 12.635739428980742,
+    "options": {
+      "bulk_version": "mechanism-bulk-1.0",
+      "offline": true,
+      "refresh_stale": false
+    },
+    "local_population_complete": false,
+    "processed_in_invocation": 20
+  },
+  "audit": {
+    "sqlite_schema_version": 2,
+    "review_status_counts": {
+      "NOT_REVIEWED": 20
+    },
+    "foreign_key_violations": 0
+  },
+  "execution_scope": "Offline pilot restricted to 20 real public gene-disease associations; full population was not started."
+}

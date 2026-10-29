@@ -1,5 +1,6 @@
 /* Task 22 renderer: all scientific results, paths and comparisons originate in the engine. */
 import {schemaField} from "./acmg-schema-field.js";
+import {appendPvs1Summary, mechanismPolicy, mechanismPolicySelect, pvs1Result} from "./acmg-pvs1.js";
 const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 const show = v => v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v);
 const opt = (v, label = v) => { const n = el("option", label); n.value = v; return n; };
@@ -62,6 +63,14 @@ export async function mountTask22(host, workspace, discovery, status) {
   const metadata = el("div"); let resetOverride = () => {};
   const metadataChanged = () => { metadata.replaceChildren(details("Protocol sources, approval and limitations", discovery.protocols[Number(protocol.value)])); resetOverride(); };
   protocol.onchange = metadataChanged; metadataChanged(); config.append(protocol); host.append(config, metadata);
+  const policy = mechanismPolicySelect(), policyLabel = el("label", "Mechanism policy"); policyLabel.append(policy); config.append(policyLabel);
+  const scientificProfile = el("select"); scientificProfile.setAttribute("aria-label", "Engine policy profile/version");
+  scientificProfile.append(opt("", "Select Engine policy profile/version"));
+  (discovery.scientific_profiles || []).forEach((profile, index) => {
+    if (mechanismPolicy(profile) !== "HELPER_EXPERIMENTAL_1.0") return;
+    scientificProfile.append(opt(String(index), `${profile.profile_id} · ${profile.version}`));
+  });
+  const profileDetails = el("details"); profileDetails.append(el("summary", "Engine policy profile/version"), scientificProfile); host.append(profileDetails);
   host.append(details("Original VCF annotations and ClinVar source evidence", workspace.document.original_vcf_evidence),
               details("Adapted snapshot and missing prerequisites", workspace.document.normalized_evidence));
   const warning = el("p", "Task 22 returns criterion status and strength. No final classification is produced.", "acmg-warning"); host.append(warning);
@@ -100,14 +109,37 @@ export async function mountTask22(host, workspace, discovery, status) {
   };
   const actions = el("div", undefined, "acmg-actions"), preflight = el("button", "Inspect evidence requirements"), run = el("button", "Evaluate selected variant"), compare = el("button", "Compare ACMG 2015 / ClinGen");
   run.className = "acmg-primary"; actions.append(preflight, run, compare); host.append(actions);
+  const syncProfile = () => {
+    const strategy = discovery.protocols[Number(protocol.value)].selection.protocol === "CLINGEN_GENERAL" ? "CLINGEN_GUIDED" : "CUSTOM_ALGORITHMIC";
+    scientificProfile.disabled = policy.value === "STANDARD";
+    profileDetails.hidden = scientificProfile.disabled;
+    [...scientificProfile.options].forEach(option => {
+      if (option.value !== "") {
+        const profile = discovery.scientific_profiles[Number(option.value)];
+        option.disabled = profile.strategy !== strategy || ["DRAFT", "DEPRECATED"].includes(profile.release_status);
+      }
+    });
+    if (scientificProfile.disabled || scientificProfile.selectedOptions[0]?.disabled) scientificProfile.value = "";
+    const available = [...scientificProfile.options].filter(o => o.value !== "" && !o.disabled);
+    if (!scientificProfile.disabled && scientificProfile.value === "" && available.length === 1) scientificProfile.value = available[0].value;
+    const missingProfile = policy.value !== "STANDARD" && scientificProfile.value === "";
+    preflight.disabled = missingProfile;
+    run.disabled = !discovery.capabilities.research_execution_enabled || missingProfile;
+    run.title = missingProfile ? "Select an available Engine policy profile/version in details; HELPER cannot supply missing Engine policies." : "";
+    compare.disabled = !discovery.capabilities.research_execution_enabled || policy.value !== "STANDARD";
+    compare.title = policy.value !== "STANDARD" ? "Select STANDARD to compare both protocols; scientific profiles bind one strategy." : "Compare both standard protocols";
+  };
+  protocol.addEventListener("change", syncProfile); scientificProfile.addEventListener("change", syncProfile); policy.addEventListener("change", syncProfile); syncProfile();
   const readiness = el("div"), results = el("div"), history = el("div"); host.append(readiness, results, history);
   let selected = null, savedHistory = [], updateMatrix = () => {};
-  const request = () => ({protocol: discovery.protocols[Number(protocol.value)].selection, parent_id: selected?.kind === "criteria_evaluation" ? selected.id : "", corrections, node_specializations: override.value === "" ? [] : [discovery.tree_overrides[Number(override.value)].reference]});
+  const request = () => {
+    if (policy.value !== "STANDARD" && scientificProfile.value === "") throw new Error("An available Engine policy profile/version is required");
+    return {protocol: discovery.protocols[Number(protocol.value)].selection, scientific_profile: policy.value === "STANDARD" ? null : discovery.scientific_profiles[Number(scientificProfile.value)].reference, parent_id: selected?.kind === "criteria_evaluation" ? selected.id : "", corrections, node_specializations: override.value === "" ? [] : [discovery.tree_overrides[Number(override.value)].reference]};
+  };
   let working = false;
-  const busy = async fn => { if (working) return; working = true; preflight.disabled = run.disabled = compare.disabled = true; status.textContent = "Working on the selected variant…"; try { await fn(); status.textContent = "Ready · research only"; } catch (e) { status.textContent = e.message; } finally { working = false; preflight.disabled = false; run.disabled = compare.disabled = !discovery.capabilities.research_execution_enabled; } };
+  const busy = async fn => { if (working) return; working = true; preflight.disabled = run.disabled = compare.disabled = true; status.textContent = "Working on the selected variant…"; try { await fn(); status.textContent = "Ready · research only"; } catch (e) { status.textContent = e.message; } finally { working = false; preflight.disabled = false; run.disabled = !discovery.capabilities.research_execution_enabled; syncProfile(); } };
   preflight.onclick = () => busy(async () => { const value = await api(`/workspaces/${workspace.id}/criteria/preflight`, request()); readiness.replaceChildren(details("Engine evidence assessments", value.validated.assessments), details("Evidence requirements and branch readiness", value.requirements)); readiness.firstChild.open = true; });
-  run.disabled = compare.disabled = !discovery.capabilities.research_execution_enabled;
-  if (run.disabled) host.append(el("p", "Enable ACMG_ENABLE_RESEARCH_INTERPRETATION on the engine to evaluate this variant.", "acmg-warning"));
+  if (!discovery.capabilities.research_execution_enabled) host.append(el("p", "Enable ACMG_ENABLE_RESEARCH_INTERPRETATION on the engine to evaluate this variant.", "acmg-warning"));
   run.onclick = () => busy(async () => { const result = await api(`/workspaces/${workspace.id}/criteria/evaluate`, request()); await renderResult(result); await refreshHistory(); });
   compare.onclick = () => busy(async () => { const result = await api(`/workspaces/${workspace.id}/criteria/compare`, request()); renderComparison(result); await refreshHistory(); });
   async function renderResult(result) {
@@ -115,20 +147,25 @@ export async function mountTask22(host, workspace, discovery, status) {
     corrections.splice(0, corrections.length, ...(result.document.corrections || [])); showPending();
     const matrix = result.document.engine_result;
     results.replaceChildren(el("h4", `${matrix.protocol.protocol} ${matrix.protocol.version} · attempt ${result.id}`), el("p", matrix.limitations.join(" ")));
+    const pvs1 = matrix.criteria.find(c => c.criterion_id === "PVS1")?.pvs1_evaluation;
+    appendPvs1Summary(results, pvs1, result.document.builder?.mechanism_assessment,
+      matrix.criteria.find(c => c.criterion_id === "PVS1"));
     const downloads = el("div", undefined, "acmg-actions");
     ["engine", "audit", "csv"].forEach(format => { const a = el("a", `Export ${format}`); a.href = `/api/acmg/results/${result.id}/criteria/export/${format}`; a.download = ""; downloads.append(a); }); results.append(downloads);
     const filters = el("div", undefined, "acmg-actions"), statusFilter = el("select"), strengthFilter = el("select"), typeFilter = el("select");
     statusFilter.setAttribute("aria-label", "Filter criterion status"); strengthFilter.setAttribute("aria-label", "Filter strength"); typeFilter.setAttribute("aria-label", "Filter criterion type");
-    statusFilter.append(opt("", "All statuses")); [...new Set(matrix.criteria.map(c => c.activation_status))].forEach(s => statusFilter.append(opt(s)));
-    strengthFilter.append(opt("", "All strengths"), opt("NONE", "No assigned strength")); [...new Set(matrix.criteria.map(c => c.assigned_strength?.level).filter(Boolean))].forEach(s => strengthFilter.append(opt(s)));
+    const strengthKey = c => { const strength = pvs1Result(c).strength; return typeof strength === "string" ? strength : strength?.level || "NONE"; };
+    statusFilter.append(opt("", "All statuses")); [...new Set(matrix.criteria.map(c => pvs1Result(c).status))].forEach(s => statusFilter.append(opt(s)));
+    strengthFilter.append(opt("", "All strengths"), opt("NONE", "No assigned strength")); [...new Set(matrix.criteria.map(strengthKey).filter(s => s !== "NONE"))].forEach(s => strengthFilter.append(opt(s)));
     typeFilter.append(opt("", "All criteria"), opt("P", "Pathogenic"), opt("B", "Benign")); filters.append(statusFilter, strengthFilter, typeFilter); results.append(filters);
     const tableHost = el("div", undefined, "acmg-table-scroll"), inspector = el("div", undefined, "acmg-inspector"); results.append(tableHost, inspector);
     const renderTable = () => {
-      const table = el("table"), head = el("tr"); ["Criterion", "Status", "Strength", "Protocol / rule version", "Evidence used", "Observed", "Threshold", "Rationale", "Warnings / review"].forEach(s => head.append(el("th", s))); table.append(head);
-      matrix.criteria.filter(c => (!statusFilter.value || c.activation_status === statusFilter.value) && (!strengthFilter.value || (c.assigned_strength?.level || "NONE") === strengthFilter.value) && (!typeFilter.value || c.criterion_id.startsWith(typeFilter.value))).forEach(c => {
+      const table = el("table"), head = el("tr"); ["Criterion", "Status", "Strength", "Rationale", "Warnings"].forEach(s => head.append(el("th", s))); table.append(head);
+      matrix.criteria.filter(c => (!statusFilter.value || pvs1Result(c).status === statusFilter.value) && (!strengthFilter.value || strengthKey(c) === strengthFilter.value) && (!typeFilter.value || c.criterion_id.startsWith(typeFilter.value))).forEach(c => {
         const row = el("tr"), td = el("td"), button = el("button", c.criterion_id); button.onclick = () => busy(() => inspect(c, result, inspector)); td.append(button); row.append(td);
         const review = savedHistory.filter(e => e.kind === "criteria_review" && e.document.result_id === result.id && e.document.criterion === c.criterion_id).at(-1);
-        [c.activation_status, c.assigned_strength, `${c.rule.protocol.protocol} / ${c.rule.version}${c.rule.scientific_basis === "RETIRED" ? " · RETIRED" : ""}`, c.input_evidence_used, c.compared_values, c.applied_thresholds, c.rationale, {warnings: c.warnings, missing: c.missing_evidence, exclusions: c.exclusion_reasons, manual_review: review?.document.decision || "UNREVIEWED"}].forEach(v => row.append(el("td", show(v)))); table.append(row);
+        const summary = pvs1Result(c);
+        [summary.status, summary.strength, summary.reason, {warnings: summary.warnings, missing: c.missing_evidence, exclusions: c.exclusion_reasons, manual_review: review?.document.decision || "UNREVIEWED"}].forEach(v => row.append(el("td", show(v)))); table.append(row);
       }); tableHost.replaceChildren(table);
     }; updateMatrix = renderTable; statusFilter.onchange = strengthFilter.onchange = typeFilter.onchange = renderTable; renderTable();
     results.append(details("Engine requirements and availability", matrix.requirements));
@@ -137,6 +174,7 @@ export async function mountTask22(host, workspace, discovery, status) {
     const bundles = await api(`/results/${result.id}/criteria/artifacts`), bundle = bundles[criterion.criterion_id];
     target.replaceChildren(el("h4", `${criterion.criterion_id} · ${criterion.activation_status}`), el("p", criterion.rule.original_definition),
       details("Rule, thresholds, used evidence and scientific references", criterion));
+    if (criterion.criterion_id === "PVS1") appendPvs1Summary(target, criterion.pvs1_evaluation, result.document.builder?.mechanism_assessment, criterion);
     if (!bundle) { const retry = el("button", "Save replay bundles"); retry.onclick = () => busy(async () => { await api(`/results/${result.id}/criteria/archive`, {}); await inspect(criterion, result, target); }); target.append(el("p", "Actual tree is not archived. The engine must still have this execution in memory."), retry); return; }
     const nodeHost = el("div", undefined, "acmg-node-inspector");
     const inspectNode = id => busy(async () => {

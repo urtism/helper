@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from helper_variants import query, store
+from helper_variants import clinvar, query, store
 
 
 def query_store(tmp_path):
@@ -78,7 +78,7 @@ def test_keyset_pagination_has_no_gaps_or_duplicates_and_caps_page_size(tmp_path
     seen = []
     cursor = None
     while True:
-        page = query.list_variants(path, sample_id, cursor, limit=2)
+        page = query.list_variants(path, sample_id, cursor, limit=2, sort_by="gene")
         seen.extend(item["variant_id"] for item in page["items"])
         cursor = page["next_cursor"]
         if cursor is None:
@@ -86,11 +86,13 @@ def test_keyset_pagination_has_no_gaps_or_duplicates_and_caps_page_size(tmp_path
 
     assert seen == sorted(set(seen))
     assert len(seen) == 5
-    first_page = query.list_variants(path, sample_id, limit=2)
+    first_page = query.list_variants(path, sample_id, limit=2, sort_by="gene")
     with pytest.raises(query.VariantQueryError, match="mismatched"):
-        query.list_variants(path, other_sample, first_page["next_cursor"], limit=2)
+        query.list_variants(
+            path, other_sample, first_page["next_cursor"], limit=2, sort_by="gene"
+        )
     with pytest.raises(query.VariantQueryError, match="between 1 and 500"):
-        query.list_variants(path, sample_id, limit=501)
+        query.list_variants(path, sample_id, limit=501, sort_by="gene")
 
 
 def test_variant_priority_sorts_cover_gene_af_clinical_and_consequence(tmp_path):
@@ -171,6 +173,75 @@ def test_priority_is_default_sort_and_supports_class_and_score_range(tmp_path):
         query.list_variants(path, sample_id, priority_classes="P5")
 
 
+def test_priority_occurrence_counts_unrelated_groups_not_family_members(tmp_path):
+    path, proband_id, relative_id = query_store(tmp_path)
+    with store.connect(path) as db:
+        run_id = db.execute("SELECT id FROM runs LIMIT 1").fetchone()[0]
+        db.execute(
+            "UPDATE samples SET metadata_json = ? WHERE id = ?",
+            (json.dumps({"analysis_id": "FAM-1"}), proband_id),
+        )
+        db.execute(
+            "UPDATE samples SET metadata_json = ? WHERE id = ?",
+            (json.dumps({"analysis_id": "FAM-1"}), relative_id),
+        )
+        variant_ids = {
+            position: db.execute(
+                "SELECT id FROM variants WHERE position = ?", (position,)
+            ).fetchone()[0]
+            for position in range(1, 6)
+        }
+        unrelated_samples = []
+        for sample_name, family_id in (("S3", "FAM-2"), ("S4", "FAM-3")):
+            sample_id = store.register_sample(
+                db, "RUN-Q:{}".format(sample_name), sample_name,
+                metadata={"analysis_id": family_id},
+            )
+            analysis_id = store.register_analysis(
+                db, "RUN-Q:{}".format(sample_name), run_id, sample_id
+            )
+            unrelated_samples.append(analysis_id)
+        for analysis_id in unrelated_samples:
+            store.record_call(db, analysis_id, variant_ids[1], "GATK", "0/1")
+        store.record_call(db, unrelated_samples[0], variant_ids[3], "GATK", "0/1")
+        store.record_call(db, db.execute(
+            "SELECT id FROM analyses WHERE sample_id = ?", (relative_id,)
+        ).fetchone()[0], variant_ids[2], "GATK", "0/1")
+        noncarrier_sample = store.register_sample(
+            db, "RUN-Q:S5", "S5", metadata={"analysis_id": "FAM-4"}
+        )
+        noncarrier_analysis = store.register_analysis(
+            db, "RUN-Q:S5", run_id, noncarrier_sample
+        )
+        store.record_call(db, noncarrier_analysis, variant_ids[1], "GATK", "0/0")
+
+    page = query.list_variants(path, proband_id, sort_by="gene")
+    by_position = {item["position"]: item for item in page["items"]}
+    recurrence = {
+        item["key"]: item
+        for item in by_position[1]["priority"]["components"]
+    }["run_occurrence"]
+    singleton = {
+        item["key"]: item
+        for item in by_position[2]["priority"]["components"]
+    }["run_occurrence"]
+    two_groups = {
+        item["key"]: item
+        for item in by_position[3]["priority"]["components"]
+    }["run_occurrence"]
+    unique_sample = {
+        item["key"]: item
+        for item in by_position[5]["priority"]["components"]
+    }["run_occurrence"]
+
+    assert recurrence["score"] == -10
+    assert "3" in recurrence["evidence"][0]
+    assert singleton["score"] == 10
+    assert two_groups["score"] == 0
+    assert unique_sample["score"] == 15
+    assert "Samples carrying variant: 1" in unique_sample["evidence"]
+
+
 def test_priority_pagination_reuses_cached_global_order(tmp_path, monkeypatch):
     path, sample_id, _ = query_store(tmp_path)
     original = query.score_variant
@@ -190,6 +261,37 @@ def test_priority_pagination_reuses_cached_global_order(tmp_path, monkeypatch):
 
     assert len(second["items"]) == 2
     assert len(scored) == 7
+
+
+def test_list_priority_reuses_detail_evidence_and_invalidates_cached_order(tmp_path, monkeypatch):
+    path, sample_id, _ = query_store(tmp_path)
+
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("Variant list must only use already retrieved ClinVar evidence")
+
+    monkeypatch.setattr(clinvar, "_request", unexpected_request)
+    query.list_variants(path, sample_id, limit=1)
+    evidence = {
+        "status": "available", "classifications": ["Likely pathogenic"],
+        "review_statuses": [{"label": "germline review", "stars": 2}],
+        "classification_breakdown": [{"label": "Likely pathogenic", "count": 2}],
+    }
+    clinvar._store(clinvar.cache_path(), "GRCh38|1|5|A|G", evidence)
+    positive = query.list_variants(path, sample_id, limit=1)
+    assert positive["items"][0]["position"] == 5
+    item = positive["items"][0]
+    component = next(c for c in item["priority"]["components"] if c["key"] == "clinvar")
+    assert component["score"] == 20
+
+    # Apply a contradictory remote update to the same allele, as detail lookup does.
+    evidence["classifications"] = ["Benign"]
+    evidence["classification_breakdown"] = [{"label": "Benign", "count": 2}]
+    clinvar._store(clinvar.cache_path(), "GRCh38|1|5|A|G", evidence)
+    negative = query.list_variants(path, sample_id)
+    assert negative["items"][-1]["position"] == 5
+    item = negative["items"][-1]
+    component = next(c for c in item["priority"]["components"] if c["key"] == "clinvar")
+    assert component["score"] == -20
 
 
 def test_sorted_variant_pagination_is_bound_to_sort_order(tmp_path):
@@ -219,7 +321,7 @@ def test_sorted_variant_pagination_is_bound_to_sort_order(tmp_path):
 
 def test_compact_projection_chooses_canonical_annotation_and_detail_is_lazy(tmp_path):
     path, sample_id, other_sample = query_store(tmp_path)
-    item = query.list_variants(path, sample_id, limit=1)["items"][0]
+    item = query.list_variants(path, sample_id, limit=1, sort_by="gene")["items"][0]
 
     assert item["gene"] == "GENE1"
     assert item["hgvsc"] == "c.1A>G"
@@ -230,6 +332,11 @@ def test_compact_projection_chooses_canonical_annotation_and_detail_is_lazy(tmp_
     assert item["clinical_significance"] == "pathogenic"
     assert item["population_af"] == 0.001
     assert item["canonical"] is True
+    clinvar_component = next(
+        component for component in item["priority"]["components"]
+        if component["key"] == "clinvar"
+    )
+    assert clinvar_component["evaluated"] is False
     detail = query.variant_detail(path, sample_id, item["variant_id"])
     assert len(detail["calls"]) == 1
     assert len(detail["annotations"]) == 2
@@ -250,6 +357,8 @@ def test_compact_projection_chooses_canonical_annotation_and_detail_is_lazy(tmp_
     assert detail["clinvar_evidence"]["conditions"] == ["Gene 1 disorder"]
     assert detail["clinvar_evidence"]["condition_ids"] == ["MONDO:0000001"]
     assert detail["clinvar_evidence"]["has_conflict"] is True
+    assert clinvar_component["score"] == 0
+    assert "no clinvar germline classification" in clinvar_component["reason"].casefold()
     assert detail["clinvar_evidence"]["last_evaluated"] == ["2026-09-01"]
     assert query.variant_detail(path, other_sample, item["variant_id"]) is not None
     second_variant = query.list_variants(path, sample_id, limit=2)["items"][1]
@@ -289,8 +398,8 @@ def test_cached_gnomad_coverage_distinguishes_verified_absence_from_missing_af(
     assert verified["population_frequency_status"] == "not_observed_covered"
     assert verified_maf["score"] == verified_maf["max_score"]
     assert verified_maf["evaluated"] is True
-    assert unknown_maf["score"] == 0
-    assert unknown_maf["evaluated"] is False
+    assert unknown_maf["score"] == 10
+    assert unknown_maf["evaluated"] is True
 
 
 def test_missing_sample_is_rejected(tmp_path):
@@ -371,7 +480,7 @@ def test_variant_panel_annotation_and_numeric_filters_are_server_side(tmp_path):
     strict_rare = query.list_variants(path, sample_id, max_af=0.01, include_missing_af=False)
     assert [item["position"] for item in strict_rare["items"]] == [1]
     assert [item["position"] for item in query.list_variants(
-        path, sample_id, min_depth=10, min_vaf=0.3
+        path, sample_id, min_depth=10, min_vaf=0.3, sort_by="gene"
     )["items"]] == [1, 2, 3, 4, 5]
 
 
@@ -391,18 +500,22 @@ def test_pass_selected_filter_status_and_filter_options(tmp_path):
             "WHERE analysis_id = ? AND depth = 40", (1,),
         )
 
-    passed = query.list_variants(path, sample_id, filter_mode="pass")
+    passed = query.list_variants(path, sample_id, filter_mode="pass", sort_by="gene")
     selected = query.list_variants(
-        path, sample_id, filter_mode="selected", filter_statuses="strand_bias"
+        path, sample_id, filter_mode="selected", filter_statuses="strand_bias",
+        sort_by="gene",
     )
     excluded = query.list_variants(
-        path, sample_id, filter_mode="exclude", filter_statuses="strand_bias"
+        path, sample_id, filter_mode="exclude", filter_statuses="strand_bias",
+        sort_by="gene",
     )
     alternate_depth = query.list_variants(
-        path, sample_id, filter_mode="selected", filter_statuses="LOW_ALTERNATE_DEPTH"
+        path, sample_id, filter_mode="selected", filter_statuses="LOW_ALTERNATE_DEPTH",
+        sort_by="gene",
     )
     low_depth = query.list_variants(
-        path, sample_id, filter_mode="selected", filter_statuses="LOW_DEPTH"
+        path, sample_id, filter_mode="selected", filter_statuses="LOW_DEPTH",
+        sort_by="gene",
     )
     options = query.variant_filter_options(path, sample_id)
 
@@ -454,13 +567,21 @@ def test_inheritance_candidate_filters_are_combined_with_or(tmp_path):
         db.execute("UPDATE variants SET chromosome = 'Y' WHERE position = 4")
         db.execute("UPDATE variants SET chromosome = 'chrM' WHERE position = 5")
 
-    dominant = query.list_variants(path, sample_id, inheritance_candidates="dominant")
-    recessive = query.list_variants(path, sample_id, inheritance_candidates="recessive")
-    sex_linked = query.list_variants(path, sample_id, inheritance_candidates="x_linked,y_linked")
-    mitochondrial = query.list_variants(
-        path, sample_id, inheritance_candidates="mitochondrial"
+    dominant = query.list_variants(
+        path, sample_id, inheritance_candidates="dominant", sort_by="gene"
     )
-    maternal_alias = query.list_variants(path, sample_id, inheritance_candidates="maternal")
+    recessive = query.list_variants(
+        path, sample_id, inheritance_candidates="recessive", sort_by="gene"
+    )
+    sex_linked = query.list_variants(
+        path, sample_id, inheritance_candidates="x_linked,y_linked", sort_by="gene"
+    )
+    mitochondrial = query.list_variants(
+        path, sample_id, inheritance_candidates="mitochondrial", sort_by="gene"
+    )
+    maternal_alias = query.list_variants(
+        path, sample_id, inheritance_candidates="maternal", sort_by="gene"
+    )
 
     assert [item["position"] for item in dominant["items"]] == [1, 2, 3, 4]
     assert [item["position"] for item in recessive["items"]] == [5]
@@ -468,7 +589,9 @@ def test_inheritance_candidate_filters_are_combined_with_or(tmp_path):
     assert [item["position"] for item in mitochondrial["items"]] == [5]
     assert [item["position"] for item in maternal_alias["items"]] == [5]
     with pytest.raises(query.VariantQueryError, match="invalid inheritance"):
-        query.list_variants(path, sample_id, inheritance_candidates="autosomal")
+        query.list_variants(
+            path, sample_id, inheritance_candidates="autosomal", sort_by="gene"
+        )
 
 
 def test_family_filters_resolve_parents_and_biparental_compound_candidates(tmp_path):

@@ -1,0 +1,2110 @@
+{
+  "acquired_at": "2026-10-27T08:46:02.862015+00:00",
+  "inventory": {
+    "source_index": "/home/jarvis/.local/share/helper_variants/gene_phenotype.sqlite3",
+    "source_status": {
+      "g2p": {
+        "status": "READY",
+        "records": 3856,
+        "dataset_version": null,
+        "index_acquired_at": "2026-10-21T12:33:28Z",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/panel/all/download/"
+      },
+      "gencc": {
+        "status": "READY",
+        "records": 30345,
+        "dataset_version": null,
+        "index_acquired_at": "2026-10-21T12:33:28Z",
+        "source_url": "https://thegencc.org/download/action/submissions-export-csv?format=new"
+      }
+    },
+    "source_records": {
+      "g2p": 3856,
+      "gencc": 30345
+    },
+    "source_associations": {
+      "g2p": 3614,
+      "gencc": 15350
+    },
+    "unique_associations": 15590,
+    "normalized_source_associations": {
+      "g2p": 3614,
+      "gencc": 15350
+    },
+    "cross_source_associations": 3374,
+    "invalid_records": 232,
+    "invalid_record_reasons": {
+      "MISSING_DISEASE_ID": 232
+    },
+    "invalid_record_examples": [
+      {
+        "source": "g2p",
+        "record_id": "G2P00176",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00204",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00356",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00405",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00453",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00522",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00598",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00651",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00677",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00686",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00754",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P00898",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01140",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01169",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01183",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01476",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01492",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01535",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01728",
+        "reason": "MISSING_DISEASE_ID"
+      },
+      {
+        "source": "g2p",
+        "record_id": "G2P01769",
+        "reason": "MISSING_DISEASE_ID"
+      }
+    ],
+    "ambiguous_mapping_associations": 2031,
+    "source_problems": [],
+    "index_stale": false,
+    "scope": "SYNCHRONIZED_LOCAL_INDEX_ONLY",
+    "global_dataset_completeness": "NOT_ATTESTED",
+    "dataset_versions": {
+      "g2p": null,
+      "gencc": null,
+      "clingen_dosage": null,
+      "gnomad": null
+    },
+    "gencc_record_versions": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "dataset_fingerprints": {
+      "g2p": {
+        "sha256": "4305f47d67730b6a09ad919c1ee528a7c753de6499616d4ed4a348ac210bbe0a",
+        "records": 3856,
+        "scope": "LOCAL_INDEXED_ROWS_V1",
+        "table": "g2p_records"
+      },
+      "gencc": {
+        "sha256": "5d952794fd201ab85e6b219ced14af154fe0d2432b3f0153a4b0ffd7843ce0f3",
+        "records": 30345,
+        "scope": "LOCAL_INDEXED_ROWS_V1",
+        "table": "assertions"
+      },
+      "orphadata": {
+        "sha256": "0da3cc974c198c8c5cde98403d0f1b4e298bdca240ff4fd4093983c2384aae81",
+        "records": 25405,
+        "scope": "LOCAL_INDEXED_ROWS_V1",
+        "table": "orpha_aliases"
+      },
+      "clingen_dosage": {
+        "sha256": "29a972247dd49981a0d20ad9129c6f0c359d6f844cb2549a18d4aa05b0bf3741",
+        "records": 1537,
+        "scope": "LOCAL_INDEXED_ROWS_V1",
+        "table": "clingen_dosage"
+      },
+      "gnomad": {
+        "sha256": "b96f4f11cd407aab500c55f672d72b58ff401d572561753a8e720823bc46f295",
+        "records": 10,
+        "scope": "LOCAL_INDEXED_ROWS_V1",
+        "table": "gnomad_constraints"
+      }
+    },
+    "warnings": [
+      "Scientific dataset releases are not recorded by the existing local index",
+      "Completeness refers only to valid associations in the enumerated local indexes"
+    ]
+  },
+  "ontology": {
+    "reference_url": "https://raw.githubusercontent.com/monarch-initiative/mondo/v2026-10-06/src/ontology/mappings/mondo.sssom.tsv",
+    "release": "v2026-10-06",
+    "sha256": "ec15afdb32fab3d3cb679d357e25ef4fb38b5e2c468ff4ac5456da10e2f6c80b",
+    "mode": "AUDIT_ONLY_COUNTERFACTUAL_NOT_APPLIED",
+    "old_unique_associations": 18957,
+    "old_normalized_source_associations": {
+      "g2p": 3614,
+      "gencc": 15350
+    },
+    "old_cross_source_associations": 7,
+    "old_exact_primary_key_overlap": 6,
+    "corrected_exact_primary_key_overlap": 3220,
+    "corrected_alias_only_overlap": {
+      "verified_nonambiguous": 151,
+      "not_confirmed_nonambiguous": 3
+    },
+    "unconfirmed_alias_overlap_examples": [
+      {
+        "gene": "HGNC:5099",
+        "canonical_disease": "MONDO:0011099",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "g2p_primary_ids": [
+          "OMIM:601536"
+        ],
+        "gencc_primary_ids": [
+          "MONDO:0011099"
+        ],
+        "verified_component_from_g2p": [
+          "MONDO:7770750",
+          "OMIM:601536",
+          "ORPHA:69739"
+        ]
+      },
+      {
+        "gene": "HGNC:7758",
+        "canonical_disease": "MONDO:0009738",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "g2p_primary_ids": [
+          "OMIM:256550"
+        ],
+        "gencc_primary_ids": [
+          "MONDO:0009738"
+        ],
+        "verified_component_from_g2p": [
+          "MONDO:0009738",
+          "OMIM:256150",
+          "OMIM:256550",
+          "ORPHA:87876"
+        ]
+      },
+      {
+        "gene": "HGNC:8859",
+        "canonical_disease": "MONDO:0014709",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "g2p_primary_ids": [
+          "OMIM:616617"
+        ],
+        "gencc_primary_ids": [
+          "MONDO:0014709"
+        ],
+        "verified_component_from_g2p": [
+          "MONDO:0100263",
+          "OMIM:616617"
+        ]
+      }
+    ],
+    "shared_primary_gene_disease_pairs": 3341,
+    "shared_gene_ids": 3006,
+    "old_ambiguous_associations": 2436,
+    "ambiguity_classification": {
+      "source_cross_references": 405,
+      "nonambiguous_verified_component": 2100,
+      "duplicate_namespace:MONDO": 2251,
+      "orphadata_bridge_only": 2031,
+      "duplicate_namespace:MONDO,ORPHA": 116,
+      "no_verified_mapping": 267,
+      "still_ambiguous_verified_exact": 69,
+      "duplicate_namespace:MONDO,OMIM": 25,
+      "duplicate_namespace:ORPHA": 18,
+      "duplicate_namespace:MONDO,OMIM,ORPHA": 22,
+      "duplicate_namespace:OMIM": 4
+    },
+    "source_cross_reference_checks": {
+      "g2p:verified_exact:rows": 2821,
+      "g2p:not_confirmed_exact:rows": 34,
+      "gencc:verified_exact:rows": 21223,
+      "gencc:not_confirmed_exact:rows": 590
+    },
+    "unconfirmed_cross_reference_reasons": {
+      "DIFFERENT_MONDO_TARGET": 597,
+      "NO_EXACT_MATCH_IN_PINNED_REFERENCE": 27
+    },
+    "unconfirmed_cross_reference_current_protection": {
+      "currently_ambiguous": 453,
+      "currently_unambiguous_but_not_ontology_verified": 171
+    },
+    "unconfirmed_cross_reference_examples": [
+      {
+        "gene": "HGNC:18060",
+        "symbol": "ARX",
+        "record_id": "G2P00062",
+        "source": "g2p",
+        "left": "MONDO:0100148",
+        "right": "OMIM:300215",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0010268"
+        ]
+      },
+      {
+        "gene": "HGNC:9069",
+        "symbol": "PLEC",
+        "record_id": "G2P00169",
+        "source": "g2p",
+        "left": "MONDO:0009181",
+        "right": "OMIM:613723",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0013390"
+        ]
+      },
+      {
+        "gene": "HGNC:24579",
+        "symbol": "CIB2",
+        "record_id": "G2P00404",
+        "source": "g2p",
+        "left": "MONDO:0013935",
+        "right": "OMIM:614869",
+        "exact_mondo_targets_of_right": []
+      },
+      {
+        "gene": "HGNC:11766",
+        "symbol": "TGFB1",
+        "record_id": "G2P00412",
+        "source": "g2p",
+        "left": "MONDO:0007542",
+        "right": "OMIM:131300",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0700385"
+        ]
+      },
+      {
+        "gene": "HGNC:2714",
+        "symbol": "DCX",
+        "record_id": "G2P00526",
+        "source": "g2p",
+        "left": "MONDO:0020491",
+        "right": "OMIM:300067",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0010239"
+        ]
+      },
+      {
+        "gene": "HGNC:9713",
+        "symbol": "PEX19",
+        "record_id": "G2P00540",
+        "source": "g2p",
+        "left": "MONDO:0100270",
+        "right": "OMIM:614886",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0013951"
+        ]
+      },
+      {
+        "gene": "HGNC:4392",
+        "symbol": "GNAS",
+        "record_id": "G2P00591",
+        "source": "g2p",
+        "left": "MONDO:0019992",
+        "right": "OMIM:612463",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0012912"
+        ]
+      },
+      {
+        "gene": "HGNC:4065",
+        "symbol": "GAA",
+        "record_id": "G2P00764",
+        "source": "g2p",
+        "left": "MONDO:0009290",
+        "right": "OMIM:232300",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0017694"
+        ]
+      },
+      {
+        "gene": "HGNC:3754",
+        "symbol": "FLNA",
+        "record_id": "G2P00850",
+        "source": "g2p",
+        "left": "MONDO:0019027",
+        "right": "OMIM:304120",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0010571"
+        ]
+      },
+      {
+        "gene": "HGNC:25801",
+        "symbol": "CPLANE1",
+        "record_id": "G2P01046",
+        "source": "g2p",
+        "left": "MONDO:0013824",
+        "right": "OMIM:277170",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0010176"
+        ]
+      },
+      {
+        "gene": "HGNC:6172",
+        "symbol": "STT3A",
+        "record_id": "G2P01064",
+        "source": "g2p",
+        "left": "MONDO:0859223",
+        "right": "OMIM:615596",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0014270"
+        ]
+      },
+      {
+        "gene": "HGNC:20323",
+        "symbol": "SMOC2",
+        "record_id": "G2P01146",
+        "source": "g2p",
+        "left": "MONDO:0007436",
+        "right": "OMIM:125400",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0017819"
+        ]
+      }
+    ],
+    "unconfirmed_cardiogenetic_examples": [
+      {
+        "gene": "HGNC:3754",
+        "symbol": "FLNA",
+        "record_id": "G2P00850",
+        "source": "g2p",
+        "left": "MONDO:0019027",
+        "right": "OMIM:304120",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0010571"
+        ]
+      },
+      {
+        "gene": "HGNC:7577",
+        "symbol": "MYH7",
+        "record_id": "SGC-101529",
+        "source": "gencc",
+        "left": "MONDO:0012018",
+        "right": "OMIM:608358",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0008409"
+        ]
+      },
+      {
+        "gene": "HGNC:6636",
+        "symbol": "LMNA",
+        "record_id": "SGC-117385",
+        "source": "gencc",
+        "left": "MONDO:0015470",
+        "right": "ORPHA:154",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0700335"
+        ]
+      },
+      {
+        "gene": "HGNC:6636",
+        "symbol": "LMNA",
+        "record_id": "SGC-117386",
+        "source": "gencc",
+        "left": "MONDO:0010143",
+        "right": "ORPHA:1662",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0031213"
+        ]
+      },
+      {
+        "gene": "HGNC:6636",
+        "symbol": "LMNA",
+        "record_id": "SGC-117393",
+        "source": "gencc",
+        "left": "MONDO:0008406",
+        "right": "ORPHA:98855",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0014676"
+        ]
+      },
+      {
+        "gene": "HGNC:7551",
+        "symbol": "MYBPC3",
+        "record_id": "SGC-117599",
+        "source": "gencc",
+        "left": "MONDO:0015470",
+        "right": "ORPHA:154",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0700335"
+        ]
+      },
+      {
+        "gene": "HGNC:7577",
+        "symbol": "MYH7",
+        "record_id": "SGC-117615",
+        "source": "gencc",
+        "left": "MONDO:0015470",
+        "right": "ORPHA:154",
+        "exact_mondo_targets_of_right": [
+          "MONDO:0700335"
+        ]
+      }
+    ],
+    "ambiguous_examples": [
+      {
+        "gene": "HGNC:10004",
+        "disease": "MONDO:0012033",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "original_component": [
+          "MONDO:0012033",
+          "MONDO:0958180",
+          "OMIM:608415",
+          "ORPHA:75374"
+        ],
+        "verified_component": [
+          "MONDO:0012033",
+          "ORPHA:75374"
+        ],
+        "cause": "source_cross_references"
+      },
+      {
+        "gene": "HGNC:10004",
+        "disease": "MONDO:0958180",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "original_component": [
+          "MONDO:0012033",
+          "MONDO:0958180",
+          "OMIM:608415",
+          "ORPHA:75374"
+        ],
+        "verified_component": [
+          "MONDO:0958180",
+          "OMIM:608415"
+        ],
+        "cause": "source_cross_references"
+      },
+      {
+        "gene": "HGNC:10004",
+        "disease": "MONDO:0958180",
+        "requirement": "OTHER:biallelic autosomal",
+        "original_component": [
+          "MONDO:0012033",
+          "MONDO:0958180",
+          "OMIM:608415",
+          "ORPHA:75374"
+        ],
+        "verified_component": [
+          "MONDO:0958180",
+          "OMIM:608415"
+        ],
+        "cause": "source_cross_references"
+      },
+      {
+        "gene": "HGNC:10019",
+        "disease": "MONDO:0020849",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "original_component": [
+          "MONDO:0020849",
+          "MONDO:0033968",
+          "OMIM:618108",
+          "ORPHA:529977"
+        ],
+        "verified_component": [
+          "MONDO:0020849",
+          "OMIM:618108"
+        ],
+        "cause": "orphadata_bridge_only"
+      },
+      {
+        "gene": "HGNC:10019",
+        "disease": "MONDO:0033968",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "original_component": [
+          "MONDO:0020849",
+          "MONDO:0033968",
+          "OMIM:618108",
+          "ORPHA:529977"
+        ],
+        "verified_component": [
+          "MONDO:0033968",
+          "ORPHA:529977"
+        ],
+        "cause": "orphadata_bridge_only"
+      },
+      {
+        "gene": "HGNC:10193",
+        "disease": "MONDO:0971172",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "original_component": [
+          "MONDO:0971172",
+          "MONDO:971172",
+          "OMIM:620851",
+          "ORPHA:686488"
+        ],
+        "verified_component": [
+          "MONDO:0971172",
+          "OMIM:620851",
+          "ORPHA:686488"
+        ],
+        "cause": "orphadata_bridge_only"
+      }
+    ]
+  },
+  "initial_pilot": {
+    "run_id": "58398746bc884b73831d400c5b7d134f",
+    "matrices": 20,
+    "reasons": {
+      "NO_G2P_DISEASE_RECORD": 9,
+      "G2P_DIFFERENT_INHERITANCE": 5,
+      "DIRECT_ASSERTION": 4,
+      "G2P_MECHANISM_UNDETERMINED": 2
+    },
+    "inheritance_rows_resolved_by_crosswalk": 4,
+    "items": [
+      {
+        "gene": "HGNC:10001",
+        "symbol": "RGS5",
+        "disease": "MONDO:0007781",
+        "requirement": "UNKNOWN",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": []
+      },
+      {
+        "gene": "HGNC:10002",
+        "symbol": "RGS6",
+        "disease": "MONDO:0700092",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": []
+      },
+      {
+        "gene": "HGNC:10003",
+        "symbol": "RGS7",
+        "disease": "MONDO:0700092",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "direct": false,
+        "reason": "G2P_DIFFERENT_INHERITANCE",
+        "g2p_records": [
+          {
+            "id": "G2P00903",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "resolved_by_qualified_crosswalk": true
+      },
+      {
+        "gene": "HGNC:10003",
+        "symbol": "RGS7",
+        "disease": "MONDO:0700092",
+        "requirement": "OTHER:biallelic autosomal",
+        "direct": true,
+        "reason": "DIRECT_ASSERTION",
+        "g2p_records": [
+          {
+            "id": "G2P00903",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ]
+      },
+      {
+        "gene": "HGNC:10004",
+        "symbol": "RGS9",
+        "disease": "MONDO:0012033",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": [
+          "G2P02267"
+        ]
+      },
+      {
+        "gene": "HGNC:10004",
+        "symbol": "RGS9",
+        "disease": "MONDO:0958180",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "direct": false,
+        "reason": "G2P_DIFFERENT_INHERITANCE",
+        "g2p_records": [
+          {
+            "id": "G2P02267",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "resolved_by_qualified_crosswalk": true
+      },
+      {
+        "gene": "HGNC:10004",
+        "symbol": "RGS9",
+        "disease": "MONDO:0958180",
+        "requirement": "OTHER:biallelic autosomal",
+        "direct": true,
+        "reason": "DIRECT_ASSERTION",
+        "g2p_records": [
+          {
+            "id": "G2P02267",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ]
+      },
+      {
+        "gene": "HGNC:10006",
+        "symbol": "RHAG",
+        "disease": "MONDO:0008493",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": []
+      },
+      {
+        "gene": "HGNC:10006",
+        "symbol": "RHAG",
+        "disease": "MONDO:0019107",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": []
+      },
+      {
+        "gene": "HGNC:10008",
+        "symbol": "RHCE",
+        "disease": "MONDO:0019107",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": []
+      },
+      {
+        "gene": "HGNC:10009",
+        "symbol": "RHD",
+        "disease": "MONDO:0019107",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": []
+      },
+      {
+        "gene": "HGNC:10011",
+        "symbol": "RHEB",
+        "disease": "MONDO:0100038",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": []
+      },
+      {
+        "gene": "HGNC:10012",
+        "symbol": "RHO",
+        "disease": "MONDO:0007639",
+        "requirement": "UNKNOWN",
+        "direct": false,
+        "reason": "NO_G2P_DISEASE_RECORD",
+        "g2p_records": [],
+        "other_disease_g2p_record_ids": [
+          "G2P01955",
+          "G2P01956",
+          "G2P03566"
+        ]
+      },
+      {
+        "gene": "HGNC:10012",
+        "symbol": "RHO",
+        "disease": "MONDO:0012498",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "direct": false,
+        "reason": "G2P_MECHANISM_UNDETERMINED",
+        "g2p_records": [
+          {
+            "id": "G2P01955",
+            "mechanism": "undetermined",
+            "inheritance": "monoallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ]
+      },
+      {
+        "gene": "HGNC:10012",
+        "symbol": "RHO",
+        "disease": "MONDO:0012498",
+        "requirement": "MONOALLELIC_AUTOSOMAL",
+        "direct": false,
+        "reason": "G2P_MECHANISM_UNDETERMINED",
+        "g2p_records": [
+          {
+            "id": "G2P01955",
+            "mechanism": "undetermined",
+            "inheritance": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ]
+      },
+      {
+        "gene": "HGNC:10012",
+        "symbol": "RHO",
+        "disease": "MONDO:0013395",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "direct": false,
+        "reason": "G2P_DIFFERENT_INHERITANCE",
+        "g2p_records": [
+          {
+            "id": "G2P01956",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          },
+          {
+            "id": "G2P03566",
+            "mechanism": "dominant negative",
+            "inheritance": "monoallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "resolved_by_qualified_crosswalk": true
+      },
+      {
+        "gene": "HGNC:10012",
+        "symbol": "RHO",
+        "disease": "MONDO:0013395",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "direct": false,
+        "reason": "G2P_DIFFERENT_INHERITANCE",
+        "g2p_records": [
+          {
+            "id": "G2P01956",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          },
+          {
+            "id": "G2P03566",
+            "mechanism": "dominant negative",
+            "inheritance": "monoallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "resolved_by_qualified_crosswalk": true
+      },
+      {
+        "gene": "HGNC:10012",
+        "symbol": "RHO",
+        "disease": "MONDO:0013395",
+        "requirement": "MONOALLELIC_AUTOSOMAL",
+        "direct": true,
+        "reason": "DIRECT_ASSERTION",
+        "g2p_records": [
+          {
+            "id": "G2P03566",
+            "mechanism": "dominant negative",
+            "inheritance": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          },
+          {
+            "id": "G2P01956",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ]
+      },
+      {
+        "gene": "HGNC:10012",
+        "symbol": "RHO",
+        "disease": "MONDO:0013395",
+        "requirement": "OTHER:biallelic autosomal",
+        "direct": true,
+        "reason": "DIRECT_ASSERTION",
+        "g2p_records": [
+          {
+            "id": "G2P01956",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "EXACT"
+          },
+          {
+            "id": "G2P03566",
+            "mechanism": "dominant negative",
+            "inheritance": "monoallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ]
+      },
+      {
+        "gene": "HGNC:10012",
+        "symbol": "RHO",
+        "disease": "MONDO:0013395",
+        "requirement": "OTHER:semidominant",
+        "direct": false,
+        "reason": "G2P_DIFFERENT_INHERITANCE",
+        "g2p_records": [
+          {
+            "id": "G2P01956",
+            "mechanism": "loss of function",
+            "inheritance": "biallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          },
+          {
+            "id": "G2P03566",
+            "mechanism": "dominant negative",
+            "inheritance": "monoallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "resolved_by_qualified_crosswalk": false
+      }
+    ]
+  },
+  "stratified_pilot": {
+    "cache": "/tmp/task27a1-audit/stratified.sqlite3",
+    "matrices": 30,
+    "strata": {
+      "g2p+gencc": 12,
+      "gencc": 9,
+      "g2p": 9
+    },
+    "direct_assertion_matrices": 11,
+    "context_only_matrices": 19,
+    "original_records_verified": 169,
+    "snapshots_created": 0,
+    "cache_statistics": {
+      "database": "/tmp/task27a1-audit/stratified.sqlite3",
+      "exists": true,
+      "matrices": 30,
+      "snapshots": 30,
+      "source_records": 104
+    },
+    "sources": {
+      "g2p:AVAILABLE": 30,
+      "gencc:AVAILABLE": 30,
+      "clingen_dosage:AVAILABLE": 28,
+      "gnomad:CACHE_MISS": 29,
+      "clinvar:NOT_SUPPORTED": 30,
+      "gnomad:AVAILABLE": 1,
+      "clingen_dosage:NO_RECORDS": 2
+    },
+    "items": [
+      {
+        "symbol": "MYH7",
+        "gene": "HGNC:7577",
+        "disease": "MONDO:0008647",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-44acdbea6aa641658d7d41de87cf025f3314be92e3c18fa67d2f9d70d7b4655e",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03300",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 6,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "MYH7",
+        "gene": "HGNC:7577",
+        "disease": "MONDO:0013262",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-e6ff2acec349dfffcacce60bf8161bfc9ce395f08551c8c2bb7699cd782124c8",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03272",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 7,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "MYH7",
+        "gene": "HGNC:7577",
+        "disease": "MONDO:0016587",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-f7daf300bbd7b85ea99dcc09c1428061486d5dcfe7541f790ef7ba058c10bd69",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03796",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 5,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "AMBIGUOUS_DISEASE_MAPPING",
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "MYH7",
+        "gene": "HGNC:7577",
+        "disease": "MONDO:0005045",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-301d4624a3606ac7ed71a5a9f98a97919b3426e48de2422d98087a7f964bcf90",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 3,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "MYBPC3",
+        "gene": "HGNC:7551",
+        "disease": "MONDO:0007268",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-5587117e5f66b7c4657d6c3a78c222fbc2c4dcfeb385ab33c2217a1610b20841",
+        "candidate_mechanisms": [
+          "LOSS_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P03279",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_autosomal"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 7,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "MYBPC3",
+        "gene": "HGNC:7551",
+        "disease": "MONDO:0016333",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-b634710a609d9114a8bcb60feb1e8030636a400624d2a6baf05a57d9774a44e5",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03836",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 4,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "AMBIGUOUS_DISEASE_MAPPING",
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "MYBPC3",
+        "gene": "HGNC:7551",
+        "disease": "MONDO:0016587",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-301939b61b3bb95aed7919d1ed6dd5781c460bdae109327d58c0a4369a0a4dd1",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03795",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 5,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "AMBIGUOUS_DISEASE_MAPPING",
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "MYBPC3",
+        "gene": "HGNC:7551",
+        "disease": "MONDO:0004981",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-aaed2767ddf61af1df71ef8b43463a14a8c6dfd57281a92bf6f1d42bdd43ddfb",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 3,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "LMNA",
+        "gene": "HGNC:6636",
+        "disease": "MONDO:0007269",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-385568ac938db4e182b24b80dba0c66a5a3c9bc354e59b5fa186298405f21e21",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03271",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 7,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "AMBIGUOUS_DISEASE_MAPPING",
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "LMNA",
+        "gene": "HGNC:6636",
+        "disease": "MONDO:0007906",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-7293d57b0f02b84775f888097a2e5869609a93880c9d6faf2163457443eb5318",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P00599",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 7,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "LMNA",
+        "gene": "HGNC:6636",
+        "disease": "MONDO:0008310",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-c2a8782ffc333037d199dab1d376e8cb5448db808f1ae19e9bff5073cfcfb801",
+        "candidate_mechanisms": [
+          "GAIN_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P00802",
+            "mechanism": "gain of function",
+            "requirement": "monoallelic_autosomal"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 7,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "LMNA",
+        "gene": "HGNC:6636",
+        "disease": "MONDO:0000465",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-a8ae981377aeaca6d329eb165bd77e6633e1356fee93cdbd636f3f3f0d44294f",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 3,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "GLA",
+        "gene": "HGNC:4296",
+        "disease": "MONDO:0010526",
+        "requirement": "X_LINKED_RECESSIVE",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-79f19812b61b8597ac395b0dd829d77c7e05551637b60dbde2bd22a1d731ef7d",
+        "candidate_mechanisms": [
+          "LOSS_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P03295",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_X_hemizygous"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 9,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "GLA",
+        "gene": "HGNC:4296",
+        "disease": "MONDO:0010526",
+        "requirement": "X_LINKED",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-e526d9bd211e7e8dd307234a9c13cb21f7957a614c108dcaf1f2423f4c93e0c0",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03295",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_X_hemizygous",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 9,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "FLNA",
+        "gene": "HGNC:3754",
+        "disease": "MONDO:0010232",
+        "requirement": "X_LINKED_RECESSIVE",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-fa7897b089d0198c2555aeb76f07d7fee3f2d737899b2287b691628183545c46",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P00323",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_X_hemizygous",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 5,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "FLNA",
+        "gene": "HGNC:3754",
+        "disease": "MONDO:0010233",
+        "requirement": "X_LINKED_DOMINANT",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-7af5a545e28ab51f0eef69bc0b26dc0801608b5a8274480ba8cd49658082f907",
+        "candidate_mechanisms": [
+          "LOSS_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P02315",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_X_heterozygous"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 7,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "FLNA",
+        "gene": "HGNC:3754",
+        "disease": "MONDO:0010279",
+        "requirement": "X_LINKED_RECESSIVE",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-95f27b5373ee6b0662cfbc19575254187cb6942252da77839bed0d578bea5b53",
+        "candidate_mechanisms": [
+          "LOSS_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P00187",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_X_hemizygous"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 6,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "FLNA",
+        "gene": "HGNC:3754",
+        "disease": "MONDO:0010232",
+        "requirement": "X_LINKED",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-0dd14eab6a348989a082590a8ac234fb46630abf074803c483873dbd76c262bf",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P00323",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_X_hemizygous",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 5,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "LMNA",
+        "gene": "HGNC:6636",
+        "disease": "MONDO:0030781",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-80ae5d1a4269e546f19ff1424ba8cbeea3be1eb36c9607486ed565527a414790",
+        "candidate_mechanisms": [
+          "GAIN_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P02320",
+            "mechanism": "gain of function",
+            "requirement": "monoallelic_autosomal"
+          }
+        ],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P02748",
+            "mechanism": "loss of function",
+            "requirement": "biallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 6,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "LMNA",
+        "gene": "HGNC:6636",
+        "disease": "MONDO:0030781",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-52d21785067046572843e0483e40026719a6c612e8d6551abdf800f658bc5e0c",
+        "candidate_mechanisms": [
+          "LOSS_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P02748",
+            "mechanism": "loss of function",
+            "requirement": "biallelic_autosomal"
+          }
+        ],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P02320",
+            "mechanism": "gain of function",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 6,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "MYBPC3",
+        "gene": "HGNC:7551",
+        "disease": "MONDO:0007268",
+        "requirement": "AUTOSOMAL_RECESSIVE",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-117b78418200044f5734a3cde64e4f2e7cb88b46c2082a73f0f4d00c4dd2e81d",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03279",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 7,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "LMNA",
+        "gene": "HGNC:6636",
+        "disease": "MONDO:0021569",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "g2p",
+          "gencc"
+        ],
+        "snapshot_id": "mss-09d472e7a7524d4d408d9c91ba4190012ea9337b1df5f2977debbc0dffa9bca8",
+        "candidate_mechanisms": [
+          "LOSS_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P01342",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_autosomal"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 6,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "LMNA",
+        "gene": "HGNC:6636",
+        "disease": "MONDO:0021569",
+        "requirement": "OTHER:semidominant",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-0301d1f456bf433d54c60f3156b3ae4053161265fa98f7ae760ad4d5c17c43a8",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P01342",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_autosomal",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 6,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "FLNA",
+        "gene": "HGNC:3754",
+        "disease": "MONDO:0024550",
+        "requirement": "X_LINKED",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-27151ba59871b2743ce8f86eff7748d54f75287f6e2965abb6acb328bbd5df51",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P00775",
+            "mechanism": "gain of function",
+            "requirement": "monoallelic_X_hemizygous",
+            "applicability": "DIFFERENT_INHERITANCE"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 4,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "FLNA",
+        "gene": "HGNC:3754",
+        "disease": "MONDO:0024550",
+        "requirement": "X_LINKED_RECESSIVE",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-135f433e2fcf08aaa9e4c196545857bc7d5eaa2976e89391b8f0f32e0ace7bc4",
+        "candidate_mechanisms": [
+          "GAIN_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P00775",
+            "mechanism": "gain of function",
+            "requirement": "monoallelic_X_hemizygous"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 4,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "COL5A2",
+        "gene": "HGNC:2210",
+        "disease": "MONDO:0007522",
+        "requirement": "AUTOSOMAL_DOMINANT",
+        "stratum": [
+          "gencc"
+        ],
+        "snapshot_id": "mss-5633cd726c6f690613c9df5a6a3c0df23ddbd3998a4ff66a6b7066f4d4270e5a",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "AVAILABLE",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 5,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "RP2",
+        "gene": "HGNC:10274",
+        "disease": "MONDO:0010723",
+        "requirement": "X_LINKED_RECESSIVE",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-b613c34545a774266fe2d8644a71498f8e9ed0ba0bf99a6740ddc03c93e07e5c",
+        "candidate_mechanisms": [
+          "LOSS_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P02333",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_X_hemizygous"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 6,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "RPGR",
+        "gene": "HGNC:10295",
+        "disease": "MONDO:0010227",
+        "requirement": "X_LINKED_RECESSIVE",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-03f6edc14df6b88eb4bb4d1eea0fae7d340bd17e9c28e5bdebf303fb0ab6fcad",
+        "candidate_mechanisms": [
+          "LOSS_OF_FUNCTION"
+        ],
+        "direct_g2p_records": [
+          {
+            "id": "G2P02335",
+            "mechanism": "loss of function",
+            "requirement": "monoallelic_X_hemizygous"
+          }
+        ],
+        "contextual_g2p_records": [],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "NO_RECORDS",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 5,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "DIFFERENT_EVIDENCE_LEVELS",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "RPGR",
+        "gene": "HGNC:10295",
+        "disease": "MONDO:0010443",
+        "requirement": "X_LINKED_RECESSIVE",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-63f2fae56342c7ea7ad50a23a28af10c8735269601ef165f02443098fd3a5f48",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P02336",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_X_hemizygous",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "NO_RECORDS",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 2,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      },
+      {
+        "symbol": "RPL10",
+        "gene": "HGNC:10298",
+        "disease": "MONDO:0030908",
+        "requirement": "X_LINKED_RECESSIVE",
+        "stratum": [
+          "g2p"
+        ],
+        "snapshot_id": "mss-8193cf75e08ede4c4024662563ee11e3546a0451d435b4ee5eec67cce38a8837",
+        "candidate_mechanisms": [],
+        "direct_g2p_records": [],
+        "contextual_g2p_records": [
+          {
+            "id": "G2P03002",
+            "mechanism": "undetermined",
+            "requirement": "monoallelic_X_hemizygous",
+            "applicability": "EXACT"
+          }
+        ],
+        "sources": {
+          "g2p": "AVAILABLE",
+          "gencc": "AVAILABLE",
+          "clingen_dosage": "AVAILABLE",
+          "gnomad": "CACHE_MISS",
+          "clinvar": "NOT_SUPPORTED"
+        },
+        "original_records_verified": 7,
+        "review_status": "NOT_REVIEWED",
+        "issues": [
+          "MISSING_INFORMATION",
+          "SOURCE_UNAVAILABLE"
+        ]
+      }
+    ]
+  },
+  "live_g2p_verification": {
+    "records": 7,
+    "records_with_differences": 0,
+    "items": [
+      {
+        "record_id": "G2P00850",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/lgd/G2P00850/",
+        "response_sha256": "b70cd03b4e1f11c412f9b7613445a4a5d52e65f9fdbf5361688908b2f76652c1",
+        "response_acquired_at": "2026-10-26T16:04:02.864833+00:00",
+        "dataset_version": null,
+        "source_last_updated": "2024-08-22",
+        "verified_fields": {
+          "gene_curie": "HGNC:3754",
+          "gene_symbol": "FLNA",
+          "allelic_requirement": "monoallelic_X_hemizygous",
+          "mechanism": "undetermined",
+          "mechanism_support": "inferred",
+          "confidence": "definitive"
+        },
+        "disease_ids": [
+          "MONDO:0019027",
+          "OMIM:304120"
+        ],
+        "differences": {}
+      },
+      {
+        "record_id": "G2P02315",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/lgd/G2P02315/",
+        "response_sha256": "f881a2324121e6bb187dfb9bf695c52e8bd52cc0f3aad3bef32c7c198dfece36",
+        "response_acquired_at": "2026-10-26T16:04:03.004831+00:00",
+        "dataset_version": null,
+        "source_last_updated": "2017-09-01",
+        "verified_fields": {
+          "gene_curie": "HGNC:3754",
+          "gene_symbol": "FLNA",
+          "allelic_requirement": "monoallelic_X_heterozygous",
+          "mechanism": "loss of function",
+          "mechanism_support": "inferred",
+          "confidence": "definitive"
+        },
+        "disease_ids": [
+          "MONDO:0010233",
+          "OMIM:300049"
+        ],
+        "differences": {}
+      },
+      {
+        "record_id": "G2P02320",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/lgd/G2P02320/",
+        "response_sha256": "5097a6de548fbcb39938f5ceffa44370ceb5d04ec3f152d403be5ea6aff2265e",
+        "response_acquired_at": "2026-10-26T16:04:03.120830+00:00",
+        "dataset_version": null,
+        "source_last_updated": "2022-08-03",
+        "verified_fields": {
+          "gene_curie": "HGNC:6636",
+          "gene_symbol": "LMNA",
+          "allelic_requirement": "monoallelic_autosomal",
+          "mechanism": "gain of function",
+          "mechanism_support": "inferred",
+          "confidence": "limited"
+        },
+        "disease_ids": [
+          "MONDO:0030781",
+          "OMIM:619793"
+        ],
+        "differences": {}
+      },
+      {
+        "record_id": "G2P02748",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/lgd/G2P02748/",
+        "response_sha256": "bf236619053fa3ed230990323e4ddc3268c9eee75d53a8446a3e564d990318e3",
+        "response_acquired_at": "2026-10-26T16:04:02.876833+00:00",
+        "dataset_version": null,
+        "source_last_updated": "2019-09-16",
+        "verified_fields": {
+          "gene_curie": "HGNC:6636",
+          "gene_symbol": "LMNA",
+          "allelic_requirement": "biallelic_autosomal",
+          "mechanism": "loss of function",
+          "mechanism_support": "inferred",
+          "confidence": "definitive"
+        },
+        "disease_ids": [
+          "MONDO:0030781",
+          "OMIM:619793"
+        ],
+        "differences": {}
+      },
+      {
+        "record_id": "G2P03279",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/lgd/G2P03279/",
+        "response_sha256": "ce232d14d5fcb8193dfe35acc14c29ed6e0b9454e8e5f8cf28257f35fc49726e",
+        "response_acquired_at": "2026-10-26T16:03:43.305060+00:00",
+        "dataset_version": null,
+        "source_last_updated": "2025-09-05",
+        "verified_fields": {
+          "gene_curie": "HGNC:7551",
+          "gene_symbol": "MYBPC3",
+          "allelic_requirement": "monoallelic_autosomal",
+          "mechanism": "loss of function",
+          "mechanism_support": "inferred",
+          "confidence": "definitive"
+        },
+        "disease_ids": [
+          "MONDO:0007268",
+          "OMIM:115197"
+        ],
+        "differences": {}
+      },
+      {
+        "record_id": "G2P03295",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/lgd/G2P03295/",
+        "response_sha256": "205eee69f5a7e89e025df58202649723e9db691c0a5f195c0878a323fc9eca3e",
+        "response_acquired_at": "2026-10-26T16:04:02.824833+00:00",
+        "dataset_version": null,
+        "source_last_updated": "2025-09-05",
+        "verified_fields": {
+          "gene_curie": "HGNC:4296",
+          "gene_symbol": "GLA",
+          "allelic_requirement": "monoallelic_X_hemizygous",
+          "mechanism": "loss of function",
+          "mechanism_support": "inferred",
+          "confidence": "definitive"
+        },
+        "disease_ids": [
+          "MONDO:0010526",
+          "OMIM:301500"
+        ],
+        "differences": {}
+      },
+      {
+        "record_id": "G2P03300",
+        "source_url": "https://www.ebi.ac.uk/gene2phenotype/api/lgd/G2P03300/",
+        "response_sha256": "aeec9cd5f902d8b6d149fed2bb1788a9c568317fe8d8fff0513b0b9071d5f5e8",
+        "response_acquired_at": "2026-10-26T16:04:02.980832+00:00",
+        "dataset_version": null,
+        "source_last_updated": "2025-09-05",
+        "verified_fields": {
+          "gene_curie": "HGNC:7577",
+          "gene_symbol": "MYH7",
+          "allelic_requirement": "monoallelic_autosomal",
+          "mechanism": "undetermined",
+          "mechanism_support": "inferred",
+          "confidence": "definitive"
+        },
+        "disease_ids": [
+          "MONDO:0008647"
+        ],
+        "differences": {}
+      }
+    ]
+  }
+}

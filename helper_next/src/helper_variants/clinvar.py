@@ -66,13 +66,13 @@ def cache_status(database=None):
 
 
 def lookup_variant(reference_build, chromosome, position, reference, alternate,
-                   database=None, timeout=12):
+                   database=None, timeout=12, refresh=False):
     """Return the current aggregate ClinVar assertion for one exact VCF allele."""
     database = Path(database or cache_path())
     try:
         allele = _allele(reference_build, chromosome, position, reference, alternate)
         key = "|".join(str(value) for value in allele)
-        cached = _cached(database, key)
+        cached = None if refresh else _cached(database, key)
         if cached is not None:
             if "classification_breakdown" not in cached:
                 variation_id = next(
@@ -142,6 +142,35 @@ def merge_evidence(indexed, retrieved):
         result["status"] = "available"
     result["retrieval_status"] = retrieved.get("status", "not_found")
     return result
+
+
+def cached_evidence(alleles, database=None):
+    """Read exact-allele detail evidence in bulk, without network requests."""
+    keys = []
+    for allele in alleles:
+        try:
+            keys.append("|".join(str(value) for value in _allele(*allele)))
+        except (TypeError, ValueError):
+            keys.append("")
+    database = Path(database or cache_path())
+    payloads = {}
+    valid_keys = list(dict.fromkeys(key for key in keys if key))
+    if database.is_file() and valid_keys:
+        try:
+            with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
+                for offset in range(0, len(valid_keys), 500):
+                    batch = valid_keys[offset:offset + 500]
+                    placeholders = ",".join("?" for _ in batch)
+                    for key, payload, retrieved_at in connection.execute(
+                        "SELECT allele_key, payload, retrieved_at FROM evidence "
+                        "WHERE allele_key IN ({})".format(placeholders), batch,
+                    ):
+                        parsed = _parse_cached(payload, retrieved_at)
+                        if parsed is not None:
+                            payloads[key] = merge_evidence({}, parsed)
+        except (OSError, sqlite3.Error):
+            pass
+    return [payloads.get(key, {}) for key in keys]
 
 
 def _retrieve(reference_build, chromosome, position, reference, alternate, timeout):
@@ -426,10 +455,16 @@ def _cached(database, key):
         ).fetchone()
     if row is None:
         return None
+    return _parse_cached(*row)
+
+
+def _parse_cached(raw_payload, retrieved_at):
     try:
-        payload = json.loads(row[0])
-        retrieved = datetime.fromisoformat(row[1].replace("Z", "+00:00"))
-    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = json.loads(raw_payload)
+        retrieved = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
+        if not isinstance(payload, dict) or retrieved.tzinfo is None:
+            return None
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
         return None
     max_age = CACHE_MAX_AGE if payload.get("status") == "available" else NEGATIVE_CACHE_MAX_AGE
     if datetime.now(timezone.utc) - retrieved > max_age:

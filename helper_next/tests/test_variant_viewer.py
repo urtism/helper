@@ -71,6 +71,9 @@ def test_priority_score_opens_an_explainable_bottom_panel():
     assert '{key: "priority", label: "Priority"' in source
     assert "item.priority" in source
     assert "priorityExplanationPanel(workspace)" in source
+    assert "priorityItem.priority = detail.priority" in source
+    assert 'String(item.variant_id) === String(variantId)' in source
+    assert '{signal: workspace.detailController.signal, cache: "no-store"}' in source
     assert "priority.formula" in source
     assert "priority.components" in source
     assert "Experimental review priority; it is not an ACMG/AMP classification" in source

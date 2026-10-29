@@ -1,0 +1,9 @@
+subject_id	subject_label	predicate_id	object_id	object_label	mapping_justification
+MONDO:0009738	sialidosis type 2	skos:exactMatch	OMIM:256150	nephrosialidosis	semapv:UnspecifiedMatching
+MONDO:0009738	sialidosis type 2	skos:exactMatch	OMIM:256550	neuraminidase deficiency	semapv:UnspecifiedMatching
+MONDO:0009738	sialidosis type 2	skos:exactMatch	Orphanet:87876	Sialidosis type 2	semapv:UnspecifiedMatching
+MONDO:0010571	otopalatodigital syndrome type 2	skos:exactMatch	OMIM:304120	otopalatodigital syndrome, type 2	semapv:UnspecifiedMatching
+MONDO:0010571	otopalatodigital syndrome type 2	skos:exactMatch	Orphanet:90652	Otopalatodigital syndrome type 2	semapv:UnspecifiedMatching
+MONDO:0100263	peroxisome biogenesis disorder due to PEX6 defect	skos:exactMatch	OMIM:616617	heimler syndrome 2	semapv:UnspecifiedMatching
+MONDO:7770750	Athabaskan brainstem dysgenesis syndrome	skos:exactMatch	OMIM:601536	athabaskan brainstem dysgenesis syndrome	semapv:UnspecifiedMatching
+MONDO:7770750	Athabaskan brainstem dysgenesis syndrome	skos:exactMatch	Orphanet:69739	Athabaskan brainstem dysgenesis syndrome	semapv:UnspecifiedMatching

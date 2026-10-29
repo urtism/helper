@@ -11,6 +11,8 @@ from helper_next.core import acmg_store as store
 from helper_next.core import acmg_workbench as workbench
 from helper_next.core import acmg_context
 from helper_next.core.acmg_client import ACMGClient, EngineError, configuration
+from helper_next.core.acmg_task22 import Task22Client
+from helper_next.core.acmg_classification import coordinated_packet, classification_call, require_pvs1_result
 from helper_variants import query
 
 
@@ -34,11 +36,13 @@ class ExecuteRequest(BaseModel):
     selections: list
     corrections: list = Field(default_factory=list)
     parent_id: str = ""
+    protocol: dict | None = None
 
 
 class CompareRequest(BaseModel):
     selections: list
     corrections: list = Field(default_factory=list)
+    protocol: dict | None = None
 
 
 class ReviewRequest(BaseModel):
@@ -118,14 +122,14 @@ def profiles(identifier: str):
     return client_call(lambda: {"profiles": ACMGClient().profiles(value["document"]["normalized_evidence"]["snapshot"]["context"])})
 
 
-def execution_inputs(identifier, selections, corrections):
+def execution_inputs(identifier, selections, corrections, protocol=None):
     value = entry(identifier, "workspace")
-    engine = ACMGClient()
+    engine = Task22Client()
     discovered = engine.discover()
     cap = discovered["capabilities"]
     if not cap.get("research_execution_enabled"):
         raise EngineError("RESEARCH_DISABLED", "Enable research interpretation explicitly in ACMG Engine", 409)
-    packet = workbench.corrected_packet(value["document"]["normalized_evidence"], corrections)
+    packet = value["document"]["normalized_evidence"]
     normalization = packet["snapshot"]["variant"]["normalization"]
     if packet["snapshot"]["evidence"] and (normalization["status"] != "NORMALIZED" or normalization["reference_validated"] is not True):
         raise EngineError("PACKET_NORMALIZATION_REQUIRED", "Configure a matching local reference FASTA and prepare the workspace again before executing structured evidence", 409)
@@ -134,7 +138,8 @@ def execution_inputs(identifier, selections, corrections):
     executable = {s["strategy"] for s in cap["strategies"] if s["status"] == "PARTIAL_RESEARCH"}
     if any(c["strategy"] not in executable for c in configs):
         raise ValueError("Strategy is not executable on this engine")
-    return engine, packet, configs
+    packet, builder = coordinated_packet(engine, value["document"], configs, corrections, protocol)
+    return engine, packet, configs, builder
 
 
 @router.post("/workspaces/{identifier}/interpret", status_code=201)
@@ -142,11 +147,20 @@ def interpret(identifier: str, payload: ExecuteRequest):
     def execute():
         if payload.parent_id and entry(payload.parent_id, "interpretation")["workspace_id"] != identifier:
             raise ValueError("Rerun parent belongs to another workspace")
-        engine, packet, configs = execution_inputs(identifier, [payload.selections], payload.corrections)
-        result = engine.call("/v1/evidence-packets/interpret", {"packet": packet, "configuration": configs[0]})
+        engine, packet, configs, builder = execution_inputs(identifier, [payload.selections], payload.corrections, payload.protocol)
+        result = classification_call(engine, "/v1/evidence-packets/interpret", {"packet": packet, "configuration": configs[0]})
         if result.get("schema_version") != "evidence-packet-result-v1" or "criterion_results" not in result.get("result", {}):
             raise EngineError("INVALID_RESULT_CONTRACT", "Missing criterion-level interpretation result")
+        # Archive the exact automatic response even if an old classifier omits
+        # the new audit; it must not be presented as an integrated classification.
+        try:
+            require_pvs1_result(result["result"], builder["contract"])
+        except EngineError:
+            store.save("classification_integration_failure", {"packet": packet, "builder": builder,
+                       "configuration": configs[0], "engine_result": result}, identifier)
+            raise
         return store.save("interpretation", {"packet": packet, "configuration": configs[0], "engine_result": result,
+                          "builder": builder,
                           "context_resolution": entry(identifier, "workspace")["document"].get("context_resolution"),
                           "corrections": payload.corrections, "parent_id": payload.parent_id,
                           "rows": workbench.criterion_rows(result["result"])}, identifier)
@@ -156,11 +170,20 @@ def interpret(identifier: str, payload: ExecuteRequest):
 @router.post("/workspaces/{identifier}/compare", status_code=201)
 def compare(identifier: str, payload: CompareRequest):
     def execute():
-        engine, packet, configs = execution_inputs(identifier, payload.selections, payload.corrections)
+        engine, packet, configs, builder = execution_inputs(identifier, payload.selections, payload.corrections, payload.protocol)
         if len(configs) < 2:
             raise ValueError("Select at least two supported configurations")
-        result = engine.call("/v1/interpretations/compare", {"schema_version": "1.0", "snapshot": packet["snapshot"], "configurations": configs})
+        result = classification_call(engine, "/v1/interpretations/compare", {"schema_version": "1.0", "snapshot": packet["snapshot"], "configurations": configs})
+        try:
+            for branch in result["branches"]:
+                if branch.get("result"):
+                    require_pvs1_result(branch["result"], builder["contract"])
+        except EngineError:
+            store.save("classification_integration_failure", {"packet": packet, "builder": builder,
+                       "configurations": configs, "engine_result": result}, identifier)
+            raise
         return store.save("comparison", {"packet": packet, "engine_result": result, "configurations": configs,
+                          "builder": builder,
                           "context_resolution": entry(identifier, "workspace")["document"].get("context_resolution")}, identifier)
     return client_call(execute)
 
@@ -219,7 +242,26 @@ def readable_report(value, reviews):
                   "Engine classification status: " + str(classification.get("status", "NOT_RECORDED")),
                   "Final category: " + str(classification.get("category") if classification.get("status") == "CLASSIFIED" else "NOT_CLASSIFIED"),
                   "Classification method: " + str(classification.get("method", "NOT_RECORDED")),
-                  "Completeness: " + str(response.get("evidence_completeness", "NOT_RECORDED")), "",
+                  "Completeness: " + str(response.get("evidence_completeness", "NOT_RECORDED")), ""])
+    pvs1 = next((c.get("pvs1_evaluation") for c in result.get("criterion_results", []) if c.get("code") == "PVS1"), None)
+    if pvs1:
+        lines.extend(["## PVS1 mechanism and Engine contribution", "",
+                      "Status: " + str(pvs1.get("status", "NOT_RECORDED")),
+                      "Mechanism / confidence: {} / {}".format(pvs1.get("mechanism"), pvs1.get("mechanism_confidence")),
+                      "Calculated / applied strength: {} / {}".format(pvs1.get("calculated_strength"), pvs1.get("applied_strength")),
+                      "Classification eligible: " + str(pvs1.get("classification_eligible")),
+                      "Review required: " + str(pvs1.get("requires_review")),
+                      "Reason: " + str(pvs1.get("reason")), "",
+                      "Warnings: " + json.dumps(pvs1.get("warnings", []), ensure_ascii=False)])
+        if pvs1.get("status") == "EXPLORATORY":
+            lines.append("Theoretical strength only; does not contribute to classification.")
+        if pvs1.get("mechanism_confidence") in {"INFERRED", "DISPUTED"}:
+            lines.append("WARNING: uncertain mechanism; supporting and conflicting evidence require review.")
+        lines.extend(["", "```json", json.dumps(pvs1, ensure_ascii=False, indent=2), "```", ""])
+    if document.get("builder"):
+        lines.extend(["## Coordinated evidence and provenance", "", "```json",
+                      json.dumps(document["builder"], ensure_ascii=False, indent=2), "```", ""])
+    lines.extend([
                   "## Criterion evaluation", "",
                   "| Criterion | Engine status | Display status | Candidate strength | Effective strength |",
                   "| --- | --- | --- | --- | --- |"])
@@ -233,7 +275,7 @@ def readable_report(value, reviews):
                       "Reason: " + str(raw.get("reason_code", "NOT_RECORDED")),
                       "Candidate / effective activation: {} / {}".format(row.get("candidate_active"), row.get("effective_active")),
                       "", "Scientific rules, numerical values, operators, thresholds, calculations, decision branches and provenance:", "", "```json",
-                      json.dumps({k: v for k, v in raw.items() if k in ("rules", "provenance", "population_upper_ci", "excluded_evidence", "required_manual_actions", "warnings") or k.endswith("_audit")}, ensure_ascii=False, indent=2), "```"])
+                      json.dumps({k: v for k, v in raw.items() if k in ("rules", "provenance", "population_upper_ci", "excluded_evidence", "required_manual_actions", "warnings", "pvs1_evaluation") or k.endswith("_audit")}, ensure_ascii=False, indent=2), "```"])
     lines.extend(["", "## Missing evidence and warnings", "", "```json",
                   json.dumps({"missing_evidence": packet.get("missing_evidence"), "warnings": result.get("warnings"), "limitations": response.get("limitations"),
                               "comparison": response if value["kind"] == "comparison" else None}, ensure_ascii=False, indent=2), "```",

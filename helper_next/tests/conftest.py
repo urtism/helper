@@ -11,6 +11,8 @@ def isolate_analysis_history(monkeypatch, tmp_path):
     monkeypatch.setenv("HELPER_EXTERNAL_VCF_DIR", str(tmp_path / "external_vcf"))
     monkeypatch.setenv("HELPER_ACMG_DB", str(tmp_path / "acmg.sqlite3"))
     monkeypatch.setenv("HELPER_GENE_PHENOTYPE_DB", str(tmp_path / "knowledge" / "gene_phenotype.sqlite3"))
+    monkeypatch.setenv("HELPER_CLINVAR_CACHE", str(tmp_path / "knowledge" / "clinvar.sqlite3"))
+    monkeypatch.setenv("HELPER_MECHANISM_DB", str(tmp_path / "knowledge" / "mechanisms.sqlite3"))
     monkeypatch.setenv(
         "HELPER_GNOMAD_FREQUENCY_CACHE", str(tmp_path / "knowledge" / "gnomad_frequency.sqlite3")
     )

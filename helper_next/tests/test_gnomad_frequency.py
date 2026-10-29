@@ -152,6 +152,7 @@ def test_missing_allele_is_only_absent_when_locus_coverage_is_adequate(tmp_path,
     assert result["population_absent"] is True
     assert context["population_absent"] is True
     assert context["population_coverage_adequate"] is True
+    assert context["population_coverage_available"] is True
     assert "population_af" not in context
 
 
@@ -171,6 +172,8 @@ def test_missing_allele_with_low_coverage_is_not_treated_as_absent(tmp_path, mon
 
     assert result["status"] == "not_observed_low_coverage"
     assert gnomad_frequency.priority_context(result).get("population_absent") is None
+    assert gnomad_frequency.priority_context(result)["population_coverage_available"] is True
+    assert gnomad_frequency.priority_context(result)["population_coverage_adequate"] is False
 
 
 def test_observed_frequency_context_uses_highest_major_population_af():

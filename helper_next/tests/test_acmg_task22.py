@@ -14,7 +14,7 @@ from helper_next.core.acmg_workbench import prepare
 from fastapi import HTTPException
 
 
-ENGINE = Path(__file__).resolve().parents[2].parent / "acmg-engine"
+ENGINE = Path(os.environ.get("HELPER_TEST_ENGINE_ROOT", Path(__file__).resolve().parents[2].parent / "acmg-engine"))
 LIVE = pytest.mark.skipif(os.environ.get("HELPER_TEST_TASK22_SERVICE") != "1", reason="Opt-in local Task 22 REST verification")
 
 
@@ -42,11 +42,24 @@ def test_adapter_preserves_original_values_and_never_promotes_quality(workspace)
     contract = provider_contract(document)
     assert document == before
     assert contract["schema_version"] == "evidence-contract-1.0"
+    assert provider_contract(document, schema_version="evidence-contract-1.0") == contract
     assert all(e["quality_status"] == "UNKNOWN" and e["validation_status"] == "UNVERIFIED" for e in contract["evidence"])
     original = document["normalized_evidence"]["snapshot"]["evidence"]
     assert [json.loads(e["received_json"]) for e in contract["evidence"]] == original
     assert contract["evidence"][0]["value"]["observation"]["score"] == .73
     assert "classification" not in contract
+
+
+def test_mechanism_assessment_extension_cannot_be_silently_downgraded(workspace):
+    document = copy.deepcopy(workspace["document"])
+    item = copy.deepcopy(document["normalized_evidence"]["snapshot"]["evidence"][0])
+    item.update(id="helper-mechanism-assessment", kind="EXTENSION", observation={
+        "schema_id": "helper-mechanism-assessment", "schema_version": "1.0", "fields": []})
+    document["normalized_evidence"]["snapshot"]["evidence"].append(item)
+    assert provider_contract(document)["schema_version"] == "evidence-contract-1.1"
+    with pytest.raises(EngineError) as error:
+        provider_contract(document, schema_version="evidence-contract-1.0")
+    assert error.value.code == "CONFIDENCE_REQUIRES_CONTRACT_1_1"
 
 
 def test_adapter_requires_reference_and_transcript_version(workspace):
@@ -66,6 +79,25 @@ def test_schema_errors_do_not_expose_values():
     with pytest.raises(EngineError) as error:
         client.validate({"clinical": "PRIVATE"}, {"type": "object", "additionalProperties": False})
     assert "PRIVATE" not in str(error.value) + json.dumps(error.value.details)
+
+
+def test_contract_1_1_is_blocked_before_validation_post_to_legacy_engine(monkeypatch):
+    client = Task22Client()
+    client.openapi = {"paths": {"/v1/evidence-contracts/validate": {"post": {"responses": {}}}}}
+    client.contract_schema = {"properties": {"schema_version": {"const": "evidence-contract-1.0"}}}
+    def unexpected(*args, **kwargs):
+        pytest.fail("An incompatible contract must never be sent")
+    monkeypatch.setattr(client, "call", unexpected)
+    with pytest.raises(EngineError) as error:
+        client.invoke("/v1/evidence-contracts/validate", {"schema_version": "evidence-contract-1.1"})
+    assert error.value.code == "ENGINE_CONTRACT_VERSION_UNSUPPORTED"
+
+
+def test_contract_version_negotiation_preserves_legacy_support():
+    client = Task22Client()
+    client.contract_schema = {"properties": {"schema_version": {"enum": ["evidence-contract-1.0", "evidence-contract-1.1"]}}}
+    for version in ["evidence-contract-1.0", "evidence-contract-1.1"]:
+        client.require_contract_version(version)
 
 
 def test_transport_retries_reads_only(monkeypatch):

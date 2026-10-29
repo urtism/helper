@@ -131,7 +131,7 @@ def profiles():
 
 
 @pytest.mark.parametrize("ac", [0, 2])
-def test_helper_gnomad_cache_counts_and_source_are_sent_unchanged(workspace, monkeypatch, ac):
+def test_helper_gnomad_cache_counts_and_source_are_sent_unchanged(workspace, monkeypatch, ac, classification_transport):
     from helper_variants import gnomad_frequency
     detail = copy.deepcopy(workspace["document"]["original_vcf_evidence"])
     raw = gnomad_frequency._parse_response({"data": {
@@ -167,7 +167,7 @@ def test_helper_gnomad_cache_counts_and_source_are_sent_unchanged(workspace, mon
         def call(self, path, payload):
             captured.append(copy.deepcopy(payload))
             return super().call(path, payload)
-    monkeypatch.setattr(acmg, "ACMGClient", PopulationEngine)
+    monkeypatch.setattr(acmg, "Task22Client", PopulationEngine)
     item = acmg_store.save("workspace", prepared)
     result = acmg.interpret(item["id"], acmg.ExecuteRequest(selections=selection()))
     assert captured[0]["packet"] == packet == result["document"]["packet"]
@@ -220,6 +220,15 @@ def test_explicit_profile_version_and_no_invented_strategy():
 
 
 class FakeEngine:
+    openapi = {"paths": {path: {"post": {"requestBody": {"content": {"application/json": {"schema": {}}}}}}
+                         for path in ("/v1/evidence-packets/interpret", "/v1/interpretations/compare")}}
+
+    def validate(self, value, schema):
+        pass  # API persistence fixture; schema guards have separate focused tests.
+
+    def invoke(self, path, payload):
+        return self.call(path, payload)
+
     def discover(self):
         return {"capabilities": {"research_execution_enabled": True, "strategies": [{"strategy": "CLINGEN_GUIDED", "status": "PARTIAL_RESEARCH"}]}}
 
@@ -234,8 +243,15 @@ class FakeEngine:
         return {"schema_version": "1.0", "branches": [], "comparisons": []}
 
 
-def test_rerun_review_persistence_exports_and_immutable_results(workspace, monkeypatch):
-    monkeypatch.setattr(acmg, "ACMGClient", FakeEngine)
+@pytest.fixture
+def classification_transport(monkeypatch):
+    monkeypatch.setattr(acmg, "Task22Client", FakeEngine)
+    def coordinated(engine, document, configurations, corrections, protocol=None):
+        return wb.corrected_packet(document["normalized_evidence"], corrections), {"contract": {"evidence": []}}
+    monkeypatch.setattr(acmg, "coordinated_packet", coordinated)
+
+
+def test_rerun_review_persistence_exports_and_immutable_results(workspace, classification_transport):
     first = acmg.interpret(workspace["id"], acmg.ExecuteRequest(selections=selection()))
     saved = copy.deepcopy(first)
     review = acmg.review(first["id"], acmg.ReviewRequest(criterion="PM2", decision="CONTEST", comments="Inspect dependency", discrepancy="DEPENDENCY_ERROR"))
@@ -254,8 +270,7 @@ def test_rerun_review_persistence_exports_and_immutable_results(workspace, monke
         acmg.review(first["id"], acmg.ReviewRequest(criterion="UNKNOWN", decision="CONFIRM", comments="x"))
 
 
-def test_comparison_sends_identical_snapshot(workspace, monkeypatch):
-    monkeypatch.setattr(acmg, "ACMGClient", FakeEngine)
+def test_comparison_sends_identical_snapshot(workspace, classification_transport):
     value = acmg.compare(workspace["id"], acmg.CompareRequest(selections=[selection(), selection() + [{"profile_id": "vcep", "version": "2.0"}]]))
     assert value["kind"] == "comparison"
     assert value["document"]["packet"] == workspace["document"]["normalized_evidence"]

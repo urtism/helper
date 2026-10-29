@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from helper_variants import clinvar
 
@@ -41,6 +41,56 @@ VCV_XML = b"""<?xml version="1.0"?>
     <Explanation DataSource="ClinVar" Type="public">Benign (12); Likely benign (1)</Explanation>
   </GermlineClassification></Classifications>
 </ClassifiedRecord></VariationArchive></ClinVarResult-Set>"""
+
+
+def test_bulk_cached_evidence_is_exact_and_never_fetches(tmp_path, monkeypatch):
+    database = tmp_path / "clinvar.sqlite3"
+    evidence = {
+        "status": "available", "classifications": ["Likely pathogenic"],
+        "classification_breakdown": [{"label": "Likely pathogenic", "count": 2}],
+        "review_statuses": [{"label": "multiple submitters, no conflicts", "stars": 2}],
+    }
+    clinvar._store(database, "GRCh38|1|100|A|G", evidence)
+
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("Cached evidence must not fetch from ClinVar")
+
+    monkeypatch.setattr(clinvar, "_request", unexpected_request)
+    result = clinvar.cached_evidence([
+        ("hg38", "chr1", 100, "a", "g"),
+        ("GRCh38", "1", 100, "A", "T"),
+        ("GRCh37", "1", 100, "A", "G"),
+        ("unknown", "1", 100, "A", "G"),
+    ], database)
+
+    assert result[0] == clinvar.merge_evidence({}, evidence)
+    assert result[1:] == [{}, {}, {}]
+
+
+def test_bulk_cached_evidence_ignores_expired_and_malformed_records(tmp_path):
+    database = tmp_path / "clinvar.sqlite3"
+    clinvar._store(database, "GRCh38|1|100|A|G", {
+        "status": "available", "classifications": ["Pathogenic"],
+        "retrieved_at": (datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),
+    })
+    with clinvar._connect(database) as connection:
+        connection.execute(
+            "INSERT INTO evidence VALUES (?, ?, ?)",
+            ("GRCh38|1|101|A|G", "[]", datetime.now(timezone.utc).isoformat()),
+        )
+        connection.execute(
+            "INSERT INTO evidence VALUES (?, ?, ?)",
+            ("GRCh38|1|102|A|G", "invalid json", "invalid date"),
+        )
+    assert clinvar.cached_evidence([
+        ("GRCh38", "1", position, "A", "G") for position in (100, 101, 102)
+    ], database) == [{}, {}, {}]
+
+
+def test_bulk_cached_evidence_does_not_create_missing_cache(tmp_path):
+    database = tmp_path / "missing.sqlite3"
+    assert clinvar.cached_evidence([("GRCh38", "1", 100, "A", "G")], database) == [{}]
+    assert not database.exists()
 
 
 def test_lookup_matches_the_exact_allele_and_caches_the_result(tmp_path, monkeypatch):
@@ -122,6 +172,29 @@ def test_legacy_cache_is_enriched_once_with_submission_counts(tmp_path, monkeypa
     assert calls == ["efetch.fcgi"]
     assert result["classification_breakdown"][0] == {"label": "Benign", "count": 12}
     assert result["cache"] == "hit"
+
+
+def test_refresh_bypasses_a_fresh_cached_clinvar_result(tmp_path, monkeypatch):
+    database = tmp_path / "clinvar.sqlite3"
+    clinvar._store(database, "GRCh38|1|100|A|G", {
+        "status": "available", "classifications": ["Pathogenic"],
+        "identifiers": ["1"], "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    })
+    requests = []
+
+    def fake_request(endpoint, parameters, timeout):
+        requests.append(endpoint)
+        return json.dumps({"esearchresult": {"idlist": []}}).encode()
+
+    monkeypatch.setattr(clinvar, "_request", fake_request)
+
+    result = clinvar.lookup_variant(
+        "GRCh38", "1", 100, "A", "G", database=database, refresh=True
+    )
+
+    assert requests == ["esearch.fcgi"]
+    assert result["status"] == "not_found"
+    assert result["cache"] == "miss"
 
 
 def test_merge_prefers_the_current_aggregate_classification_and_review():

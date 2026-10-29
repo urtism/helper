@@ -1,5 +1,6 @@
 /* Criterion audit UI. Scientific values are displayed exactly as returned by ACMG Engine. */
 import {mountTask22} from "./acmg-task22.js";
+import {appendPvs1Summary, mechanismPolicy, mechanismPolicySelect, pvs1Result} from "./acmg-pvs1.js";
 const CSS = new URL("./acmg-workbench.css", import.meta.url).href;
 const CODES = "PVS1 PS1 PS2 PS3 PS4 PM1 PM2 PM3 PM4 PM5 PM6 PP1 PP2 PP3 PP4 PP5 BA1 BS1 BS2 BS3 BS4 BP1 BP2 BP3 BP4 BP5 BP6 BP7".split(" ");
 const CATEGORIES = "EVIDENCE_MAPPING_ERROR WRONG_THRESHOLD WRONG_CALCULATION WRONG_RULE_PROFILE INCORRECT_APPLICABILITY INCORRECT_STRENGTH MISSING_EVIDENCE SCIENTIFIC_RULE_DISAGREEMENT DEPENDENCY_ERROR OTHER".split(" ");
@@ -48,11 +49,12 @@ function rows(result) {
   const classification = result.classification || {};
   return CODES.map(code => {
     const raw = result.criterion_results?.find(c => c.code === code);
+    const recorded = pvs1Result(raw);
     const excluded = classification.excluded_criteria?.find(c => c.code === code);
     const dependencyExclusion = excluded && classification.dependencies?.some(d => d.disposition === "EXCLUDE" && d.criterion_codes?.includes(code));
     return {code, raw, engine_status: raw?.status || "NOT_RECORDED",
-      display_status: ["PP5", "BP6"].includes(code) ? "DEPRECATED" : dependencyExclusion ? "EXCLUDED_BY_DEPENDENCY" : raw?.activation === "UNSUPPORTED" ? "UNSUPPORTED" : raw?.status || "NOT_EVALUATED",
-      candidate_active: raw?.status === "MET" ? true : raw?.status === "NOT_MET" ? false : null,
+      display_status: ["PP5", "BP6"].includes(code) ? "DEPRECATED" : dependencyExclusion ? "EXCLUDED_BY_DEPENDENCY" : raw?.activation === "UNSUPPORTED" ? "UNSUPPORTED" : recorded.status || "NOT_EVALUATED",
+      candidate_active: raw?.pvs1_evaluation ? raw.pvs1_evaluation.active : raw?.status === "MET" ? true : raw?.status === "NOT_MET" ? false : null,
       effective_active: classification.included_criteria ? classification.included_criteria.includes(code) : null,
       candidate_strength: raw?.strength,
       effective_strength: classification.effective_strengths?.find(c => c.code === code)?.strength,
@@ -222,7 +224,7 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
   function render() {
     body.replaceChildren();
     if (state.task22 && !state.legacyMode) {
-      const host = el("div"), legacy = el("button", "Earlier interpretation workspace");
+      const host = el("div"), legacy = el("button", "Open Classify variant");
       legacy.onclick = () => busy(async () => { state.profiles = (await api(`/workspaces/${state.workspace.id}/profiles`)).profiles; state.legacyMode = true; render(); });
       body.append(host, legacy);
       mountTask22(host, state.workspace, state.task22, status).catch(error => { status.textContent = error.message; });
@@ -236,6 +238,7 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
       disclosure("Original VCF evidence (local, immutable)", state.workspace.document.original_vcf_evidence),
       disclosure("Normalized EvidencePacket / missing prerequisites", packet));
     const selectors = el("div", undefined, "acmg-config acmg-profile-selectors"), base = el("select"), special = el("select"), comparator = el("select");
+    const policy = mechanismPolicySelect(), policyLabel = el("label", "Mechanism policy"); policyLabel.append(policy); selectors.append(policyLabel);
     base.append(option("", "Select generic profile/version")); special.append(option("", "No specialization")); comparator.append(option("", "Select comparison baseline/profile"));
     state.profiles.forEach((profile, index) => {
       const label = `${profile.strategy === "CLINGEN_GUIDED" ? 'ClinGen' : profile.strategy === "CUSTOM_ALGORITHMIC" ? 'Custom' : profile.strategy} · ${profile.profile_id} · ${profile.version}`;
@@ -247,6 +250,18 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
     const baseField = el("label", "Classification profile"); baseField.append(base);
     const specialField = el("label", "Specialization (optional)"); specialField.append(special); specialField.hidden = special.options.length === 1;
     selectors.append(baseField, specialField); body.append(el("h4", "2. Classification"), selectors);
+    const criteriaProtocol = el("select"), manifests = state.task22?.protocols || [];
+    criteriaProtocol.setAttribute("aria-label", "Criteria protocol");
+    criteriaProtocol.append(option("", "Select criteria protocol"));
+    manifests.forEach((manifest, index) => criteriaProtocol.append(option(String(index), `${manifest.selection.protocol} · ${manifest.selection.version}`)));
+    if (manifests.length) { const label = el("label", "Criteria protocol"); label.append(criteriaProtocol); selectors.append(label); }
+    const syncCriteriaProtocol = () => {
+      const strategy = base.value === "" ? null : state.profiles[Number(base.value)].strategy;
+      const name = {CLINGEN_GUIDED: "CLINGEN_GENERAL", ACMG_2015: "ACMG_2015"}[strategy];
+      const index = manifests.findIndex(m => m.selection.protocol === name);
+      criteriaProtocol.value = index < 0 ? "" : String(index);
+    };
+    const selectedProtocol = () => criteriaProtocol.value === "" ? null : manifests[Number(criteriaProtocol.value)].selection;
     if (!state.profiles.length) body.append(el("p", "UNSUPPORTED: no profiles available for this explicit gene-disease context."));
     const profileInfo = el("div"); advanced.append(profileInfo);
     let updateActions = () => {};
@@ -256,10 +271,19 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
       for (const o of special.options) if (o.value !== "") o.disabled = !base.value || state.profiles[Number(o.value)].strategy !== state.profiles[Number(base.value)].strategy || ["DRAFT", "DEPRECATED"].includes(state.profiles[Number(o.value)].release_status);
       updateActions();
     };
-    base.onchange = () => { special.value = ""; profileChanged(); }; special.onchange = profileChanged;
-    const availableBases = [...base.options].filter(o => o.value !== "" && !o.disabled);
-    if (availableBases.length === 1) base.value = availableBases[0].value;
-    profileChanged();
+    const syncPolicy = () => {
+      for (const o of base.options) if (o.value !== "") {
+        const profile = state.profiles[Number(o.value)];
+        o.hidden = mechanismPolicy(profile) !== policy.value;
+        o.disabled = o.hidden || ["DRAFT", "DEPRECATED"].includes(profile.release_status);
+      }
+      if (base.selectedOptions[0]?.disabled) base.value = "";
+      const available = [...base.options].filter(o => o.value !== "" && !o.disabled);
+      if (base.value === "" && available.length === 1) base.value = available[0].value;
+      special.value = ""; syncCriteriaProtocol(); profileChanged();
+    };
+    base.onchange = () => { special.value = ""; syncCriteriaProtocol(); profileChanged(); }; special.onchange = profileChanged;
+    policy.onchange = syncPolicy; syncPolicy();
     const editBox = el("details"); editBox.append(el("summary", "User-supplied evidence / explicit corrections"));
     editBox.append(el("p", "JSON array: each item requires evidence, source (version/checksum), comment and optional replaces (evidence ID). Evidence uses the engine schema; provenance.extraction_method must be MANUAL. Scientific thresholds belong in the engine registry."));
     const corrections = el("textarea"); corrections.rows = 8; corrections.value = "[]"; corrections.setAttribute("aria-label", "Structured evidence corrections"); editBox.append(corrections);
@@ -278,22 +302,23 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
       const blockers = [];
       if (!state.capability?.research_execution_enabled) blockers.push("Research interpretation is disabled on ACMG Engine. Enable research execution in the server configuration, then reopen this workbench.");
       if (referenceRequired) blockers.push("PACKET_NORMALIZATION_REQUIRED: configure HELPER_ACMG_REFERENCE_CONFIG with a matching FASTA and .fai, then prepare this workspace again. Imported evidence remains preserved.");
-      if (base.value === "") blockers.push("Select a classification profile to enable Classify variant.");
+      if (base.value === "") blockers.push(`Select an available Engine classification profile/version for ${policy.value}.`);
+      if (manifests.length && criteriaProtocol.value === "") blockers.push("Select a criteria protocol for the Engine evaluation.");
       run.disabled = blockers.length > 0;
       compare.disabled = run.disabled || comparator.value === "";
       executionStatus.textContent = blockers.join(" ");
       executionStatus.hidden = blockers.length === 0;
       run.title = executionStatus.textContent;
     };
-    updateActions(); comparator.onchange = updateActions;
+    updateActions(); comparator.onchange = criteriaProtocol.onchange = updateActions;
     run.onclick = () => busy(async () => {
-      const result = await api(`/workspaces/${state.workspace.id}/interpret`, {selections: selection(), corrections: JSON.parse(corrections.value), parent_id: state.selected?.kind === "interpretation" ? state.selected.id : ""});
+      const result = await api(`/workspaces/${state.workspace.id}/interpret`, {selections: selection(), protocol: selectedProtocol(), corrections: JSON.parse(corrections.value), parent_id: state.selected?.kind === "interpretation" ? state.selected.id : ""});
       state.selected = result; state.history = (await api(`/workspaces/${state.workspace.id}`)).history; renderResult(result); renderHistory();
     });
     compare.onclick = () => busy(async () => {
       if (comparator.value === "") throw new Error("Select an explicit comparison baseline/profile");
       const p = state.profiles[Number(comparator.value)];
-      const result = await api(`/workspaces/${state.workspace.id}/compare`, {selections: [[{profile_id: p.profile_id, version: p.version}], selection()], corrections: JSON.parse(corrections.value)});
+      const result = await api(`/workspaces/${state.workspace.id}/compare`, {selections: [[{profile_id: p.profile_id, version: p.version}], selection()], protocol: selectedProtocol(), corrections: JSON.parse(corrections.value)});
       state.selected = result; state.history = (await api(`/workspaces/${state.workspace.id}`)).history; renderComparison(result); renderHistory();
     });
     actions.append(run); selectors.append(actions);
@@ -325,6 +350,9 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
         section("Classification details and limitations", summary,
           disclosure("Configuration and full engine audit", {context, configuration: config, classification,
             warnings: engine.warnings, limitations: response.limitations})));
+      const pvs1Criterion = engine.criterion_results?.find(c => c.code === "PVS1");
+      appendPvs1Summary(outcome, pvs1Criterion?.pvs1_evaluation, result.document.builder?.mechanism_assessment, pvs1Criterion);
+      if (result.document.builder) resultHost.append(disclosure("Coordinated evidence contract, automatic evidence and manual corrections", result.document.builder));
       if (engine.warnings?.length || response.limitations?.length) resultHost.append(disclosure("Engine warnings and limitations", {warnings: engine.warnings, limitations: response.limitations}));
       exports(resultHost, result);
       const filter = el("input"); filter.type = "search"; filter.placeholder = "Find criterion or status"; filter.setAttribute("aria-label", "Filter criteria");
@@ -336,7 +364,7 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
         const table = el("table"), head = el("tr");
         const headers = technical.checked
           ? ["Criterion", "Definition", "Applicability", "Standard rule", "VCEP modification", "Status", "Engine status", "Candidate active", "Effective active", "Candidate strength", "Effective strength", "Observed / calculated", "Threshold / operator", "Condition result", "Explanation", "Review"]
-          : ["Criterion", "Status", "Effective strength", "Contribution", "Explanation", "Review"];
+          : ["Criterion", "Status", "Strength", "Rationale", "Warnings"];
         headers.forEach(v => head.append(el("th", v))); table.append(head);
         (result.document.rows || rows(engine)).forEach(row => {
           const reviews = state.history.filter(e => e.kind === "review" && e.document.interpretation_id === result.id && e.document.criterion === row.code);
@@ -345,6 +373,7 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
           const tr = el("tr"); const button = el("button", row.code); button.onclick = () => { inspect(row, result, inspector); inspector.scrollIntoView({block: "nearest", behavior: "smooth"}); }; const td = el("td"); td.append(button); tr.append(td);
           const coverage = state.criteria.find(c => c.code === row.code)?.coverage;
           const mapping = row.raw?.rules?.find(r => r.vcep_mapping)?.vcep_mapping;
+          const recorded = pvs1Result(row.raw);
           button.title = coverage?.original_definition || `Inspect ${row.code}`;
           const values = technical.checked ? [coverage?.original_definition, mapping?.applicability_conditions || coverage?.applicability,
             mapping?.original_definition || coverage?.current_general_rule,
@@ -354,8 +383,8 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
             recordedFields(row.raw, ["selected_value", "observed_score", "binomial_upper95", "poisson_upper95"]),
             recordedFields(row.raw, ["threshold", "operator"]),
             recordedFields(row.raw, ["primary_candidate_met", "sensitivity_candidate_met", "condition_met"]),
-            row.explanation, review] : [row.display_status, row.effective_strength || '—',
-            row.effective_active === true ? 'Included' : row.excluded ? 'Excluded' : row.effective_active === false ? 'Not included' : 'Not recorded', row.explanation, review];
+            row.explanation, review] : [row.display_status, row.raw?.pvs1_evaluation ? recorded.strength : row.effective_strength,
+            recorded.reason || row.explanation, recorded.warnings];
           values.forEach(v => tr.append(el("td", show(v)))); table.append(tr);
         }); tableHost.replaceChildren(table);
       }; filter.oninput = renderTable; technical.onchange = renderTable; renderTable();
@@ -432,6 +461,8 @@ export async function openAcmgWorkbench(browser, sourceWorkspace) {
         if (!branch.result) column.append(tree(branch.error));
         else {
           column.append(el("p", branch.result.classification?.category || branch.result.classification?.status || "Classification unavailable"), disclosure("Classification audit", branch.result.classification));
+          const pvs1Criterion = branch.result.criterion_results?.find(c => c.code === "PVS1");
+          appendPvs1Summary(column, pvs1Criterion?.pvs1_evaluation, result.document.builder?.mechanism_assessment, pvs1Criterion);
           for (const row of rows(branch.result)) column.append(disclosure(`${row.code} · ${row.display_status} · ${show(row.candidate_strength)} → ${show(row.effective_strength)}`, row.raw));
         } grid.append(column);
       }); resultHost.append(grid, disclosure("Engine-reported rule differences / provenance (no local modification inference)", {comparisons: comparison.comparisons, not_comparable: comparison.not_comparable}, true));

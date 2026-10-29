@@ -253,9 +253,10 @@ def criterion_rows(result):
         c = found.get(code)
         deprecated = code in ("PP5", "BP6")
         status = c.get("status", "NOT_RECORDED") if c else "NOT_RECORDED"
-        display = "DEPRECATED" if deprecated else "EXCLUDED_BY_DEPENDENCY" if code in dependency_exclusions else "UNSUPPORTED" if c and c.get("activation") == "UNSUPPORTED" else status if c else "NOT_EVALUATED"
+        pvs1 = (c or {}).get("pvs1_evaluation")
+        display = "DEPRECATED" if deprecated else "EXCLUDED_BY_DEPENDENCY" if code in dependency_exclusions else "UNSUPPORTED" if c and c.get("activation") == "UNSUPPORTED" else pvs1["status"] if pvs1 else status if c else "NOT_EVALUATED"
         rows.append({"code": code, "engine_status": status, "display_status": display,
-                     "candidate_active": {"MET": True, "NOT_MET": False}.get(status),
+                     "candidate_active": pvs1.get("active") if pvs1 else {"MET": True, "NOT_MET": False}.get(status),
                      "effective_active": (code in classification["included_criteria"]) if recorded_effective else None,
                      "candidate_strength": c.get("strength") if c else None,
                      "effective_strength": strengths.get(code), "excluded": excluded.get(code),

@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field
 from helper_next.api.acmg import client_call, entry
 from helper_next.core import acmg_store as store
 from helper_next.core.acmg_client import digest, EngineError
-from helper_next.core.acmg_task22 import Task22Client, provider_contract
+from helper_next.core.acmg_task22 import Task22Client
+from helper_next.core.acmg_evidence import prepare_evidence
 from helper_next.core.analysis_history import now
+from helper_next.core.acmg_mechanism_models import CachePolicy
 
 
 router = APIRouter(prefix="/api/acmg", tags=["acmg-task22"])
@@ -19,9 +21,13 @@ router = APIRouter(prefix="/api/acmg", tags=["acmg-task22"])
 
 class EvaluationRequest(BaseModel):
     protocol: dict
+    scientific_profile: dict | None = None
     corrections: list = Field(default_factory=list)
     node_specializations: list = Field(default_factory=list)
     parent_id: str = ""
+    mechanism_cache_policy: CachePolicy | None = None
+    mechanism_snapshot_id: str | None = None
+    mechanism_allelic_requirement: str | None = None
 
 
 @router.get("/task22/discovery")
@@ -31,23 +37,31 @@ def discovery():
 
 def inputs(identifier, payload, engine):
     workspace = entry(identifier, "workspace")
-    contract = provider_contract(workspace["document"], payload.corrections)
-    validated = engine.invoke("/v1/evidence-contracts/validate", contract)
+    mechanism_request = None
+    if payload.mechanism_cache_policy:
+        mechanism_request = {"cache_policy": payload.mechanism_cache_policy, "snapshot_id": payload.mechanism_snapshot_id}
+        if payload.mechanism_allelic_requirement:
+            mechanism_request["allelic_requirement"] = payload.mechanism_allelic_requirement
+    elif payload.mechanism_snapshot_id or payload.mechanism_allelic_requirement:
+        raise ValueError("Select an explicit mechanism cache policy")
+    built = prepare_evidence(engine, workspace["document"], payload.protocol, payload.corrections,
+                             mechanism_request=mechanism_request)
+    validated = built["validated"]
     request = {"evidence": validated["contract"], "protocol": payload.protocol,
                "node_specializations": payload.node_specializations, "usage": "RESEARCH"}
-    return request, validated
+    if payload.scientific_profile is not None:
+        request["scientific_profile"] = payload.scientific_profile
+    audit = {k: v for k, v in built.items() if k not in ("contract", "validated", "packet")}
+    return request, validated, audit
 
 
 @router.post("/workspaces/{identifier}/criteria/preflight")
 def preflight(identifier: str, payload: EvaluationRequest):
     def execute():
         engine = Task22Client()
-        request, validated = inputs(identifier, payload, engine)
-        contract = request["evidence"]
-        requirements = engine.invoke("/v1/evidence/requirements", {
-            "variant": contract["variant"], "context": contract["context"],
-            "protocol": payload.protocol, "supplied": contract})
-        return {"validated": validated, "requirements": requirements, "correlation_id": engine.correlation_id}
+        request, validated, audit = inputs(identifier, payload, engine)
+        return {"validated": validated, "requirements": audit["requirements"], "builder": audit,
+                "correlation_id": engine.correlation_id}
     return client_call(execute)
 
 
@@ -57,12 +71,12 @@ def evaluate(identifier: str, payload: EvaluationRequest):
         if payload.parent_id and entry(payload.parent_id, "criteria_evaluation")["workspace_id"] != identifier:
             raise ValueError("Previous evaluation belongs to another workspace")
         engine = Task22Client()
-        request, validated = inputs(identifier, payload, engine)
+        request, validated, audit = inputs(identifier, payload, engine)
         result = engine.invoke("/v1/criteria/evaluate", request)
         # Save the automatic result before fetching bundles: an interrupted GET
         # must never cause loss or a repeated scientific evaluation.
         saved = store.save("criteria_evaluation", {
-            "request": request, "validated": validated, "engine_result": result,
+            "request": request, "validated": validated, "engine_result": result, "builder": audit,
             "corrections": payload.corrections, "parent_id": payload.parent_id,
             "provenance": {"correlation_id": engine.correlation_id, "engine_url": engine.url,
                            "evaluated_at": now(), "schema": "criteria-matrix-1.0",
@@ -110,15 +124,17 @@ def node(identifier: str, criterion: str, node_id: str):
 
 @router.post("/workspaces/{identifier}/criteria/compare", status_code=201)
 def compare(identifier: str, payload: EvaluationRequest):
+    if payload.scientific_profile is not None:
+        raise HTTPException(422, "A scientific profile binds one strategy; use single-protocol evaluation or compare the standard protocols")
     def execute():
         engine = Task22Client()
-        request, validated = inputs(identifier, payload, engine)
+        request, validated, audit = inputs(identifier, payload, engine)
         discovered = engine.discover_task22()
         configurations = [dict(request, protocol=m["selection"],
                                node_specializations=payload.node_specializations if m["selection"]["protocol"] == "CLINGEN_GENERAL" else [])
                           for m in discovered["protocols"]]
         result = engine.invoke("/v1/criteria/compare", {"evidence": request["evidence"], "configurations": configurations})
-        saved = store.save("criteria_comparison", {"request": request, "validated": validated,
+        saved = store.save("criteria_comparison", {"request": request, "validated": validated, "builder": audit,
                            "engine_result": result, "correlation_id": engine.correlation_id}, identifier)
         for matrix in result["results"]:
             store.save("criteria_artifacts", {"result_id": saved["id"], "protocol": matrix["protocol"],
@@ -205,12 +221,16 @@ def export(identifier: str, format: str):
     elif format == "csv":
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["criterion", "status", "strength", "protocol", "version", "rule", "rationale", "execution_id", "manual_reviews"])
+        writer.writerow(["criterion", "status", "strength", "protocol", "version", "rule", "rationale", "execution_id", "manual_reviews",
+                         "calculated_strength", "applied_strength", "mechanism_confidence", "classification_eligible", "requires_review", "warnings"])
         for matrix in result.get("results", [result]):
             for c in matrix["criteria"]:
                 cells = [c["criterion_id"], c["activation_status"], json.dumps(c["assigned_strength"]),
                          matrix["protocol"]["protocol"], matrix["protocol"]["version"], c["rule"]["rule_id"], c["rationale"],
                          c["execution"]["execution_id"], json.dumps([e["document"] for e in reviews if e["document"]["criterion"] == c["criterion_id"]])]
+                evaluation = c.get("pvs1_evaluation") or {}
+                cells.extend(evaluation.get(key, "") for key in ("calculated_strength", "applied_strength", "mechanism_confidence", "classification_eligible", "requires_review"))
+                cells.append(json.dumps(c.get("warnings", [])))
                 writer.writerow(["'" + str(x) if str(x).startswith(("=", "+", "-", "@")) else x for x in cells])
         content, media, suffix = output.getvalue(), "text/csv", "csv"
     else:

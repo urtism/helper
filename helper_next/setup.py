@@ -1,12 +1,15 @@
-from setuptools import find_packages, setup
+from setuptools import find_namespace_packages, setup
 
 
 setup(
     name="helper-next",
     version="0.1.0",
     description="Local web interface prototype for Helper",
-    packages=find_packages("src"),
-    package_dir={"": "src"},
+    packages=find_namespace_packages(
+        "src", include=["helper_next*", "helper_variants*", "helper_prioritization*"],
+        exclude=["*.__pycache__*"],
+    ) + ["pvs1"],
+    package_dir={"": "src", "pvs1": "../pvs1"},
     package_data={
         "helper_next": ["web/static/*"],
         "helper_variants": ["web/static/*"],

@@ -160,7 +160,8 @@ process INDEL_REALIGNMENT {
 
     script:
     def java_bin = gatk3_java_cmd ?: (gatk3_java_home ? "${gatk3_java_home}/bin/java" : 'java')
-    def java_cmd = gatk3_path.toString().endsWith('.jar') ? "${java_bin} -Xmx${task.memory.toGiga()}g -jar ${gatk3_path}" : gatk3_path
+    def java_heap_mb = (task.memory.toMega() * 4 / 5) as int
+    def java_cmd = gatk3_path.toString().endsWith('.jar') ? "${java_bin} -Xmx${java_heap_mb}m -jar ${gatk3_path}" : gatk3_path
     def mills_arg = mills_path ? "-known ${mills_path}" : ''
     def target_arg = target_intervals ? "-L ${target_intervals}" : ''
     """
@@ -251,7 +252,8 @@ process BQ_RECALIBRATION {
 
     script:
     def java_bin = gatk3_java_cmd ?: (gatk3_java_home ? "${gatk3_java_home}/bin/java" : 'java')
-    def java_cmd = gatk3_path.toString().endsWith('.jar') ? "${java_bin} -Xmx${task.memory.toGiga()}g -jar ${gatk3_path}" : gatk3_path
+    def java_heap_mb = (task.memory.toMega() * 4 / 5) as int
+    def java_cmd = gatk3_path.toString().endsWith('.jar') ? "${java_bin} -Xmx${java_heap_mb}m -jar ${gatk3_path}" : gatk3_path
     def dbsnp_arg = dbsnp_path ? "-knownSites ${dbsnp_path}" : ''
     def mills_arg = mills_path ? "-knownSites ${mills_path}" : ''
     def target_arg = target_intervals ? "-L ${target_intervals}" : ''

@@ -279,6 +279,9 @@ def priority_context(result):
         "population_frequency_status": status,
         "population_frequency_source": "gnomAD genomes v{}".format(result.get("release") or ""),
     }
+    coverage = result.get("coverage") or {}
+    context["population_coverage_available"] = bool(coverage.get("available"))
+    context["population_coverage_adequate"] = bool(coverage.get("adequate"))
     if status == "observed" and not result.get("filters"):
         values = [result.get("af"), result.get("max_population_af")]
         numeric = [float(value) for value in values if value is not None]

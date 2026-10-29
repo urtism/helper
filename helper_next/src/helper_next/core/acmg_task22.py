@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from jsonschema import Draft202012Validator
 
-from helper_next.core.acmg_client import ACMGClient, EngineError, digest
+from helper_next.core.acmg_client import ACMGClient, EngineError, digest, profile_reference
 from helper_next.core.analysis_history import now
 
 
@@ -21,6 +21,7 @@ class Task22Client(ACMGClient):
     def __init__(self):
         super().__init__()
         self.openapi = None
+        self.contract_schema = None
         self.transport_requests = []
 
     def call(self, path, payload=None, allow_array=False):
@@ -51,6 +52,8 @@ class Task22Client(ACMGClient):
         operation = self.openapi.get("paths", {}).get(template or path, {}).get(method)
         if not operation:
             raise EngineError("UNSUPPORTED_TASK22_API", "Required Task 22 operation is unavailable", 409)
+        if path == "/v1/evidence-contracts/validate" and payload is not None:
+            self.require_contract_version(payload["schema_version"])
         if payload is not None:
             self.validate(payload, operation["requestBody"]["content"]["application/json"]["schema"])
         response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
@@ -61,6 +64,20 @@ class Task22Client(ACMGClient):
         logger.info(json.dumps({"event": "acmg_http_completed", "correlation_id": self.correlation_id,
                                "engine_request_id": self.last_request_id, "operation": template or path, "method": method.upper()}))
         return result
+
+    def require_contract_version(self, version):
+        """Check the Engine declaration before sending clinical evidence.
+
+        Never silently downgrade a confidence assessment to the legacy contract.
+        """
+        if self.contract_schema is None:
+            self.contract_schema = self.invoke("/v1/evidence-contracts/schema")
+        declaration = self.contract_schema.get("properties", {}).get("schema_version", {})
+        supported = declaration.get("enum", [declaration.get("const")])
+        if version not in supported:
+            raise EngineError("ENGINE_CONTRACT_VERSION_UNSUPPORTED",
+                              "ACMG Engine does not declare support for " + version,
+                              409, {"required": version, "supported": [v for v in supported if v]})
 
     def discover_task22(self):
         health = self.call("/health")
@@ -77,8 +94,11 @@ class Task22Client(ACMGClient):
         manifests = [self.invoke("/v1/criteria-protocols/{}/{}".format(p, quote(version, safe="")),
                                 template="/v1/criteria-protocols/{protocol}/{version}") for p in PROTOCOLS]
         schema = self.invoke("/v1/evidence-contracts/schema")
-        if schema.get("properties", {}).get("schema_version", {}).get("const") != "evidence-contract-1.0":
-            raise EngineError("INCOMPATIBLE_SCHEMA", "Requires evidence-contract-1.0", 409)
+        self.contract_schema = schema
+        version_schema = schema.get("properties", {}).get("schema_version", {})
+        versions = version_schema.get("enum", [version_schema.get("const")])
+        if not {"evidence-contract-1.0", "evidence-contract-1.1"}.intersection(versions):
+            raise EngineError("INCOMPATIBLE_SCHEMA", "Requires evidence-contract-1.0 or 1.1", 409)
         overrides, override_discovery = [], {"status": "AVAILABLE"}
         try:
             overrides = self.invoke("/v1/criteria/tree-overrides")
@@ -86,8 +106,11 @@ class Task22Client(ACMGClient):
             # Current engine includes a legacy /criteria/{code} route before
             # this static route. OpenAPI presence is not proof of reachability.
             override_discovery = {"status": "UNAVAILABLE", "code": exc.code, "message": str(exc)}
+        profiles = self.invoke("/v1/profiles")["profiles"] if "/v1/profiles" in self.openapi.get("paths", {}) else []
         return {"health": health, "capabilities": capabilities, "protocols": manifests,
-                "contract_schema": schema, "schemas": self.openapi.get("components", {}).get("schemas", {}),
+                "scientific_profiles": [{**profile, "reference": profile_reference(profile)} for profile in profiles],
+                "contract_schema": schema, "supported_contract_versions": versions,
+                "schemas": self.openapi.get("components", {}).get("schemas", {}),
                 "tree_overrides": [{"definition": override, "reference": {
                     "profile_id": override["profile_id"], "version": override["version"], "artifact_digest": digest(override)}}
                     for override in overrides], "tree_override_discovery": override_discovery,
@@ -160,12 +183,24 @@ def canonical_import(item):
                         "canonical_dinucleotide", "mane_annotation", "masked", "maximum_distance", "reference_transcript",
                         "disease_relevant_splicing", "applicability_provenance"):
                 observation["spliceai"].setdefault(key, None)
+    elif value["kind"] == "EXTENSION" and observation.get("schema_id") in ("helper-gene-disease-candidates", "helper-mechanism-evidence-matrix", "helper-mechanism-assessment"):
+        # Existing engine extension model; candidates are never typed PVS1 mechanisms.
+        pass
+    elif value["kind"] == "PVS1":
+        # The specialized transformer emits the pinned contract serialization;
+        # authoritative structure/semantics are validated by the engine.
+        mechanism = observation.get("mechanism")
+        if mechanism:
+            mechanism["gene"].setdefault("label", None)
+            mechanism["disease"].setdefault("label", None)
+        for effect in observation.get("transcript_effects", []):
+            effect["transcript"]["gene"].setdefault("label", None)
     else:
         raise ValueError("Unsupported automatic evidence mapping; use a validated provider envelope")
     return value
 
 
-def provider_contract(workspace, additions=()):
+def provider_contract(workspace, additions=(), schema_version=None):
     packet = workspace["normalized_evidence"]
     snapshot = packet["snapshot"]
     variant = snapshot["variant"]
@@ -194,6 +229,16 @@ def provider_contract(workspace, additions=()):
                 raise ValueError("Unknown replacement evidence ID")
             contract["evidence"] = [e for e in contract["evidence"] if e["value"]["id"] != replaces]
         contract["evidence"].append(envelope)
+    if any((e["value"]["kind"] == "PVS1" and (e["value"]["observation"].get("mechanism") or {}).get("confidence_assessment"))
+           or (e["value"]["kind"] == "EXTENSION" and e["value"]["observation"].get("schema_id") == "helper-mechanism-assessment")
+           for e in contract["evidence"]):
+        contract["schema_version"] = "evidence-contract-1.1"
+    if schema_version is not None:
+        if schema_version not in {"evidence-contract-1.0", "evidence-contract-1.1"}:
+            raise ValueError("Unsupported evidence contract version")
+        if schema_version == "evidence-contract-1.0" and contract["schema_version"] != schema_version:
+            raise EngineError("CONFIDENCE_REQUIRES_CONTRACT_1_1", "Mechanism confidence cannot be downgraded to EvidenceContract 1.0", 409)
+        contract["schema_version"] = schema_version
     return contract
 
 

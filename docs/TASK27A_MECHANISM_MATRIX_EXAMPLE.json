@@ -1,0 +1,378 @@
+{
+  "schema_version": "helper-mechanism-matrix-1.0",
+  "identity": {
+    "gene_id": "HGNC:1",
+    "gene_hgnc_id": "HGNC:1",
+    "gene_symbol": "GENE_X",
+    "gene_aliases": [],
+    "alternative_gene_ids": [],
+    "disease_id": "MONDO:1",
+    "disease_name": null,
+    "disease_aliases": [],
+    "disease_alternative_names": [
+      "Synthetic disease"
+    ],
+    "allelic_requirement": "UNKNOWN"
+  },
+  "candidate_mechanisms": [
+    "LOSS_OF_FUNCTION"
+  ],
+  "hypotheses": [
+    {
+      "mechanism": "LOSS_OF_FUNCTION",
+      "allelic_requirement": "MONOALLELIC_AUTOSOMAL",
+      "supporting_evidence_refs": [
+        "me-f389cff7396205812f33717646530c0f77523da1903346dc38d44e07b2fa9b0b"
+      ],
+      "contradictory_evidence_refs": []
+    }
+  ],
+  "resolution_status": "SUPPORTED_BY_DIRECT_ASSERTION",
+  "reconciliation_status": "CANDIDATE_ASSERTIONS_RECORDED",
+  "issues": [
+    "DIFFERENT_EVIDENCE_LEVELS",
+    "SOURCE_UNAVAILABLE"
+  ],
+  "direct_evidence": [
+    {
+      "evidence_id": "me-f389cff7396205812f33717646530c0f77523da1903346dc38d44e07b2fa9b0b",
+      "source_record_ref": "msr-6dbe6817be0112f9df25743940468595c82815cea3f8f159ec23e605628b81a5",
+      "source": "g2p",
+      "source_record_id": "G2P-1",
+      "source_record_version": null,
+      "source_dataset_version": "synthetic-1",
+      "gene_id": "HGNC:1",
+      "disease_ids": [
+        "MONDO:1"
+      ],
+      "allelic_requirement": "MONOALLELIC_AUTOSOMAL",
+      "original_allelic_requirement": "monoallelic_autosomal",
+      "evidence_category": "DIRECT_MECHANISM_ASSERTION",
+      "asserted_mechanism": "LOSS_OF_FUNCTION",
+      "original_mechanism": "loss of function",
+      "mechanism_detail": null,
+      "raw_assertion": {
+        "allelic_requirement": "monoallelic_autosomal",
+        "confidence": "definitive",
+        "disease_curie": "MONDO:1",
+        "disease_mim": "",
+        "disease_name": "Synthetic disease",
+        "g2p_id": "G2P-1",
+        "gene_curie": "HGNC:1",
+        "gene_symbol": "GENE_X",
+        "last_reviewed": "2026-01-01",
+        "mechanism": "loss of function",
+        "mechanism_category": "",
+        "mechanism_support": "observed",
+        "publications": "PMID:1",
+        "record_url": "https://example.test/G2P-1",
+        "variant_consequence": "frameshift_variant"
+      },
+      "evidence_direction": "SUPPORTING",
+      "evidence_directness": "DIRECT",
+      "applicability": "EXACT",
+      "assertion_basis": "observed",
+      "source_review_status": null,
+      "source_classification": "definitive",
+      "references": [
+        "PMID:1"
+      ],
+      "retrieved_at": "2026-01-01T12:00:00Z",
+      "source_updated_at": "2026-01-01",
+      "source_record_hash": "f38b92c3c825ab58474abcb4ab8e0156d445520d52a03cfacd364f4a605dc1f9",
+      "raw_record_reference": "msr-6dbe6817be0112f9df25743940468595c82815cea3f8f159ec23e605628b81a5",
+      "origin_group": "https://example.test/G2P-1",
+      "normalization_version": "mechanism-normalizer-1.0"
+    }
+  ],
+  "contextual_evidence": [
+    {
+      "evidence_id": "me-5cf761eeecd0f457a3666b9fe6371e54bdc38868b1a42b4b20beb32f64f1db90",
+      "source_record_ref": "msr-c07d94d7b7731d914b200f9941cabba7258de0e18424851ed8758f82630d10ff",
+      "source": "gencc",
+      "source_record_id": "SGC-1",
+      "source_record_version": "2",
+      "source_dataset_version": "synthetic-1",
+      "gene_id": "HGNC:1",
+      "disease_ids": [
+        "MONDO:1"
+      ],
+      "allelic_requirement": "AUTOSOMAL_DOMINANT",
+      "original_allelic_requirement": "Autosomal dominant",
+      "evidence_category": "GENE_DISEASE_VALIDITY",
+      "asserted_mechanism": "UNKNOWN",
+      "original_mechanism": null,
+      "mechanism_detail": null,
+      "raw_assertion": {
+        "classification_title": "Strong",
+        "disease_curie": "MONDO:1",
+        "disease_original_curie": "",
+        "disease_title": "Synthetic disease",
+        "gene_curie": "HGNC:1",
+        "gene_symbol": "GENE_X",
+        "moi_title": "Autosomal dominant",
+        "pmids": "PMID:1",
+        "public_report_url": "https://example.test/assertion",
+        "sgc_id": "SGC-1",
+        "submitted_run_date": "2026-01-01",
+        "submitter_title": "Synthetic submitter",
+        "version_number": 2
+      },
+      "evidence_direction": "CONTEXTUAL",
+      "evidence_directness": "CONTEXTUAL",
+      "applicability": "EXACT",
+      "assertion_basis": "NOT_RECORDED",
+      "source_review_status": null,
+      "source_classification": "Strong",
+      "references": [
+        "PMID:1"
+      ],
+      "retrieved_at": "2026-01-01T12:00:00Z",
+      "source_updated_at": "2026-01-01",
+      "source_record_hash": "2fdf2fc17df4359d1efc83f6935ea5dc486b6d61852ed595b1d7ecdbadbdb1d1",
+      "raw_record_reference": "msr-c07d94d7b7731d914b200f9941cabba7258de0e18424851ed8758f82630d10ff",
+      "origin_group": "https://example.test/assertion",
+      "normalization_version": "mechanism-normalizer-1.0"
+    },
+    {
+      "evidence_id": "me-63d245d8f0e2736bfb0f420e1e4fe7ecabc788b1fa44d634aaeda1efdbe4c95f",
+      "source_record_ref": "msr-ee42e3bcc2b92baf484780eacf39c204e49eace25b0a10ddb116c50f7a7aaf38",
+      "source": "clingen_dosage",
+      "source_record_id": "123:haploinsufficiency",
+      "source_record_version": null,
+      "source_dataset_version": "synthetic-1",
+      "gene_id": "NCBI_GENE:123",
+      "disease_ids": [],
+      "allelic_requirement": "UNKNOWN",
+      "original_allelic_requirement": null,
+      "evidence_category": "DOSAGE_SENSITIVITY",
+      "asserted_mechanism": "UNKNOWN",
+      "original_mechanism": null,
+      "mechanism_detail": null,
+      "raw_assertion": {
+        "assessment": "haploinsufficiency",
+        "gene_id": "123",
+        "gene_symbol": "GENE_X",
+        "hi_disease_id": "",
+        "hi_score": "3",
+        "report_url": "https://example.test/dosage",
+        "ts_disease_id": "",
+        "ts_score": "0"
+      },
+      "evidence_direction": "UNRESOLVED_APPLICABILITY",
+      "evidence_directness": "INDIRECT",
+      "applicability": "UNRESOLVED_GENE_MAPPING",
+      "assertion_basis": "NOT_RECORDED",
+      "source_review_status": null,
+      "source_classification": null,
+      "references": [],
+      "retrieved_at": "2026-01-01T12:00:00Z",
+      "source_updated_at": null,
+      "source_record_hash": "c19cdd5987927af879307748785edcdac2342713b1feb5fa65168508933a3a4e",
+      "raw_record_reference": "msr-ee42e3bcc2b92baf484780eacf39c204e49eace25b0a10ddb116c50f7a7aaf38",
+      "origin_group": "https://example.test/dosage",
+      "normalization_version": "mechanism-normalizer-1.0"
+    },
+    {
+      "evidence_id": "me-ae4a6f2f6d9a8ff2dbbfd91c4dee410a0fc81f7a869f819f2ba447579de4acdf",
+      "source_record_ref": "msr-88fea199ad6e73d6e035c7a153f64e34151f355f3ca6a7e061de1709427af8fc",
+      "source": "gnomad",
+      "source_record_id": "ENSG000001",
+      "source_record_version": null,
+      "source_dataset_version": "synthetic-1",
+      "gene_id": "ENSEMBL:ENSG000001",
+      "disease_ids": [],
+      "allelic_requirement": "UNKNOWN",
+      "original_allelic_requirement": null,
+      "evidence_category": "POPULATION_CONSTRAINT",
+      "asserted_mechanism": "UNKNOWN",
+      "original_mechanism": null,
+      "mechanism_detail": null,
+      "raw_assertion": {
+        "available": 1,
+        "gene_id": "ENSG000001",
+        "gene_symbol": "GENE_X",
+        "loeuf": 0.2,
+        "lof_expected": 20,
+        "lof_observed": null,
+        "lof_oe": null,
+        "transcript_id": "ENST000001.2"
+      },
+      "evidence_direction": "UNRESOLVED_APPLICABILITY",
+      "evidence_directness": "INDIRECT",
+      "applicability": "UNRESOLVED_GENE_MAPPING",
+      "assertion_basis": "NOT_RECORDED",
+      "source_review_status": null,
+      "source_classification": null,
+      "references": [],
+      "retrieved_at": "2026-01-01T12:00:00Z",
+      "source_updated_at": null,
+      "source_record_hash": "eb10674f161a3eee24bc2d3162f1fa0de2f20837b83bac7256f4ef0ecb7acac4",
+      "raw_record_reference": "msr-88fea199ad6e73d6e035c7a153f64e34151f355f3ca6a7e061de1709427af8fc",
+      "origin_group": "gnomad:ENSG000001",
+      "normalization_version": "mechanism-normalizer-1.0"
+    },
+    {
+      "evidence_id": "me-dacbe96a55b018f2b9b84f3cf6220a8c77c7d4b040ff7cd5f1c9026bb447bc46",
+      "source_record_ref": "msr-7555ebebf60974ea7c9179667e41f70e644b50a22c1cf47c1c732eba1aae430b",
+      "source": "clingen_dosage",
+      "source_record_id": "123:triplosensitivity",
+      "source_record_version": null,
+      "source_dataset_version": "synthetic-1",
+      "gene_id": "NCBI_GENE:123",
+      "disease_ids": [],
+      "allelic_requirement": "UNKNOWN",
+      "original_allelic_requirement": null,
+      "evidence_category": "DOSAGE_SENSITIVITY",
+      "asserted_mechanism": "UNKNOWN",
+      "original_mechanism": null,
+      "mechanism_detail": null,
+      "raw_assertion": {
+        "assessment": "triplosensitivity",
+        "gene_id": "123",
+        "gene_symbol": "GENE_X",
+        "hi_disease_id": "",
+        "hi_score": "3",
+        "report_url": "https://example.test/dosage",
+        "ts_disease_id": "",
+        "ts_score": "0"
+      },
+      "evidence_direction": "UNRESOLVED_APPLICABILITY",
+      "evidence_directness": "INDIRECT",
+      "applicability": "UNRESOLVED_GENE_MAPPING",
+      "assertion_basis": "NOT_RECORDED",
+      "source_review_status": null,
+      "source_classification": null,
+      "references": [],
+      "retrieved_at": "2026-01-01T12:00:00Z",
+      "source_updated_at": null,
+      "source_record_hash": "265fc26a8ce212f35f82f058f3a4b0ba1501581ffed5f21b5cd8dd71a3b89d76",
+      "raw_record_reference": "msr-7555ebebf60974ea7c9179667e41f70e644b50a22c1cf47c1c732eba1aae430b",
+      "origin_group": "https://example.test/dosage",
+      "normalization_version": "mechanism-normalizer-1.0"
+    }
+  ],
+  "contradictory_evidence": [],
+  "missing_evidence": [
+    "Explicit contextual mechanism review and human attestation are not recorded"
+  ],
+  "gene_disease_validity": [
+    {
+      "allelic_requirement": "AUTOSOMAL_DOMINANT",
+      "applicability": "EXACT",
+      "classification": "Strong",
+      "evidence_id": "me-5cf761eeecd0f457a3666b9fe6371e54bdc38868b1a42b4b20beb32f64f1db90"
+    }
+  ],
+  "mapping_evidence": [],
+  "source_status": [
+    {
+      "source": "g2p",
+      "status": "AVAILABLE",
+      "stale": false,
+      "checked_at": "2026-10-26T14:34:35.008729+00:00",
+      "source_updated_at": null,
+      "dataset_version": "synthetic-1",
+      "source_url": "https://example.test/g2p",
+      "etag": null,
+      "last_modified": null,
+      "refresh_scope": "LOCAL_INDEX",
+      "error_code": null,
+      "limitations": []
+    },
+    {
+      "source": "gencc",
+      "status": "AVAILABLE",
+      "stale": false,
+      "checked_at": "2026-10-26T14:34:35.010348+00:00",
+      "source_updated_at": null,
+      "dataset_version": "synthetic-1",
+      "source_url": "https://example.test/gencc",
+      "etag": null,
+      "last_modified": null,
+      "refresh_scope": "LOCAL_INDEX",
+      "error_code": null,
+      "limitations": []
+    },
+    {
+      "source": "clingen_dosage",
+      "status": "AVAILABLE",
+      "stale": false,
+      "checked_at": "2026-10-26T14:34:35.011411+00:00",
+      "source_updated_at": null,
+      "dataset_version": "synthetic-1",
+      "source_url": "https://example.test/clingen_dosage",
+      "etag": null,
+      "last_modified": null,
+      "refresh_scope": "LOCAL_INDEX",
+      "error_code": null,
+      "limitations": []
+    },
+    {
+      "source": "gnomad",
+      "status": "AVAILABLE",
+      "stale": false,
+      "checked_at": "2026-10-26T14:34:35.012586+00:00",
+      "source_updated_at": null,
+      "dataset_version": "synthetic-1",
+      "source_url": "https://example.test/gnomad",
+      "etag": null,
+      "last_modified": null,
+      "refresh_scope": "LOCAL_INDEX",
+      "error_code": null,
+      "limitations": []
+    },
+    {
+      "source": "clinvar",
+      "status": "NOT_SUPPORTED",
+      "stale": false,
+      "checked_at": "2026-10-26T14:34:35.013319+00:00",
+      "source_updated_at": null,
+      "dataset_version": "synthetic-1",
+      "source_url": "https://example.test/clinvar",
+      "etag": null,
+      "last_modified": null,
+      "refresh_scope": "NOT_SUPPORTED",
+      "error_code": null,
+      "limitations": [
+        "No verified gene-disease lookup in the existing allele-scoped adapter"
+      ]
+    }
+  ],
+  "provenance": {
+    "created_at": "2026-10-26T14:34:35.023350+00:00",
+    "mapping_version": "source-cross-references-1.0",
+    "matrix_hash": "309657d437005794dc9071065f9489ca24bbe7442dc129d093f1c6c1f44035c0",
+    "normalization_version": "mechanism-normalizer-1.0",
+    "reconciliation_version": "mechanism-reconciliation-1.0",
+    "rules": {
+      "candidate_policy": "Explicit G2P molecular-mechanism assertion with demonstrated gene/disease scope",
+      "conflict_policy": "Distinct LoF/GoF/DN assertions in the same exact scope; preserve all hypotheses",
+      "independence_policy": "Shared origin references retained; no voting, counting, scores or inference from variant classes",
+      "inheritance_policy": "Lexical aliases only; separate exact allelic-requirement groups",
+      "mapping_policy": "Source-record cross-references; reject ambiguous alternate primary disease mappings"
+    },
+    "source_record_hashes": {
+      "msr-6dbe6817be0112f9df25743940468595c82815cea3f8f159ec23e605628b81a5": "f38b92c3c825ab58474abcb4ab8e0156d445520d52a03cfacd364f4a605dc1f9",
+      "msr-7555ebebf60974ea7c9179667e41f70e644b50a22c1cf47c1c732eba1aae430b": "265fc26a8ce212f35f82f058f3a4b0ba1501581ffed5f21b5cd8dd71a3b89d76",
+      "msr-88fea199ad6e73d6e035c7a153f64e34151f355f3ca6a7e061de1709427af8fc": "eb10674f161a3eee24bc2d3162f1fa0de2f20837b83bac7256f4ef0ecb7acac4",
+      "msr-c07d94d7b7731d914b200f9941cabba7258de0e18424851ed8758f82630d10ff": "2fdf2fc17df4359d1efc83f6935ea5dc486b6d61852ed595b1d7ecdbadbdb1d1",
+      "msr-ee42e3bcc2b92baf484780eacf39c204e49eace25b0a10ddb116c50f7a7aaf38": "c19cdd5987927af879307748785edcdac2342713b1feb5fa65168508933a3a4e"
+    },
+    "source_record_refs": [
+      "msr-6dbe6817be0112f9df25743940468595c82815cea3f8f159ec23e605628b81a5",
+      "msr-7555ebebf60974ea7c9179667e41f70e644b50a22c1cf47c1c732eba1aae430b",
+      "msr-88fea199ad6e73d6e035c7a153f64e34151f355f3ca6a7e061de1709427af8fc",
+      "msr-c07d94d7b7731d914b200f9941cabba7258de0e18424851ed8758f82630d10ff",
+      "msr-ee42e3bcc2b92baf484780eacf39c204e49eace25b0a10ddb116c50f7a7aaf38"
+    ]
+  },
+  "snapshot_id": "mss-e291eeacf49fbfd9946983baf496840d3a444fd4b0c212c0a87b8e91579d8b91",
+  "review_status": "NOT_REVIEWED",
+  "warnings": [
+    "Candidate assertions are not clinical validation or PVS1 applicability",
+    "Inheritance groups remain separate; AD/AR do not substitute for monoallelic/biallelic",
+    "Dosage and constraint are context; no LOEUF thresholds, source majority or variant-class inference applied",
+    "Shared origin groups do not establish independent observations; no evidence counts are used"
+  ]
+}

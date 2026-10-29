@@ -34,7 +34,10 @@ def import_cached(detail, identity, acquired_at):
 
     checksum = digest(raw)
     limitations = ["Coverage adequacy is the existing HELPER locus heuristic, not ancestry representation or scientific approval",
+                   "Release identifies the dataset configured by the existing client, not an upstream version attestation",
                    "Counts and ancestry-specific coverage not returned by the source remain unknown"]
+    if not raw.get("retrieved_at"):
+        limitations.append("Source retrieval time not recorded; acquired_at is the HELPER import time")
     provenance = {"source": "HELPER cached gnomAD genomes lookup", "source_identifier": "gnomAD",
                   "source_version": raw["release"], "acquired_at": raw.get("retrieved_at") or acquired_at,
                   "extraction_method": "DIRECT_IMPORT", "software_version": "helper-gnomad-frequency-v1",

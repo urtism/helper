@@ -899,17 +899,129 @@ def query_gene(gene_symbol, hgnc_id="", database=None):
         _enrich_associations(
             connection, associations, str(gene_symbol).strip(), normalized_hgnc
         )
+        # Independent of GenCC: a G2P-only disease must remain discoverable.
+        g2p_rows = connection.execute(
+            "SELECT * FROM g2p_records WHERE " + where, (parameter,)
+        ).fetchall()
         gene_constraint = _query_gnomad_constraint(connection, gene_symbol)
         dosage_sensitivity = _query_clingen_dosage(connection, gene_symbol)
     return {
         "gene": gene_symbol, "hgnc_id": normalized_hgnc,
         "gene_identifiers": sorted({row["gene_curie"] for row in rows if row["gene_curie"]}),
         "associations": associations, "association_count": len(associations),
+        "g2p_records": _mechanism_summary(g2p_rows)["records"],
         "assertion_count": sum(len(item["assertions"]) for item in associations),
         "gene_constraint": gene_constraint,
         "dosage_sensitivity": dosage_sensitivity,
         "cache": status,
     }
+
+
+def mechanism_association_inventory(database=None):
+    """Consistent read-only inventory of already synchronized public indexes.
+
+    This enumerates cached rows, not a new source parser or synchronization.
+    Missing tables/metadata remain explicit for the bulk preflight.
+    """
+    path = Path(database or cache_path())
+    result = {"database": str(path), "metadata": {}, "tables": {}, "exists": path.is_file()}
+    if not path.is_file():
+        return result
+    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN")
+        tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "metadata" in tables:
+            result["metadata"] = dict(connection.execute("SELECT key,value FROM metadata"))
+        for table in ("assertions", "g2p_records", "clingen_dosage", "gnomad_constraints", "orpha_aliases"):
+            if table in tables:
+                result["tables"][table] = [dict(r) for r in connection.execute("SELECT * FROM " + table + " ORDER BY rowid")]
+    return result
+
+
+def mechanism_source_records(gene_id, gene_symbol="", database=None, sources=None):
+    """Targeted read of original cached public rows; no dataset downloads.
+
+    Unlike query_gene, this accessor does not group by disease name, apply
+    symbol fallback to stable IDs, or discard non-positive dosage scores.
+    """
+    selected = set(sources or ("g2p", "gencc", "clingen_dosage", "gnomad", "clinvar"))
+    database = Path(database or cache_path())
+    timestamp = datetime.now(timezone.utc).isoformat()
+    result = {s: {"source": s, "status": "CACHE_MISS", "records": [], "retrieved_at": timestamp}
+              for s in selected}
+    if "clinvar" in result:
+        result["clinvar"].update(status="NOT_SUPPORTED", refresh_scope="NOT_SUPPORTED",
+            limitations=["Existing ClinVar adapter is allele-scoped; no verified gene-disease lookup/index is available"])
+    if not database.is_file():
+        return result
+    with sqlite3.connect(str(database)) as connection:
+        connection.row_factory = sqlite3.Row
+        metadata = dict(connection.execute("SELECT key, value FROM metadata"))
+        if metadata.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError("Incompatible existing gene-phenotype index; synchronize it through its existing workflow")
+        if not gene_symbol:
+            symbols = {row[0] for row in connection.execute(
+                "SELECT gene_symbol FROM assertions WHERE gene_curie=? UNION SELECT gene_symbol FROM g2p_records WHERE gene_curie=?",
+                (gene_id, gene_id)) if row[0]}
+            if len(symbols) == 1:
+                gene_symbol = next(iter(symbols))
+        tables = {"g2p": ("g2p_records", "g2p_source_url"), "gencc": ("assertions", "source_url"),
+                  "clingen_dosage": ("clingen_dosage", "clingen_dosage_source_url"),
+                  "gnomad": ("gnomad_constraints", None)}
+        for source in sorted(selected.intersection(tables)):
+            table, url_key = tables[source]
+            packet = result[source]
+            if source in ("g2p", "gencc"):
+                rows = connection.execute("SELECT * FROM " + table + " WHERE gene_curie = ? ORDER BY rowid", (gene_id,)).fetchall()
+                if not metadata.get(url_key):
+                    packet["limitations"] = ["This dataset has not been loaded into the existing index"]
+                    continue
+            elif gene_symbol:
+                rows = connection.execute("SELECT * FROM " + table + " WHERE gene_symbol = ? COLLATE NOCASE", (gene_symbol,)).fetchall()
+                if source == "clingen_dosage" and not metadata.get(url_key):
+                    continue
+            else:
+                packet["limitations"] = ["Current gene symbol is unavailable for this existing symbol-scoped adapter"]
+                continue
+            originals = [dict(row) for row in rows]
+            if source in ("g2p", "gencc"):
+                for row in originals:
+                    ids = sorted({row.get(k) for k in ("disease_curie", "disease_mim", "disease_original_curie") if row.get(k)})
+                    if ids:
+                        placeholders = ",".join("?" for _ in ids)
+                        aliases = connection.execute(
+                            "SELECT * FROM orpha_aliases WHERE orpha_id IN (SELECT orpha_id FROM orpha_aliases WHERE identifier IN ("
+                            + placeholders + ")) ORDER BY identifier,orpha_id", tuple(ids)).fetchall()
+                        row["disease_mappings"] = [dict(a, source_url=metadata.get("orphadata_source_url")) for a in aliases]
+            if source == "clingen_dosage":
+                originals = [dict(row, assessment=kind) for row in originals for kind in ("haploinsufficiency", "triplosensitivity")]
+            index_acquired = metadata.get("updated_at")
+            packet.update(records=originals, status="AVAILABLE" if originals else "NO_RECORDS",
+                          retrieved_at=index_acquired or timestamp, source_updated_at=None,
+                          source_url=metadata.get(url_key) if url_key else GNOMAD_API_URL,
+                          dataset_version=None,
+                          limitations=["Original indexed source columns retained; upstream fields discarded by older imports cannot be recovered",
+                                       "Global scientific dataset release is not recorded by this index"])
+            if source != "gnomad":
+                packet["limitations"].append("Refresh rereads the existing local index; upstream dataset synchronization remains in the existing source workflow")
+            if source == "gencc":
+                packet.update(etag=metadata.get("etag") or None, last_modified=metadata.get("last_modified") or None)
+            if source == "gnomad":
+                index_acquired = originals[0]["updated_at"] if originals else None
+                packet["retrieved_at"] = index_acquired or timestamp
+                packet["limitations"].append("Existing adapter labels constraint as v4.1.2 without storing an upstream release token")
+                if originals and not originals[0]["available"]:
+                    packet.update(records=[], status="NO_RECORDS")
+                elif not originals:
+                    packet["status"] = "CACHE_MISS"  # No allele/gene lookup has been recorded.
+            try:
+                acquired = datetime.fromisoformat((index_acquired or "").replace("Z", "+00:00"))
+                age = datetime.now(timezone.utc) - acquired
+                packet["stale"] = age > (CONSTRAINT_MAX_AGE if source == "gnomad" else CACHE_MAX_AGE)
+            except (ValueError, TypeError):
+                packet["stale"] = True
+    return result
 
 
 def priority_contexts(gene_symbols, database=None):
@@ -1205,7 +1317,10 @@ def _mechanism_summary(rows):
         if accepted and mechanism != "unknown":
             mechanisms.add(mechanism)
         records.append({
-            "id": row["g2p_id"], "mechanism": mechanism,
+            "id": row["g2p_id"], "mechanism": mechanism, "original_mechanism": row["mechanism"],
+            "gene_id": row["gene_curie"], "gene_symbol": row["gene_symbol"],
+            "disease_id": row["disease_curie"], "disease_mim": row["disease_mim"],
+            "disease_name": row["disease_name"],
             "category": row["mechanism_category"], "support": row["mechanism_support"],
             "confidence": row["confidence"], "accepted": accepted,
             "allelic_requirement": row["allelic_requirement"],

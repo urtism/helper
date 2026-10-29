@@ -39,6 +39,13 @@ h3, h4, h5, p { margin: 0; }
 .run-drawer-body { border-top: 1px solid #dfe4ea; overflow-x: auto; padding: 10px; }
 .source-registry-dialog { background: #fff; border-radius: 10px; box-shadow: 0 18px 55px rgba(0, 0, 0, .28); max-height: calc(100vh - 40px); max-width: 1180px; overflow: auto; padding: 18px; width: 100%; }
 .source-registry-dialog-summary { color: #526174; font-size: 11px; margin: 10px 0 8px; }
+.molecular-impact-viewport { overflow-x: auto; }
+.transcript-molecular-impact table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.transcript-molecular-impact th, .transcript-molecular-impact td { border-bottom: 1px solid #dce3eb; padding: 8px; text-align: left; vertical-align: top; }
+.transcript-molecular-impact th { background: #edf2f6; }
+.transcript-molecular-impact tr[aria-current="true"] { background: #e5f1ff; }
+.transcript-molecular-impact small { display: block; margin-top: 4px; }
+.transcript-molecular-impact pre { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .source-registry-body { overflow-x: auto; }
 .source-registry-list { border: 1px solid #d9dfe7; border-radius: 6px; min-width: 1080px; overflow: hidden; }
 .source-registry-row { align-items: center; border-bottom: 1px solid #e4e9ef; display: grid; font-size: 11px; gap: 12px; grid-template-columns: minmax(135px, .8fr) minmax(180px, 1.1fr) minmax(235px, 1.45fr) 125px 125px 95px; min-height: 50px; padding: 7px 10px; }

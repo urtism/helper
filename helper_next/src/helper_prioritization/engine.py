@@ -42,6 +42,7 @@ def score_variant(variant, profile=None):
         _score_clinvar(variant, profile),
         _score_inheritance(variant, profile),
         _score_prediction(variant, profile),
+        _score_run_occurrence(variant, profile),
     ]
     applicable = [component for component in components if component["applicable"]]
     raw_score = round(sum(component["score"] for component in applicable), 1)
@@ -55,9 +56,6 @@ def score_variant(variant, profile=None):
     ]
     if not _values(variant.get("disease_mechanisms")):
         missing.append("Disease mechanism")
-    if (_values(variant.get("clinical_significance"))
-            and str(variant.get("clinvar_condition_match") or "unknown").casefold() == "unknown"):
-        missing.append("ClinVar condition match")
     if str(variant.get("compound_status") or "").casefold().replace(" ", "_") in {
             "phase_unknown", "possible"}:
         missing.append("Compound phase")
@@ -76,6 +74,66 @@ def score_variant(variant, profile=None):
         "missing_evidence": missing,
         "call_confidence": _call_confidence(variant),
     }
+
+
+def apply_clinvar_evidence(priority, evidence, profile=None):
+    """Recalculate ClinVar priority from exact-allele evidence returned by ClinVar."""
+    profile = profile or DEFAULT_PROFILE
+    evidence = evidence or {}
+    breakdown = evidence.get("classification_breakdown") or []
+    breakdown_labels = [
+        str(row.get("label") or "").strip()
+        for row in breakdown if isinstance(row, dict) and row.get("label")
+    ]
+    review_statuses = evidence.get("review_statuses") or []
+    stars = [
+        int(_number(row.get("stars")) or 0)
+        for row in review_statuses if isinstance(row, dict)
+    ]
+    classifications = breakdown_labels or _values(evidence.get("classifications"))
+    conflict = bool(evidence.get("has_conflict") or evidence.get("conflicts")) or any(
+        re.search(r"\bconflict(?:s|ing)?\b", label.casefold().replace("_", " "))
+        for label in _values(evidence.get("classifications"))
+    )
+    live_context = {
+        "clinical_significance": classifications,
+        "clinvar_conflict": conflict,
+        "clinvar_conflict_classifications": breakdown_labels + _values(evidence.get("conflicts")),
+        "clinvar_stars": max(stars or [0]),
+    }
+    component = _score_clinvar(live_context, profile)
+
+    updated = dict(priority or {})
+    components = [
+        dict(item) for item in updated.get("components", [])
+        if item.get("key") != "clinvar"
+    ]
+    components.append(component)
+    applicable = [item for item in components if item["applicable"]]
+    score = round(sum(item["score"] for item in applicable), 1)
+    maximum = sum(item["max_score"] for item in applicable)
+    normalized = round(max(0.0, min(100.0, score * 100.0 / maximum))) if maximum else 0
+    band = next(
+        label for threshold, label in profile["priority_bands"] if normalized >= threshold
+    )
+    missing = [
+        label for label in updated.get("missing_evidence", [])
+        if label not in {"ClinVar", "ClinVar condition match"}
+    ]
+    if component["applicable"] and not component["evaluated"]:
+        missing.append(component["label"])
+    updated.update({
+        "ruleset": profile["version"],
+        "score": score,
+        "max_score": maximum,
+        "normalized_score": normalized,
+        "band": band,
+        "components": components,
+        "formula": " + ".join(_format_number(item["score"]) for item in applicable)
+        + " = {} / {}".format(_format_number(score), maximum),
+        "missing_evidence": list(dict.fromkeys(missing)),
+    })
+    return updated
 
 
 def _component(key, label, score, maximum, reason, evaluated=True,
@@ -100,10 +158,29 @@ def _score_maf(variant, profile):
                 "Absent from a population resource with adequate coverage.",
                 evidence=["Population absence verified", "Maximum credible AF {}".format(threshold)],
             )
+        coverage_adequate = bool(variant.get("population_coverage_adequate"))
+        coverage_available = bool(variant.get("population_coverage_available"))
+        if coverage_adequate:
+            reason = (
+                "Population AF is unavailable despite adequate locus coverage; "
+                "a provisional positive rarity score is assigned."
+            )
+        elif coverage_available:
+            reason = (
+                "Population AF is unavailable and gnomAD locus coverage is inadequate; "
+                "a provisional positive rarity score is assigned."
+            )
+        else:
+            reason = (
+                "Population AF and usable gnomAD locus coverage are unavailable; "
+                "a provisional positive rarity score is assigned."
+            )
+        evidence = ["Maximum credible AF {}".format(threshold)]
+        if variant.get("population_frequency_source"):
+            evidence.append("Source: {}".format(variant["population_frequency_source"]))
         return _component(
-            "maf", "Population frequency", 0, maximum,
-            "Population AF is not available; missing AF is not treated as zero.",
-            evaluated=False,
+            "maf", "Population frequency", profile["maf"]["missing_af_score"], maximum,
+            reason, evaluated=True, evidence=evidence,
         )
     ba1 = _number(variant.get("ba1_af"))
     ba1 = ba1 if ba1 is not None else profile["maf"]["ba1_af"]
@@ -164,7 +241,10 @@ def _score_mechanism(variant, profile):
     else:
         base, reason = 0, "No consequence rule currently raises review priority."
     confidence = _mechanism_confidence(variant, profile) if mechanism_known else 1.0
-    if variant.get("gene_context_ambiguous") and mechanism_known:
+    lof_match = lof and bool(
+        consequences.intersection(_LOF_CONSEQUENCES | _PARTIAL_LOF_CONSEQUENCES)
+    )
+    if variant.get("gene_context_ambiguous") and mechanism_known and not lof_match:
         confidence = min(confidence, 0.7)
         reason += " Gene-level records cover multiple disease contexts, so confidence is reduced."
     score = round(base * confidence, 1)
@@ -183,48 +263,71 @@ def _score_mechanism(variant, profile):
 
 def _score_clinvar(variant, profile):
     maximum = profile["component_maxima"]["clinvar"]
-    significance = " ".join(_values(variant.get("clinical_significance"))).casefold()
+    classifications = _values(variant.get("clinical_significance"))
+    conflict_classifications = _values(variant.get("clinvar_conflict_classifications"))
+    significance = " ".join(classifications + conflict_classifications).casefold()
     if not significance or significance == ".":
         return _component(
             "clinvar", "ClinVar", 0, maximum,
             "No ClinVar germline classification is available.", evaluated=False,
         )
-    pathogenic = "pathogenic" in significance and "benign" not in significance
-    benign = "benign" in significance and "pathogenic" not in significance
-    conflicting = bool(variant.get("clinvar_conflict")) or ("pathogenic" in significance and "benign" in significance)
-    if conflicting or "conflict" in significance:
+    normalized = re.sub(r"[_-]+", " ", significance)
+    pathogenic = bool(re.search(r"\bpathogenic\b|\b(?:p|lp)\b", normalized))
+    benign = bool(re.search(r"\bbenign\b|\b(?:b|lb)\b", normalized))
+    uncertain = bool(
+        re.search(r"\buncertain significance\b|\bvus\b", normalized)
+    )
+    conflicting = bool(variant.get("clinvar_conflict")) or bool(
+        re.search(r"\bconflict(?:s|ing)?\b", normalized)
+    ) or (pathogenic and benign) or (uncertain and (pathogenic or benign))
+    if pathogenic and benign:
         return _component(
             "clinvar", "ClinVar", 0, maximum,
-            "ClinVar reports conflicting classifications; no priority points are assigned.",
-            evidence=[significance],
+            "ClinVar reports both pathogenic and benign classifications; no priority points are assigned.",
+            evidence=classifications + conflict_classifications,
         )
-    if "uncertain" in significance or "vus" in significance:
+    if conflicting and not uncertain and not (pathogenic and benign):
         return _component(
             "clinvar", "ClinVar", 0, maximum,
-            "ClinVar reports uncertain significance.", evidence=[significance],
+            "ClinVar reports a conflict without enough submission-level classifications to resolve it.",
+            evidence=classifications + conflict_classifications,
+        )
+    if conflicting and not (pathogenic or benign):
+        return _component(
+            "clinvar", "ClinVar", 0, maximum,
+            "ClinVar reports conflicting classifications that cannot be directionally resolved.",
+            evidence=classifications + conflict_classifications,
+        )
+    if uncertain and not (pathogenic or benign):
+        return _component(
+            "clinvar", "ClinVar", 0, maximum,
+            "ClinVar reports uncertain significance.", evidence=classifications,
         )
     if not pathogenic and not benign:
         return _component(
             "clinvar", "ClinVar", 0, maximum,
             "ClinVar classification is not mapped to a prioritization rule.",
-            evidence=[significance],
+            evidence=classifications + conflict_classifications,
         )
     stars = max(0, min(4, int(_number(variant.get("clinvar_stars")) or 0)))
-    magnitude = {0: 5, 1: 10, 2: 16, 3: 20, 4: 20}[stars]
-    if "likely" in significance:
-        magnitude = max(0, magnitude - 2)
-    match = str(variant.get("clinvar_condition_match") or "unknown").casefold()
-    multiplier = {"exact": 1.0, "related": 0.5, "unrelated": 0.0, "unknown": 0.5}.get(match, 0.5)
-    score = round(magnitude * multiplier * (1 if pathogenic else -1), 1)
-    reason = (
-        "ClinVar P/LP evidence is weighted by review status and disease match."
-        if pathogenic else
-        "ClinVar B/LB evidence lowers review priority according to review status and disease match."
-    )
+    strength = profile["clinvar"]["star_weights"][stars]
+    conflict_weight = profile["clinvar"]["vus_conflict_weight"] if conflicting and uncertain else 1.0
+    score = round(maximum * strength * conflict_weight * (1 if pathogenic else -1), 1)
+    if pathogenic and uncertain and conflicting:
+        reason = "ClinVar P/LP and VUS conflict; P/LP evidence receives reduced, non-zero weight."
+    elif benign and uncertain and conflicting:
+        reason = "ClinVar B/LB and VUS conflict; B/LB evidence lowers priority with reduced, non-zero weight."
+    else:
+        reason = (
+            "ClinVar P/LP evidence is weighted by review stars; two or more stars receive full points."
+            if pathogenic else
+            "ClinVar B/LB evidence lowers review priority according to review stars."
+        )
     return _component(
         "clinvar", "ClinVar", score, maximum, reason,
         evidence=["Classification: {}".format(significance), "Review stars: {}".format(stars),
-                  "Condition match: {} (×{})".format(match, multiplier)],
+                  "Evidence strength: ×{}".format(strength),
+                  "Conflict weight: ×{}".format(conflict_weight)],
     )
 
 
@@ -249,40 +352,48 @@ def _score_inheritance(variant, profile):
             evaluated=False, evidence=evidence,
         )
     candidates = []
-    if "dominant" in modes:
-        de_novo = str(variant.get("de_novo_status") or "").casefold()
-        if de_novo == "confirmed":
-            candidates.append((20, "Confirmed de novo call is compatible with dominant inheritance."))
-        elif de_novo in {"assumed", "candidate"}:
-            candidates.append((18, "De novo candidate is compatible with dominant inheritance."))
-        elif zygosities.intersection({"het", "heterozygous"}):
-            candidates.append((12, "Heterozygous call is compatible with dominant inheritance."))
+    if "dominant" in modes and zygosities.intersection(
+        {"het", "heterozygous", "hom_alt", "homozygous", "homozygous_alternate"}
+    ):
+        candidates.append((10, "Zygosity is compatible with autosomal dominant inheritance."))
     if "recessive" in modes:
         if compound in {"confirmed_in_trans", "in_trans"}:
-            candidates.append((20, "Two qualifying variants are confirmed in trans."))
+            candidates.append((15, "Two qualifying variants are confirmed in trans."))
         elif compound in {"likely_in_trans", "one_per_parent", "parental_compound"}:
-            candidates.append((18, "One qualifying variant per parent supports an in-trans configuration."))
+            candidates.append((12, "One variant per parent supports a likely in-trans configuration."))
         elif compound in {"phase_unknown", "possible"}:
-            candidates.append((12, "Two heterozygous variants form a compound candidate, but phase is unknown."))
+            candidates.append((9, "Two heterozygous variants form a compound candidate, but phase is unknown."))
         elif zygosities.intersection({"hom_alt", "homozygous", "homozygous_alternate"}):
-            candidates.append((20, "Homozygous alternate call is compatible with recessive inheritance."))
+            candidates.append((15, "Homozygous alternate call is compatible with recessive inheritance."))
         elif zygosities.intersection({"het", "heterozygous"}):
             candidates.append((2, "A single heterozygous call in a recessive context is usually carrier evidence."))
     if "x_linked" in modes:
         if zygosities.intersection({"hemi", "hemizygous"}):
-            candidates.append((18, "Hemizygous call is compatible with X-linked inheritance."))
+            candidates.append((13, "Hemizygous call is compatible with X-linked inheritance."))
         elif zygosities.intersection({"het", "heterozygous"}):
-            candidates.append((10, "Heterozygous call may be compatible with an X-linked disorder."))
+            candidates.append((8, "Heterozygous call may be compatible with an X-linked disorder."))
     if "y_linked" in modes:
         chromosome = str(variant.get("chromosome") or "").upper().replace("CHR", "")
         if chromosome == "Y" and zygosities.intersection({"hemi", "hemizygous"}):
-            candidates.append((18, "Hemizygous call on chromosome Y is compatible with Y-linked inheritance."))
+            candidates.append((13, "Hemizygous call on chromosome Y is compatible with Y-linked inheritance."))
         elif chromosome == "Y":
-            candidates.append((12, "Call on chromosome Y is compatible with Y-linked inheritance."))
+            candidates.append((9, "Call on chromosome Y is compatible with Y-linked inheritance."))
     if "mitochondrial" in modes:
-        candidates.append((12, "Mitochondrial location/inheritance is compatible; heteroplasmy is not yet evaluated."))
+        candidates.append((9, "Mitochondrial location/inheritance is compatible; heteroplasmy is not yet evaluated."))
     score, reason = max(candidates, default=(0, "Zygosity is not compatible with the available inheritance models."))
-    if len(modes) > 1 or variant.get("gene_context_ambiguous"):
+    mechanisms = {_normalize_mechanism(item) for item in _values(variant.get("disease_mechanisms"))}
+    lof_match = (
+        "loss of function" in mechanisms
+        and bool(
+            _terms(variant.get("consequence")).intersection(
+                _LOF_CONSEQUENCES | _PARTIAL_LOF_CONSEQUENCES
+            )
+        )
+    )
+    ad_context = "dominant" in modes
+    if not ad_context and (
+        len(modes) > 1 or (variant.get("gene_context_ambiguous") and not lof_match)
+    ):
         score = round(score * 0.75, 1)
         reason += " Multiple gene-disease contexts reduce confidence."
     evidence = ["Inheritance: {}".format("; ".join(sorted(modes))),
@@ -290,7 +401,7 @@ def _score_inheritance(variant, profile):
                 "Compound status: {}".format(compound or "not reported")]
     de_novo = str(variant.get("de_novo_status") or "").strip()
     if de_novo:
-        evidence.append("De novo status: {}".format(de_novo))
+        evidence.append("De novo status recorded for separate family evidence: {}".format(de_novo))
     sources = _values(variant.get("gene_context_sources"))
     if sources:
         evidence.append("Gene context: {}".format("; ".join(sources)))
@@ -358,6 +469,41 @@ def _score_prediction(variant, profile):
         "prediction", "Computational prediction", 0, maximum,
         "No calibrated prediction is available for this variant type.",
         evaluated=not applicable, applicable=applicable,
+    )
+
+
+def _score_run_occurrence(variant, profile):
+    maximum = profile["component_maxima"]["run_occurrence"]
+    unrelated_count = _number(variant.get("unrelated_subject_count"))
+    sample_count = _number(variant.get("sample_carrier_count"))
+    if unrelated_count is None or unrelated_count < 1:
+        return _component(
+            "run_occurrence", "Within-run occurrence", 0, maximum,
+            "Occurrence across unrelated subjects in this run is not available.",
+            evaluated=False, applicable=False,
+        )
+    unrelated_count = int(unrelated_count)
+    sample_count = int(sample_count) if sample_count is not None else None
+    if sample_count == 1:
+        score = maximum
+        reason = "Variant is absent from every other sample in this run; review priority is increased."
+    elif unrelated_count == 1:
+        score = 10
+        reason = "Variant is limited to one unrelated subject/group but occurs in multiple samples."
+    elif unrelated_count > 2:
+        score = -10
+        reason = "Variant is present in more than two unrelated subjects in this run; review priority is reduced."
+    else:
+        score = 0
+        reason = "Variant is present in two unrelated subjects in this run; no occurrence adjustment is applied."
+    return _component(
+        "run_occurrence", "Within-run occurrence", score, maximum, reason,
+        evidence=[
+            "Unrelated subjects/groups carrying variant: {}".format(unrelated_count),
+            "Samples carrying variant: {}".format(
+                sample_count if sample_count is not None else "not available"
+            ),
+        ],
     )
 
 

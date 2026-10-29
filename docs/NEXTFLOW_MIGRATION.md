@@ -375,6 +375,10 @@ The enabled operations come from JSON:
 }
 ```
 
+For GATK3 preprocessing tasks, `preprocessing.ram` is the total task memory;
+the Java heap is limited to 80% of that amount to leave memory for JVM-native
+and other process overhead.
+
 Only the operations listed in `preprocessing.workflow` are executed. For
 example, `["mark_pcr_dup"]` skips `AddOrReplaceReadGroups` entirely, while
 `["add_readgroups", "mark_pcr_dup"]` chains both operations before finalizing

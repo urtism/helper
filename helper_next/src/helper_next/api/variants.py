@@ -17,6 +17,7 @@ from helper_next.core import analysis_history as history
 from helper_next.core import external_vcf
 from helper_next.core import acmg_context
 from helper_next.core.variant_import import ArchivedRunImportError, create_archived_run
+from helper_prioritization import apply_clinvar_evidence
 from helper_variants import clinvar
 from helper_variants import gene_phenotype
 from helper_variants import gnomad_frequency
@@ -581,21 +582,28 @@ def sample_variant_detail(identifier: str, sample_id: int, variant_id: int):
         raise HTTPException(status_code=409, detail=str(exc))
     if detail is None:
         raise HTTPException(status_code=404, detail="Variant not found for this sample")
-    evidence = detail.get("clinvar_evidence") or {}
-    should_enrich = bool(
-        evidence.get("classifications")
-        or evidence.get("identifiers")
-        or (detail.get("database_ids") or {}).get("dbsnp")
-    ) and not evidence.get("source_url")
-    if should_enrich:
-        try:
-            retrieved = clinvar.lookup_variant(
-                detail["reference_build"], detail["chromosome"], detail["position"],
-                detail["reference"], detail["alternate"],
-            )
-            detail["clinvar_evidence"] = clinvar.merge_evidence(evidence, retrieved)
-        except clinvar.ClinVarError:
-            detail["clinvar_evidence"] = dict(evidence, retrieval_status="unavailable")
+    try:
+        retrieved = clinvar.lookup_variant(
+            detail["reference_build"], detail["chromosome"], detail["position"],
+            detail["reference"], detail["alternate"], refresh=True,
+        )
+        detail["clinvar_evidence"] = clinvar.merge_evidence({}, retrieved)
+    except clinvar.ClinVarError:
+        retrieved = {"status": "unavailable"}
+        detail["clinvar_evidence"] = clinvar.merge_evidence({}, retrieved)
+    detail.setdefault("database_ids", {})["clinvar"] = []
+    try:
+        priority_page = variant_query.list_variants(
+            _entry_database(entry), sample_id, variant_id=variant_id, limit=1,
+        )
+    except variant_query.VariantQueryError as exc:
+        raise HTTPException(status_code=404 if "sample not found" in str(exc) else 400, detail=str(exc))
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if priority_page["items"]:
+        detail["priority"] = apply_clinvar_evidence(
+            priority_page["items"][0]["priority"], detail["clinvar_evidence"]
+        )
     _include_clinvar_identifiers(detail)
     detail["interpretation_context"] = acmg_context.build(detail)
     return detail

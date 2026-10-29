@@ -1,0 +1,151 @@
+{
+  "description": "Public HBB reference responses from targeted Ensembl REST queries; no patient data. HGNC xrefs failed and are not asserted.",
+  "acquired_at": "2026-10-26T11:39:45.847160+00:00",
+  "urls": {
+    "lookup": "https://rest.ensembl.org/lookup/id/ENST00000335295?expand=1;mane=1;content-type=application/json",
+    "cdna": "https://rest.ensembl.org/sequence/id/ENST00000335295?type=cdna;content-type=application/json",
+    "cds": "https://rest.ensembl.org/sequence/id/ENST00000335295?type=cds;content-type=application/json",
+    "protein": "https://rest.ensembl.org/sequence/id/ENST00000335295?type=protein;content-type=application/json",
+    "release_before": "https://rest.ensembl.org/info/data?content-type=application/json",
+    "release_after": "https://rest.ensembl.org/info/data?content-type=application/json",
+    "hgnc": "https://rest.ensembl.org/xrefs/id/ENSG00000244734?external_db=HGNC;content-type=application/json"
+  },
+  "raw": {
+    "lookup": {
+      "gencode_primary": 1,
+      "Translation": {
+        "version": 3,
+        "end": 5227021,
+        "object_type": "Translation",
+        "length": 147,
+        "id": "ENSP00000333994",
+        "start": 5225598,
+        "Parent": "ENST00000335295",
+        "species": "homo_sapiens",
+        "db_type": "core"
+      },
+      "source": "ensembl_havana",
+      "biotype": "protein_coding",
+      "start": 5225464,
+      "id": "ENST00000335295",
+      "length": 628,
+      "end": 5227071,
+      "MANE": [
+        {
+          "type": "MANE_Select",
+          "strand": -1,
+          "refseq_match": "NM_000518.5",
+          "id": "ENST00000335295",
+          "version": 4,
+          "end": 5227071,
+          "object_type": "mane",
+          "start": 5225464,
+          "assembly_name": "GRCh38",
+          "db_type": "core",
+          "Parent": "ENSG00000244734",
+          "seq_region_name": "11",
+          "species": "homo_sapiens"
+        }
+      ],
+      "strand": -1,
+      "species": "homo_sapiens",
+      "seq_region_name": "11",
+      "ens_canon_extended": 0,
+      "display_name": "HBB-201",
+      "assembly_name": "GRCh38",
+      "logic_name": "ensembl_havana_transcript_homo_sapiens",
+      "version": 4,
+      "object_type": "Transcript",
+      "Exon": [
+        {
+          "db_type": "core",
+          "species": "homo_sapiens",
+          "seq_region_name": "11",
+          "assembly_name": "GRCh38",
+          "start": 5226930,
+          "id": "ENSE00001829867",
+          "end": 5227071,
+          "object_type": "Exon",
+          "version": 2,
+          "strand": -1
+        },
+        {
+          "strand": -1,
+          "version": 1,
+          "end": 5226799,
+          "object_type": "Exon",
+          "id": "ENSE00001057381",
+          "start": 5226577,
+          "assembly_name": "GRCh38",
+          "species": "homo_sapiens",
+          "seq_region_name": "11",
+          "db_type": "core"
+        },
+        {
+          "start": 5225464,
+          "end": 5225726,
+          "object_type": "Exon",
+          "version": 2,
+          "id": "ENSE00001600613",
+          "strand": -1,
+          "seq_region_name": "11",
+          "species": "homo_sapiens",
+          "db_type": "core",
+          "assembly_name": "GRCh38"
+        }
+      ],
+      "is_canonical": 1,
+      "db_type": "core",
+      "Parent": "ENSG00000244734"
+    },
+    "cdna": {
+      "desc": null,
+      "molecule": "dna",
+      "id": "ENST00000335295",
+      "query": "ENST00000335295",
+      "seq": "ACATTTGCTTCTGACACAACTGTGTTCACTAGCAACCTCAAACAGACACCATGGTGCATCTGACTCCTGAGGAGAAGTCTGCCGTTACTGCCCTGTGGGGCAAGGTGAACGTGGATGAAGTTGGTGGTGAGGCCCTGGGCAGGCTGCTGGTGGTCTACCCTTGGACCCAGAGGTTCTTTGAGTCCTTTGGGGATCTGTCCACTCCTGATGCTGTTATGGGCAACCCTAAGGTGAAGGCTCATGGCAAGAAAGTGCTCGGTGCCTTTAGTGATGGCCTGGCTCACCTGGACAACCTCAAGGGCACCTTTGCCACACTGAGTGAGCTGCACTGTGACAAGCTGCACGTGGATCCTGAGAACTTCAGGCTCCTGGGCAACGTGCTGGTCTGTGTGCTGGCCCATCACTTTGGCAAAGAATTCACCCCACCAGTGCAGGCTGCCTATCAGAAAGTGGTGGCTGGTGTGGCTAATGCCCTGGCCCACAAGTATCACTAAGCTCGCTTTCTTGCTGTCCAATTTCTATTAAAGGTTCCTTTGTTCCCTAAGTCCAACTACTAAACTGGGGGATATTATGAAGGGCCTTGAGCATCTGGATTCTGCCTAATAAAAAACATTTATTTTCATTGCAA",
+      "version": 4
+    },
+    "cds": {
+      "query": "ENST00000335295",
+      "molecule": "dna",
+      "version": 4,
+      "seq": "ATGGTGCATCTGACTCCTGAGGAGAAGTCTGCCGTTACTGCCCTGTGGGGCAAGGTGAACGTGGATGAAGTTGGTGGTGAGGCCCTGGGCAGGCTGCTGGTGGTCTACCCTTGGACCCAGAGGTTCTTTGAGTCCTTTGGGGATCTGTCCACTCCTGATGCTGTTATGGGCAACCCTAAGGTGAAGGCTCATGGCAAGAAAGTGCTCGGTGCCTTTAGTGATGGCCTGGCTCACCTGGACAACCTCAAGGGCACCTTTGCCACACTGAGTGAGCTGCACTGTGACAAGCTGCACGTGGATCCTGAGAACTTCAGGCTCCTGGGCAACGTGCTGGTCTGTGTGCTGGCCCATCACTTTGGCAAAGAATTCACCCCACCAGTGCAGGCTGCCTATCAGAAAGTGGTGGCTGGTGTGGCTAATGCCCTGGCCCACAAGTATCACTAA",
+      "id": "ENST00000335295",
+      "desc": null
+    },
+    "protein": {
+      "query": "ENST00000335295",
+      "molecule": "protein",
+      "desc": null,
+      "id": "ENSP00000333994",
+      "seq": "MVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQRFFESFGDLSTPDAVMGNPKVKAHGKKVLGAFSDGLAHLDNLKGTFATLSELHCDKLHVDPENFRLLGNVLVCVLAHHFGKEFTPPVQAAYQKVVAGVANALAHKYH",
+      "version": 3
+    },
+    "release_before": {
+      "releases": [
+        116
+      ]
+    },
+    "release_after": {
+      "releases": [
+        116
+      ]
+    },
+    "hgnc": [],
+    "hgnc_missing": "HGNC xrefs unavailable (upstream timeout); Ensembl gene identity only"
+  },
+  "variant": {
+    "assembly": "GRCh38",
+    "chromosome": "11",
+    "position": 5226774,
+    "reference": "G",
+    "alternate": "A"
+  },
+  "annotation": {
+    "transcript": "ENST00000335295.4",
+    "consequence": "stop_gained",
+    "hgvsc": "c.118C>T",
+    "hgvsp": "p.Gln40Ter"
+  }
+}

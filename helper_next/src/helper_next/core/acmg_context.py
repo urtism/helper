@@ -5,6 +5,7 @@ No remote lookup, phenotype inference or VCEP selection occurs here.
 import re
 
 from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_mechanism_normalizer import allelic
 from helper_variants import gene_phenotype
 
 
@@ -59,7 +60,9 @@ def build(detail):
             lookups[lookup_key] = gene_phenotype.query_gene(*lookup_key)
         knowledge = lookups[lookup_key]
         cache = knowledge.get("cache", {})
+        g2p = knowledge.get("g2p_records", [])
         cache_genes = {g for g in knowledge.get("gene_identifiers", []) if identifier(g)}
+        cache_genes.update(r["gene_id"] for r in g2p if identifier(r.get("gene_id")))
         # The association's gene identifier must be the one actually curated.
         genes = set(raw_hgnc) if raw_hgnc else cache_genes
         if not genes:
@@ -67,19 +70,37 @@ def build(detail):
         gene = identifier(next(iter(genes)), symbol) if len(genes) == 1 else None
         choices = []
         if gene:
-            for association in knowledge.get("associations", []):
+            associations = list(knowledge.get("associations", []))
+            represented = {a.get("disease_id") for a in associations}
+            for row in g2p:
+                disease_id = row.get("disease_id") or row.get("disease_mim")
+                if row.get("gene_id") == gene["identifier"] and identifier(disease_id) and disease_id not in represented:
+                    associations.append({"disease_id": disease_id, "disease": row.get("disease_name", ""), "assertions": []})
+                    represented.add(disease_id)
+            for association in associations:
                 assertions = [a for a in association.get("assertions", []) if a.get("gene_id") == gene["identifier"]]
                 disease = identifier(association.get("disease_id"), association.get("disease", ""))
-                if not assertions or disease is None:
+                if disease is None:
+                    continue
+                g2p_records = [r for r in g2p if r.get("gene_id") == gene["identifier"]
+                               and disease["identifier"] in {r.get("disease_id"), r.get("disease_mim")}]
+                if not assertions and not g2p_records:
                     continue
                 selected = dict(association, assertions=assertions)
-                context = {"gene": gene, "disease": disease, "inheritance_modes": inheritance_modes(selected)}
+                modes = set(inheritance_modes(selected))
+                modes.update(allelic(r.get("allelic_requirement")) for r in g2p_records)
+                modes.difference_update({"UNKNOWN", "MONOALLELIC", "BIALLELIC", "OTHER_COMPLEX"})
+                modes = {m for m in modes if not m.startswith("OTHER:")}
+                context = {"gene": gene, "disease": disease, "inheritance_modes": sorted(modes)}
                 origin = {
                     "source": "HELPER local gene-disease cache", "source_version": cache.get("updated_at"),
                     "cache_schema_version": cache.get("schema_version"), "stale": cache.get("stale", False),
                     "gene_mapping": raw_genes.get(gene["identifier"], "Curated gene_curie matched to the VCF gene symbol"),
                     "assertions": assertions, "original_disease_ids": association.get("original_disease_ids", []),
                     "classification": association.get("strongest_classification", ""),
+                    "g2p_records": g2p_records,
+                    "unscoped_g2p_records": [r for r in g2p if r.get("gene_id") == gene["identifier"]
+                                             and not (r.get("disease_id") or r.get("disease_mim"))],
                 }
                 choice = {"id": "context-" + digest({"annotation_id": annotation.get("id"), "gene": gene["identifier"], "disease": disease["identifier"]})["value"][:24],
                           "context": context, "origin": origin}

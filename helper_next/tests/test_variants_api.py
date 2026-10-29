@@ -170,7 +170,7 @@ def test_add_archived_run_links_multiple_selected_vcfs_and_indexes_them(tmp_path
     assert sample_names == {"OLD-1", "OLD-2"}
 
 
-def test_api_indexes_only_a_run_resolved_from_history(tmp_path):
+def test_api_indexes_only_a_run_resolved_from_history(tmp_path, monkeypatch):
     record = archived_run(tmp_path)
     background = CapturingBackgroundTasks()
 
@@ -178,6 +178,10 @@ def test_api_indexes_only_a_run_resolved_from_history(tmp_path):
     assert response["status"] == "indexing"
     assert response["artifacts"] == 1
     background.task(*background.args)
+    monkeypatch.setattr(clinvar, "lookup_variant", lambda *args, **kwargs: {
+        "status": "not_found", "classifications": [], "review_statuses": [],
+        "classification_breakdown": [],
+    })
 
     status = variants.variant_index_status(record["id"])
     assert status["status"] == "complete"
@@ -197,8 +201,8 @@ def test_api_indexes_only_a_run_resolved_from_history(tmp_path):
     sample_id = samples["samples"][0]["sample_id"]
     page = variants.sample_variants(record["id"], sample_id, limit=100)
     assert len(page["items"]) == 1
-    assert page["items"][0]["priority"]["ruleset"] == "germline-wes-v1.0.0"
-    assert len(page["items"][0]["priority"]["components"]) == 5
+    assert page["items"][0]["priority"]["ruleset"] == "germline-wes-v1.9.0"
+    assert len(page["items"][0]["priority"]["components"]) == 6
     detail = variants.sample_variant_detail(
         record["id"], sample_id, page["items"][0]["variant_id"]
     )
@@ -296,7 +300,10 @@ def test_variant_detail_enriches_incomplete_vep_clinvar_evidence(monkeypatch):
     monkeypatch.setattr(variants, "_entry", lambda identifier: {"database": Path("index")})
     monkeypatch.setattr(variants, "_entry_database", lambda entry: entry["database"])
     monkeypatch.setattr(variants.variant_query, "variant_detail", lambda *args: detail)
-    monkeypatch.setattr(clinvar, "lookup_variant", lambda *args: {
+    monkeypatch.setattr(variants.variant_query, "list_variants", lambda *args, **kwargs: {
+        "items": [],
+    })
+    monkeypatch.setattr(clinvar, "lookup_variant", lambda *args, **kwargs: {
         "status": "available", "identifiers": ["139111", "VCV000139111.3"],
         "classifications": ["Benign/Likely benign"],
         "review_statuses": [{
@@ -312,7 +319,63 @@ def test_variant_detail_enriches_incomplete_vep_clinvar_evidence(monkeypatch):
     assert result["database_ids"]["clinvar"] == ["139111", "VCV000139111.3"]
 
 
-def test_variant_detail_merges_indexed_and_evidence_clinvar_ids_without_duplicates(monkeypatch):
+def test_variant_detail_priority_uses_live_clinvar_not_vcf_classification(monkeypatch):
+    detail = {
+        "reference_build": "GRCh38", "chromosome": "1", "position": 100,
+        "reference": "A", "alternate": "G", "database_ids": {},
+        "clinvar_evidence": {
+            "status": "available", "classifications": ["Pathogenic"],
+            "source_url": "https://www.ncbi.nlm.nih.gov/clinvar/variation/1/",
+        },
+    }
+    from helper_prioritization import score_variant
+
+    lookup_calls = []
+    applied_evidence = []
+    monkeypatch.setattr(variants, "_entry", lambda identifier: {"database": Path("index")})
+    monkeypatch.setattr(variants, "_entry_database", lambda entry: entry["database"])
+    monkeypatch.setattr(variants.variant_query, "variant_detail", lambda *args: detail)
+    monkeypatch.setattr(variants.variant_query, "list_variants", lambda *args, **kwargs: {
+        "items": [{"priority": score_variant({
+            "clinical_significance": "Pathogenic", "clinvar_stars": 4,
+            "clinvar_condition_match": "exact",
+        })}],
+    })
+    apply_live_evidence = variants.apply_clinvar_evidence
+
+    def capture_applied_evidence(priority, evidence):
+        applied_evidence.append(evidence)
+        return apply_live_evidence(priority, evidence)
+
+    monkeypatch.setattr(variants, "apply_clinvar_evidence", capture_applied_evidence)
+
+    def lookup(*args, **kwargs):
+        lookup_calls.append(args)
+        assert kwargs == {"refresh": True}
+        return {
+            "status": "available", "classifications": ["Likely benign"],
+            "review_statuses": [{"label": "criteria provided, multiple submitters", "stars": 2}],
+            "classification_breakdown": [],
+            "has_conflict": False, "source_url": "https://www.ncbi.nlm.nih.gov/clinvar/",
+        }
+
+    monkeypatch.setattr(clinvar, "lookup_variant", lookup)
+    result = variants.sample_variant_detail("RUN", 1, 99)
+    clinvar_component = next(
+        component for component in result["priority"]["components"]
+        if component["key"] == "clinvar"
+    )
+
+    assert lookup_calls == [("GRCh38", "1", 100, "A", "G")]
+    assert result["clinvar_evidence"]["classifications"] == ["Likely benign"]
+    assert applied_evidence == [result["clinvar_evidence"]]
+    assert applied_evidence[0]["retrieval_status"] == "available"
+    assert applied_evidence[0]["has_conflict"] is False
+    assert clinvar_component["score"] == -20
+    assert "B/LB evidence" in clinvar_component["reason"]
+
+
+def test_variant_detail_uses_only_live_clinvar_ids(monkeypatch):
     detail = {
         "reference_build": "GRCh38", "chromosome": "2", "position": 10,
         "reference": "A", "alternate": "G",
@@ -325,10 +388,48 @@ def test_variant_detail_merges_indexed_and_evidence_clinvar_ids_without_duplicat
     monkeypatch.setattr(variants, "_entry", lambda identifier: {"database": Path("index")})
     monkeypatch.setattr(variants, "_entry_database", lambda entry: entry["database"])
     monkeypatch.setattr(variants.variant_query, "variant_detail", lambda *args: detail)
+    monkeypatch.setattr(variants.variant_query, "list_variants", lambda *args, **kwargs: {
+        "items": [],
+    })
+    monkeypatch.setattr(clinvar, "lookup_variant", lambda *args, **kwargs: {
+        "status": "available", "identifiers": ["VCV000674755.4"],
+        "classifications": ["Pathogenic"], "review_statuses": [],
+        "classification_breakdown": [], "has_conflict": False,
+    })
 
     result = variants.sample_variant_detail("RUN", 1, 99)
 
-    assert result["database_ids"]["clinvar"] == ["674755", "VCV000674755.4"]
+    assert result["database_ids"]["clinvar"] == ["VCV000674755.4"]
+    assert result["clinvar_evidence"]["classifications"] == ["Pathogenic"]
+
+
+def test_variant_detail_does_not_fall_back_to_vcf_clinvar_when_live_lookup_fails(monkeypatch):
+    detail = {
+        "reference_build": "GRCh38", "chromosome": "2", "position": 10,
+        "reference": "A", "alternate": "G",
+        "database_ids": {"clinvar": ["674755"]},
+        "clinvar_evidence": {
+            "status": "available", "classifications": ["Pathogenic"],
+            "identifiers": ["VCV000674755.4"],
+        },
+    }
+    monkeypatch.setattr(variants, "_entry", lambda identifier: {"database": Path("index")})
+    monkeypatch.setattr(variants, "_entry_database", lambda entry: entry["database"])
+    monkeypatch.setattr(variants.variant_query, "variant_detail", lambda *args: detail)
+    monkeypatch.setattr(variants.variant_query, "list_variants", lambda *args, **kwargs: {
+        "items": [],
+    })
+
+    def unavailable(*args, **kwargs):
+        raise clinvar.ClinVarError("unavailable")
+
+    monkeypatch.setattr(clinvar, "lookup_variant", unavailable)
+
+    result = variants.sample_variant_detail("RUN", 1, 99)
+
+    assert result["database_ids"]["clinvar"] == []
+    assert result["clinvar_evidence"]["retrieval_status"] == "unavailable"
+    assert result["clinvar_evidence"].get("classifications", []) == []
 
 
 def test_variant_liftover_projects_the_exact_indexed_allele(monkeypatch):
