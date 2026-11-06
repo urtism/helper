@@ -442,9 +442,22 @@ def test_http_route_calls_new_calculator_and_binds_existing_allele_transcript(mo
 
 
 def test_application_registers_new_route_without_starting_any_engine(monkeypatch):
-    monkeypatch.setenv("HELPER_ACMG_AUTOSTART", "0")
+    import socket
+    import subprocess
+    def unexpected(*args, **kwargs):
+        pytest.fail("Application lifecycle must not start or contact an external evaluator")
+    monkeypatch.setattr(subprocess, "Popen", unexpected)
+    monkeypatch.setattr(socket, "create_connection", unexpected)
     from helper_next.api.app import create_app
-    assert "/api/acmg-calculator/pvs1" in {route.path for route in create_app().routes}
+    app = create_app()
+    routes = {route.path for route in app.routes}
+    assert "/api/acmg-calculator/pvs1" in routes
+    assert "/api/acmg/mechanisms/resolve" in routes
+    assert "/api/acmg/discovery" not in routes
+    assert not any("/workspaces" in route or "/task22" in route for route in routes)
+    import asyncio
+    asyncio.run(app.router.startup())
+    asyncio.run(app.router.shutdown())
 
 
 def test_packaged_application_imports_pvs1_outside_repository(tmp_path):
@@ -459,7 +472,7 @@ def test_packaged_application_imports_pvs1_outside_repository(tmp_path):
         cwd=root / "helper_next", capture_output=True, text=True, timeout=60,
     )
     assert built.returncode == 0, built.stdout + built.stderr
-    environment = dict(os.environ, PYTHONPATH=str(packaged), HELPER_ACMG_AUTOSTART="0",
+    environment = dict(os.environ, PYTHONPATH=str(packaged),
                        PYTHONDONTWRITEBYTECODE="1")
     imported = subprocess.run(
         [sys.executable, "-c", (

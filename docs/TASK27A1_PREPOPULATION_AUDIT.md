@@ -1,5 +1,7 @@
 # Task 27A.1 — Audit scientifico prima del popolamento completo
 
+> Nota 2026-10-29: audit/inventario storico. I riferimenti al Workbench, ai relativi test e al vecchio contratto descrivono lo stato precedente alla rimozione; non sono istruzioni operative attuali. Per componenti conservati, cache e verifiche aggiornate vedere [HELPER_STRUCTURAL_CLEANUP.md](HELPER_STRUCTURAL_CLEANUP.md).
+
 **Documento storico:** i rischi qui identificati sono ora isolati a runtime
 dal Task 27A.2. Il nuovo inventario e il GO conservativo sono documentati in
 [TASK27A2_ONTOLOGY_MAPPING_REGISTRY.md](TASK27A2_ONTOLOGY_MAPPING_REGISTRY.md).

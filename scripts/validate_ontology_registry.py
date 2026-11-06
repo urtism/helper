@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from helper_next.core import acmg_mechanism_normalizer as norm
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.acmg_mechanism_store import MechanismStore
 from helper_next.core.acmg_mechanisms import MechanismEvidenceCache
 from helper_next.core.acmg_mechanisms_bulk import build_inventory

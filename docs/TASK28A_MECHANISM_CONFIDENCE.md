@@ -1,5 +1,7 @@
 # Task 28A — Mechanism Assessment
 
+> Nota 2026-10-29: documento storico. La cache pubblica dei meccanismi e il relativo assessment locale sono conservati; Workbench, Coordinator/Assembler, contratti e valutazioni del servizio esterno descritti qui sono stati rimossi. Stato operativo: [HELPER_STRUCTURAL_CLEANUP.md](HELPER_STRUCTURAL_CLEANUP.md).
+
 Data: 2026-10-28. Stato: **PARTIALLY_IMPLEMENTED**. Solo analisi statica;
 nessuna attestazione di validazione funzionale o clinica.
 

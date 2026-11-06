@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.acmg_molecular_impact import analyze_transcripts, annotation_release
 from helper_next.core.acmg_sources import SourceManager
 from helper_next.core.acmg_transcripts import TranscriptReferenceProvider, complement, mrna_to_genomic, qualify, translate

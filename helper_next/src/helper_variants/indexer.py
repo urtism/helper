@@ -1,6 +1,7 @@
 """Streaming construction of a run-local variant index from VCF artifacts."""
 import gzip
 import hashlib
+import os
 import re
 from pathlib import Path
 
@@ -37,11 +38,20 @@ class IndexedFasta:
         self.path = Path(path)
         self.handle = open(str(self.path), "rb")
         self.contigs = {}
-        with open(str(self.path) + ".fai", "r", encoding="utf-8") as index:
-            for line in index:
-                fields = line.rstrip("\r\n").split("\t")
-                if len(fields) >= 5:
-                    self.contigs[fields[0]] = tuple(int(value) for value in fields[1:5])
+        try:
+            with open(str(self.path) + ".fai", "r", encoding="utf-8") as index:
+                self.index_stat = os.fstat(index.fileno())
+                for line in index:
+                    fields = line.rstrip("\r\n").split("\t")
+                    if len(fields) >= 5:
+                        self.contigs[fields[0]] = tuple(int(value) for value in fields[1:5])
+                after = os.fstat(index.fileno())
+                if any(getattr(self.index_stat, field) != getattr(after, field) for field in
+                       ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")):
+                    raise VariantIndexError("Reference .fai changed while opening")
+        except BaseException:
+            self.handle.close()
+            raise
 
     def close(self):
         self.handle.close()

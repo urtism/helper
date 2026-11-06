@@ -62,6 +62,8 @@ CACHE_MAX_AGE = timedelta(days=7)
 CONSTRAINT_MAX_AGE = timedelta(days=30)
 _refresh_lock = threading.Lock()
 _refreshing = False
+_refresh_done = threading.Event()
+_refresh_done.set()
 _constraint_lock = threading.Lock()
 _constraints_refreshing = set()
 
@@ -292,6 +294,7 @@ def begin_refresh():
         if _refreshing:
             return False
         _refreshing = True
+        _refresh_done.clear()
         return True
 
 
@@ -299,11 +302,43 @@ def finish_refresh():
     global _refreshing
     with _refresh_lock:
         _refreshing = False
+        _refresh_done.set()
 
 
 def is_refreshing():
     with _refresh_lock:
         return _refreshing
+
+
+def prepare_priority_contexts():
+    """Finish required gene-disease acquisition before computing sample priorities.
+
+    Reuse the installed index when current; share an already running refresh.
+    Failed acquisition preserves existing evidence and reports its limitation.
+    """
+    status = cache_status()
+    if status.get("refreshing"):
+        if not _refresh_done.wait(timeout=120):
+            return dict(status, preparation_error="Gene-disease update is still running")
+        return cache_status()
+    if status.get("status") == "ready" and not status.get("stale"):
+        return status
+    if not begin_refresh():
+        if not _refresh_done.wait(timeout=120):
+            return dict(status, preparation_error="Gene-disease update is still running")
+        return cache_status()
+    error = None
+    try:
+        refresh_cache(timeout=12)
+    except Exception as exc:
+        # The previous index remains authoritative when an upstream is unreachable.
+        error = str(exc)
+    finally:
+        finish_refresh()
+    status = cache_status()
+    if error:
+        status["preparation_error"] = error
+    return status
 
 
 def begin_constraint_refresh(gene_symbol):
@@ -332,7 +367,7 @@ def cache_status(database=None):
     if not database.is_file():
         return {"status": "missing", "refreshing": is_refreshing(), "database": str(database)}
     try:
-        with sqlite3.connect(str(database)) as connection:
+        with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
             metadata = dict(connection.execute("SELECT key, value FROM metadata"))
             row_count = connection.execute("SELECT COUNT(*) FROM assertions").fetchone()[0]
             hpo_row_count = _table_count(connection, "hpo_features")
@@ -456,6 +491,12 @@ def refresh_gnomad_constraint(gene_symbol, database=None, timeout=30):
     if not gene_symbol:
         raise ValueError("A gene symbol is required for gnomAD constraint retrieval")
     database = Path(database or cache_path())
+    from helper_variants import gnomad_constraint
+    if gnomad_constraint.status(database).get("release") == gnomad_constraint.RELEASE:
+        # An unversioned API response must never replace the supervised release.
+        with sqlite3.connect(database) as connection:
+            connection.row_factory = sqlite3.Row
+            return bool(gnomad_constraint.transcripts(connection, gene_symbol))
     if cache_status(database).get("schema_version") != SCHEMA_VERSION:
         raise RuntimeError("The gene-phenotype cache must be refreshed first")
     payload = json.dumps({
@@ -577,6 +618,8 @@ def build_cache(csv_stream, database=None, source_url=GENCC_DOWNLOAD_URL,
             connection.executemany(
                 "INSERT INTO metadata (key, value) VALUES (?, ?)", metadata.items()
             )
+            from helper_variants.gnomad_constraint import preserve_import
+            preserve_import(database, connection)
             connection.commit()
         os.replace(str(temporary), str(database))
     finally:
@@ -985,6 +1028,9 @@ def mechanism_source_records(gene_id, gene_symbol="", database=None, sources=Non
                 packet["limitations"] = ["Current gene symbol is unavailable for this existing symbol-scoped adapter"]
                 continue
             originals = [dict(row) for row in rows]
+            if source == "gnomad":
+                from helper_variants import gnomad_constraint
+                originals = gnomad_constraint.transcripts(connection, gene_symbol)
             if source in ("g2p", "gencc"):
                 for row in originals:
                     ids = sorted({row.get(k) for k in ("disease_curie", "disease_mim", "disease_original_curie") if row.get(k)})
@@ -1010,8 +1056,14 @@ def mechanism_source_records(gene_id, gene_symbol="", database=None, sources=Non
             if source == "gnomad":
                 index_acquired = originals[0]["updated_at"] if originals else None
                 packet["retrieved_at"] = index_acquired or timestamp
-                packet["limitations"].append("Existing adapter labels constraint as v4.1.2 without storing an upstream release token")
-                if originals and not originals[0]["available"]:
+                manifest = gnomad_constraint.status(database)
+                packet.update(dataset_version=manifest.get("release"), source_url=manifest["source_url"],
+                              manifest=manifest, limitations=[
+                                  "Transcript-specific statistical constraint; not a disease-mechanism assertion.",
+                                  "Low LOEUF does not prove LoF; missense constraint does not establish GoF or DN."])
+                if not manifest.get("release"):
+                    packet["limitations"].append("Legacy GraphQL constraint has no verified release")
+                if originals and not any(row["available"] for row in originals):
                     packet.update(records=[], status="NO_RECORDS")
                 elif not originals:
                     packet["status"] = "CACHE_MISS"  # No allele/gene lookup has been recorded.
@@ -1019,6 +1071,8 @@ def mechanism_source_records(gene_id, gene_symbol="", database=None, sources=Non
                 acquired = datetime.fromisoformat((index_acquired or "").replace("Z", "+00:00"))
                 age = datetime.now(timezone.utc) - acquired
                 packet["stale"] = age > (CONSTRAINT_MAX_AGE if source == "gnomad" else CACHE_MAX_AGE)
+                if source == "gnomad" and packet.get("dataset_version") == gnomad_constraint.RELEASE:
+                    packet["stale"] = False
             except (ValueError, TypeError):
                 packet["stale"] = True
     return result
@@ -1104,38 +1158,30 @@ def priority_contexts(gene_symbols, database=None):
 
 
 def _query_gnomad_constraint(connection, gene_symbol):
-    refreshing = constraint_is_refreshing(gene_symbol)
-    try:
-        row = connection.execute(
-            "SELECT * FROM gnomad_constraints WHERE gene_symbol = ? COLLATE NOCASE",
-            (str(gene_symbol or "").strip(),),
-        ).fetchone()
-    except sqlite3.OperationalError:
-        row = None
-    if row is None:
-        return {"status": "missing", "refreshing": refreshing}
-    stale = True
-    try:
-        updated = datetime.strptime(row["updated_at"], "%Y-%m-%dT%H:%M:%SZ")
-        stale = datetime.now(timezone.utc).replace(tzinfo=None) - updated > CONSTRAINT_MAX_AGE
-    except (TypeError, ValueError):
-        pass
-    result = {
-        "status": "ready" if row["available"] else "unavailable",
-        "refreshing": refreshing, "stale": stale,
-        "source": "gnomAD v4.1.2", "source_url": row["source_url"],
-        "gene_id": row["gene_id"], "transcript_id": row["transcript_id"],
-        "updated_at": row["updated_at"],
-    }
-    if row["available"]:
-        result.update({
-            "pli": row["pli"], "loeuf": row["loeuf"], "lof_oe": row["lof_oe"],
-            "lof_observed": row["lof_observed"], "lof_expected": row["lof_expected"],
-            "lof_z": row["lof_z"], "missense_z": row["missense_z"],
-            "missense_oe": row["missense_oe"],
-            "missense_observed": row["missense_observed"],
-            "missense_expected": row["missense_expected"],
-        })
+    from helper_variants import gnomad_constraint
+    records = gnomad_constraint.transcripts(connection, gene_symbol)
+    if not records:
+        manifest_row = connection.execute("SELECT value FROM metadata WHERE key='gnomad_constraint_manifest'").fetchone()
+        if manifest_row and json.loads(manifest_row[0]).get("release") == gnomad_constraint.RELEASE:
+            return {"status": "unavailable", "release": gnomad_constraint.RELEASE,
+                    "source": "gnomAD v4.1.2", "source_url": gnomad_constraint.SOURCE_URL,
+                    "refreshing": False, "stale": False, "transcripts": []}
+        return {"status": "missing", "refreshing": constraint_is_refreshing(gene_symbol), "transcripts": []}
+    pinned = all(row.get("release") == gnomad_constraint.RELEASE for row in records)
+    result = {"status": "ready" if any(row["available"] for row in records) else "unavailable",
+              "refreshing": constraint_is_refreshing(gene_symbol), "stale": False if pinned else True,
+              "source": "gnomAD v4.1.2" if pinned else "gnomAD (release unverified)",
+              "release": gnomad_constraint.RELEASE if pinned else None,
+              "source_url": records[0]["source_url"], "transcripts": records,
+              "updated_at": records[0]["updated_at"]}
+    if not pinned:
+        try:
+            acquired = datetime.fromisoformat(records[0]["updated_at"].replace("Z", "+00:00"))
+            result["stale"] = datetime.now(timezone.utc) - acquired > CONSTRAINT_MAX_AGE
+        except (ValueError, TypeError):
+            pass
+    if len(records) == 1:
+        result.update({key: value for key, value in records[0].items() if key not in result})
     return result
 
 

@@ -1,4 +1,5 @@
 from pathlib import Path
+import ast
 import shutil
 import subprocess
 
@@ -30,6 +31,72 @@ def test_igv_custom_track_rounds_fractional_query_coordinates():
       const url = new URL(config.source.url({chr: 'chr1', start: 100.5,
         end: 100.5 + config.visibilityWindow}), 'http://localhost');
       assert.ok(Number(url.searchParams.get('end')) - Number(url.searchParams.get('start')) <= 100000);
+    """
+    subprocess.run(
+        [node, "-e", script, str(STATIC / "helper_variants/web/static/variant-browser.js")],
+        check=True, capture_output=True, text=True,
+    )
+
+
+def test_population_frequency_header_shows_maximum_or_not_found():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required to exercise population frequency display")
+    script = r"""
+      const fs = require('node:fs');
+      const assert = require('node:assert/strict');
+      const source = fs.readFileSync(process.argv[1], 'utf8');
+      const labelsStart = source.indexOf('const POPULATION_LABELS = {');
+      const labelsEnd = source.indexOf('\n};', labelsStart) + 2;
+      const labels = source.slice(labelsStart, labelsEnd);
+      const status = source.slice(source.indexOf('  populationFrequencyStatus(detail, annotations) {'),
+        source.indexOf('  gnomadFrequencyCard(detail) {'));
+      const number = source.slice(source.indexOf('  frequencyNumber(rawValue) {'),
+        source.indexOf('  frequencyPercent(rawValue) {'));
+      const nameStart = source.indexOf('  populationName(populationId) {');
+      const readableStart = source.indexOf('\n  readableFieldName(', nameStart);
+      const populationName = source.slice(nameStart, readableStart);
+      const readableFieldName = source.slice(
+        readableStart + 1, source.indexOf('\n  referenceToolConfiguration(', readableStart));
+      const viewer = Function(`${labels}; return ({${status}, ${number}, ${populationName}, ${readableFieldName}})`)();
+      assert.equal(viewer.populationFrequencyStatus({}, [
+        {population_af: 0.02, metadata: {fields: {GNOMADG_NFE_AF: "0.12", MAX_AF_POPS: "NFE"}}},
+        {population_af: 0.04, metadata: {fields: {AFR_AF: "0.09"}}},
+      ]), `Max AF: ${viewer.frequencyNumber(0.12)} (gnomAD · Non-Finnish European)`);
+      assert.equal(viewer.populationFrequencyStatus({}, [
+        {metadata: {fields: {AFR_AF: "0.15", EAS_AF: "0.1"}}},
+      ]), `Max AF: ${viewer.frequencyNumber(0.15)} (1000G · African)`);
+      assert.equal(viewer.populationFrequencyStatus({gnomadFrequency: {
+        af: 0.05, populations: [{id: "afr", af: 0.2}],
+      }}, []), `Max AF: ${viewer.frequencyNumber(0.2)} (gnomAD · African)`);
+      assert.equal(viewer.populationFrequencyStatus({}, []), "Not found");
+    """
+    subprocess.run(
+        [node, "-e", script, str(STATIC / "helper_variants/web/static/variant-browser.js")],
+        check=True, capture_output=True, text=True,
+    )
+
+
+def test_gnomad_population_identifiers_are_rendered_as_full_names():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required to exercise population name display")
+    script = r"""
+      const fs = require('node:fs');
+      const assert = require('node:assert/strict');
+      const source = fs.readFileSync(process.argv[1], 'utf8');
+      const labelsStart = source.indexOf('const POPULATION_LABELS = {');
+      const labelsEnd = source.indexOf('\n};', labelsStart) + 2;
+      const labels = source.slice(labelsStart, labelsEnd);
+      const nameStart = source.indexOf('  populationName(populationId) {');
+      const readableStart = source.indexOf('\n  readableFieldName(', nameStart);
+      const populationName = source.slice(nameStart, readableStart);
+      const readableFieldName = source.slice(
+        readableStart + 1, source.indexOf('\n  referenceToolConfiguration(', readableStart));
+      const viewer = Function(`${labels}; return ({${populationName}, ${readableFieldName}})`)();
+      assert.equal(viewer.populationName('afr'), 'African');
+      assert.equal(viewer.populationName('nfe_XX'), 'Non-Finnish European (XX)');
+      assert.equal(viewer.populationName('gnomadg_mid'), 'Middle Eastern');
     """
     subprocess.run(
         [node, "-e", script, str(STATIC / "helper_variants/web/static/variant-browser.js")],
@@ -224,12 +291,13 @@ def test_variant_columns_are_reorderable_and_include_vep_fields():
         'key: "filter_alert"', 'key: "genotypes"',
         'key: "gene"', 'key: "hgvsc"', 'key: "hgvsp"',
         'key: "population_af"',
-        'key: "clinical_significance"', 'key: "consequence"', 'key: "exon_intron"',
+        'key: "clinvar_local"', 'key: "consequence"', 'key: "exon_intron"',
         'key: "depth"', 'key: "allele_fraction"', 'key: "transcript"',
     ]
     positions = [source.index(item) for item in expected_order]
     assert positions == sorted(positions)
-    assert 'label: "Clinical"' in source
+    assert '{key: "clinvar_local", label: "ClinVar"' in source
+    assert 'label: "Clinical (VCF)"' not in source
     assert 'label: "AF_max"' in source
     assert 'label: "Exon / intron"' in source
     assert "dragHandle.draggable = true" in source
@@ -255,7 +323,7 @@ def test_priority_columns_are_click_sortable_across_server_pages():
     assert 'sort: {key: "priority", direction: "desc"}' in source
     assert '["gene", {firstDirection: "asc", description: "alphabetically"}]' in source
     assert '["population_af", {firstDirection: "asc", description: "by AF_max; missing AF is the lowest value"}]' in source
-    assert '["clinical_significance", {firstDirection: "desc", description: "by clinical priority; Pathogenic is highest"}]' in source
+    assert '["clinical_significance", {firstDirection:' not in source
     assert '["consequence", {firstDirection: "asc", description: "alphabetically"}]' in source
     assert 'params.set("sort_by", workspace.sort.key)' in source
     assert 'params.set("sort_direction", workspace.sort.direction)' in source
@@ -273,9 +341,6 @@ def test_priority_filters_support_multiple_classes_and_numeric_range():
 
     assert '"Class", "priorityClass", ["P1", "P2", "P3", "P4"]' in source
     assert '[["minPriority", "From", filters.minPriority], ["maxPriority", "To", filters.maxPriority]]' in source
-    assert 'params.set("priority_classes", filters.priorityClasses.join(","))' in source
-    assert 'params.set("min_priority", filters.minPriority)' in source
-    assert 'params.set("max_priority", filters.maxPriority)' in source
     assert 'Minimum priority cannot exceed maximum priority.' in source
     assert ".priority-filter-body" in stylesheet
     assert ".priority-range" in stylesheet
@@ -298,12 +363,19 @@ def test_variant_detail_loads_assembly_matched_gnomad_genome_frequency():
 
     assert "/gnomad-frequency`" in source
     assert 'dataset: "gnomad_r2_1", version: "2.1.1"' in source
-    assert 'dataset: "gnomad_r4", version: "4.1"' in source
+    assert 'dataset: "gnomad_r4", version: "4.1.1"' in source
     assert "gnomadFrequencyCard(detail)" in source
     assert "refreshVariantPriorities(workspace)" in source
     assert '["observed", "not_observed_covered"].includes(frequency.status)' in source
-    assert 'not_observed_covered: "Not observed · adequately covered"' in source
-    assert 'node("h6", "Major populations"' in source
+    assert '`Max AF: ${this.frequencyNumber(maximum.frequency)}${source}`' in source
+    assert 'if (!candidates.length) return "Not found";' in source
+    assert 'gnomad-populations' in source
+    assert 'node("strong", "Population details", "gene-knowledge-label")' in source
+    assert 'const products = ["joint", "exomes", "genomes"]' in source
+    assert 'this.populationName(population.id)' in source
+    assert 'Additional VEP, gnomAD and 1000 Genomes data' in source
+    assert ".gnomad-populations > summary::before" in stylesheet
+    assert 'gnomad-frequency-table' in stylesheet
     assert ".frequency-direct { grid-column: 1 / -1; }" in stylesheet
 
 
@@ -312,7 +384,6 @@ def test_gene_context_action_opens_a_filtered_workspace_tab():
 
     assert 'cell.addEventListener("contextmenu"' in source
     assert "this.openGeneWorkspace(workspace, item.gene)" in source
-    assert 'if (workspace.gene) params.set("gene", workspace.gene)' in source
     assert "? `${workspace.gene} · ${workspace.sample.display_name}`" in source
 
 
@@ -320,12 +391,9 @@ def test_filter_panel_supports_clinical_inheritance_and_removable_gene_panels():
     source = (STATIC / "helper_variants/web/static/variant-browser.js").read_text()
     stylesheet = (STATIC / "helper_variants/web/static/variant-browser.css").read_text()
 
-    assert '"Clinical", "clinicalSignificance"' in source
+    assert '"ClinVar", "clinicalSignificance"' in source
     assert '"compound", "recessive", "dominant", "x_linked", "y_linked", "mitochondrial"' in source
     assert 'mitochondrial: "Maternal (mitochondrial)"' in source
-    assert 'params.set("inheritance_candidates"' in source
-    assert 'params.set("family_evidence", filters.familyEvidence.join(","))' in source
-    assert 'params.set("family_pattern", filters.familyPattern.join(","))' in source
     assert 'node("h5", "Family evidence")' in source
     assert '"de_novo", "father_only", "mother_only", "both_parents", "parental_compound"' in source
     assert 'de_novo: "De novo (absent in both parents)"' in source
@@ -406,7 +474,8 @@ def test_variant_hgvs_is_compact_and_detail_panel_can_be_closed():
     assert 'this.compactHgvs(item[key], "c.")' in source
     assert 'this.compactHgvs(item[key], "p.")' in source
     assert 'compact.replace(/%3D/gi, "=")' in source
-    assert 'workspace-grid${workspace.detail ? "" : " detail-closed"}' in source
+    assert 'const displayDetail = !workspace.loading && workspace.detail;' in source
+    assert 'workspace-grid${displayDetail ? "" : " detail-closed"}' in source
     assert 'node("button", "×", "detail-close")' in source
     assert "workspace.detail = null" in source
     assert "variantDetailAnnotationLabel(annotations = [])" in source
@@ -464,14 +533,15 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
         assert resource in source
     assert "genePhenotypeGenes(annotations)" in source
     assert "loadGenePhenotypes(workspace, variantId" in source
-    assert '"ClinVar evidence"' in source
+    assert 'this.clinvarSourceInformation(clinvarEvidence)' in source
     assert "clinvarEvidenceContent(clinvarEvidence, databaseIds, clinvarSearchUrl)" in source
     assert "clinvarReviewStatuses(statuses = [])" in source
-    assert '"ClinVar contains conflicting classifications.' in source
+    assert '"View all submissions and full details on ClinVar ↗"' not in source
+    assert "Germline submissions with at least 1 review star, across all conditions." not in source
     assert '"clinvar-review-stars"' in source
     assert 'heading.append(classifications)' in source
     assert "clinvarClassificationLabels(evidence = {})" in source
-    assert '`${item.label} (${Number(item.count)})`' in source
+    assert 'evidence.submission_classification_breakdown' in source
     assert "const classifications = evidence.classifications || [];" in source
     assert 'classifications.join(" · ")' in source
     assert 'node("div", undefined, "clinvar-identifiers")' in source
@@ -480,7 +550,7 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert 'Review status reflects the level of review reported by ClinVar' not in source
     assert ".clinvar-classification.pathogenic" in stylesheet
     assert ".clinvar-conflict-warning" in stylesheet
-    assert ".clinvar-identifiers .database-identifier-link { font-size: var(--detail-compact-size); }" in stylesheet
+    assert ".clinvar-identifiers .database-identifier-link { font-size: 14px; font-weight: 700; }" in stylesheet
     assert "--detail-section-title-size: 12px" in stylesheet
     assert "--detail-label-size: 11px" in stylesheet
     assert "--detail-metadata-size: 10px" in stylesheet
@@ -503,11 +573,12 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert 'node("details", undefined, "gene-disease-mechanisms")' in source
     assert '"gnomAD constraint"' in source
     assert '"ClinGen dosage sensitivity"' in source
-    assert '["pLoF o/e", observedExpected(' in source
-    assert '["Missense o/e", observedExpected(' in source
+    assert '["lof_oe", "lof"]' in source
+    assert '["missense_oe", "mis"]' in source
+    assert 'constraint.transcripts || [constraint]' in source
+    assert 'gnomad-constraint-table' in stylesheet
     assert 'geneConstraintMetricLabel(label, help)' in source
-    assert 'gnomAD v4.1 recommends <0.45' in source
-    assert '>3.09 is a widely used historical threshold' in source
+    assert 'it does not establish LoF, GoF or DN disease mechanisms' in source
     assert '"constraint-metric-information-button"' in source
     assert 'tooltip.setAttribute("role", "tooltip")' in source
     assert ".constraint-metric-information:focus-within" in stylesheet
@@ -572,13 +643,14 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert "grid-template-columns: 145px minmax(0, 1fr)" in stylesheet
     assert 'const order = ["VEP summary", "gnomAD", "1000 Genomes", "ExAC", "ESP", "TOPMed", "ALFA", "Other"]' in source
     assert 'node("h6", "Additional FORMAT info", "additional-format-heading")' in source
-    assert 'const summaryClass = group.database === "VEP summary"' in source
+    assert 'node("section", undefined, "frequency-group frequency-summary")' in source
+    assert 'normalized === "AF_MAX" ? "Max AF" : "Population"' in source
     assert ".frequency-summary { grid-column: 1 / -1; }" in stylesheet
-    assert 'EAS: "East Asia"' in source
+    assert 'EAS: "East Asian"' in source
     assert 'NFE: "Non-Finnish European"' in source
     assert 'code.replace(/^GNOMAD[EG]_/, "")' in source
     assert 'gnomad: {dataset: "gnomad_r2_1", version: "2.1.1"}' in source
-    assert 'gnomad: {dataset: "gnomad_r4", version: "4.1"}' in source
+    assert 'gnomad: {dataset: "gnomad_r4", version: "4.1.1"}' in source
     assert 'referenceToolConfiguration(referenceBuild)' in source
     assert 'externalVariantTool(detail, toolName)' in source
     assert 'return null;' in source
@@ -586,8 +658,12 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert 'node("small", `v${externalTool.version}`, "frequency-tool-version")' in source
     assert 'node("span", "↗", "external-link-icon")' in source
     assert ".frequency-external-link" in stylesheet
-    assert ".frequency-group dl { grid-template-columns: 185px" in stylesheet
-    assert ".frequency-group dt { font-size: var(--detail-secondary-size); white-space: nowrap; }" in stylesheet
+    assert ".frequency-group dl { grid-template-columns: 125px" in stylesheet
+    assert ".frequency-group dt { font-size: var(--detail-secondary-size); }" in stylesheet
+    assert '"Not found"' in source
+    frequency_disclosure = source[source.index('"Population frequencies"') - 160:
+                                  source.index('"Population frequencies"') + 240]
+    assert "disabled:" not in frequency_disclosure
     assert "grid-template-columns: 170px minmax(0, 1fr) 170px minmax(0, 1fr)" in stylesheet
     assert ".sample-evidence-grid dt { white-space: nowrap; }" in stylesheet
     assert '"Variant carriers"' in source
@@ -642,8 +718,22 @@ def test_viewer_can_create_one_archived_run_from_multiple_vcfs():
     assert "The VCF files are linked without copying them" in source
 
 
-def test_variant_package_has_no_helper_runtime_imports():
+def test_variant_package_limits_helper_runtime_imports_to_existing_ga2_reader():
     package = STATIC / "helper_variants"
-    python_sources = "\n".join(path.read_text() for path in package.glob("*.py"))
-    assert "import helper_next" not in python_sources
-    assert "from helper_next" not in python_sources
+    dependencies = []
+    for path in package.glob("*.py"):
+        for statement in ast.walk(ast.parse(path.read_text())):
+            if isinstance(statement, ast.ImportFrom) and (statement.module or "").startswith("helper_next"):
+                dependencies.append((path.name, statement.module, tuple(alias.name for alias in statement.names)))
+            elif isinstance(statement, ast.Import):
+                assert not any(alias.name.startswith("helper_next") for alias in statement.names)
+    # ClinVar reuses ga2; gnomAD trusts submitted alleles without a local FASTA reader.
+    # CACHE-06 administrative readers reuse existing stores.
+    assert set(dependencies) == {
+        ("clinvar_local.py", "helper_next.core", ("biological_identity",)),
+        ("source_registry.py", "helper_next.core.acmg_mechanism_store", ("MechanismStore",)),
+        ("source_registry.py", "helper_next.core.acmg_transcripts", ("TranscriptReferenceProvider", "VERSION")),
+        ("source_registry.py", "helper_next.core.acmg_reference", ("reference_record",)),
+        ("source_registry.py", "helper_next.core", ("reference_validation",)),
+        ("source_registry.py", "helper_next.core.project", ("get_project_paths",)),
+    }

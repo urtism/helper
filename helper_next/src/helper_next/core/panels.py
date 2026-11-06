@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 
 
@@ -7,13 +9,110 @@ class PanelDesignError(ValueError):
     pass
 
 
-def load_panel_registry(configs_dir):
-    experiment_list = Path(configs_dir) / "experiment_list.cfg"
-    if not experiment_list.is_file():
-        return {"list": [], "designs": {}, "invalid": {}}
+PANEL_FIELDS = (
+    "panel_name",
+    "panel_technology",
+    "gene_list",
+    "transcripts_list",
+    "target_list",
+    "target_bed",
+    "cnv_calls_model",
+    "cnv_ploidy_model",
+    "cnv_target_list",
+    "cnv_exons_info",
+)
 
-    with experiment_list.open() as handle:
-        data = json.load(handle)
+
+def load_panel_config(configs_dir):
+    path = Path(configs_dir) / "experiment_list.cfg"
+    if not path.is_file():
+        return {"list": []}
+    try:
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise PanelDesignError("Could not read {}: {}".format(path.name, exc))
+    if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+        raise PanelDesignError("{} must contain a JSON object with a list".format(path.name))
+    return data
+
+
+def save_panel_design(configs_dir, name, design, original_name=None):
+    name = clean_value(name)
+    if not name:
+        raise PanelDesignError("Panel name is required")
+    if not isinstance(design, dict):
+        raise PanelDesignError("Panel design must be an object")
+
+    data = load_panel_config(configs_dir)
+    names = data["list"]
+    source_name = clean_value(original_name) or name
+    if source_name not in names and source_name in data:
+        raise PanelDesignError("Panel design is not listed: {}".format(source_name))
+    if source_name not in names and name in names:
+        raise PanelDesignError("Panel design already exists: {}".format(name))
+    if name != source_name and name in names:
+        raise PanelDesignError("Panel design already exists: {}".format(name))
+
+    existing = data.get(source_name, {})
+    if not isinstance(existing, dict):
+        existing = {}
+    saved = dict(existing)
+    for field in PANEL_FIELDS:
+        if field in design or field == "panel_name":
+            saved[field] = name if field == "panel_name" else clean_value(design[field])
+        elif field not in saved:
+            saved[field] = ""
+    if not saved.get("target_bed"):
+        raise PanelDesignError("target_bed is required")
+
+    if source_name in names:
+        index = names.index(source_name)
+        if name != source_name:
+            names[index] = name
+            data.pop(source_name, None)
+    else:
+        names.append(name)
+    data[name] = saved
+
+    _write_panel_config(configs_dir, data)
+    return {"name": name, "design": saved}
+
+
+def delete_panel_design(configs_dir, name):
+    name = clean_value(name)
+    data = load_panel_config(configs_dir)
+    names = data["list"]
+    if name not in names:
+        raise PanelDesignError("Panel design not found: {}".format(name))
+    names.remove(name)
+    data.pop(name, None)
+    _write_panel_config(configs_dir, data)
+    return {"deleted": name}
+
+
+def _write_panel_config(configs_dir, data):
+    path = Path(configs_dir) / "experiment_list.cfg"
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=str(path.parent),
+            prefix=".experiment-list-", suffix=".tmp", delete=False
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(data, handle, indent=4, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(temporary_path), str(path))
+    except OSError as exc:
+        if temporary_path and temporary_path.exists():
+            temporary_path.unlink()
+        raise PanelDesignError("Could not save {}: {}".format(path.name, exc))
+
+
+def load_panel_registry(configs_dir):
+    data = load_panel_config(configs_dir)
 
     designs = {}
     invalid = {}

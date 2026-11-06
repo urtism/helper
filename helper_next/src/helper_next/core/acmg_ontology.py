@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 
 REGISTRY_VERSION = 'ontology-registry-1.0'
 POLICY_VERSION = 'qualified-mondo-singleton-1.0'

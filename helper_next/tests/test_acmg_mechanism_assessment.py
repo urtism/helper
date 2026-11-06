@@ -5,7 +5,7 @@ import pytest
 from helper_next.core import acmg_mechanism_normalizer as norm
 from helper_next.core.acmg_mechanism_assessment import assess
 from helper_next.core.acmg_mechanism_models import SourcePacket, SourceState
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from test_acmg_mechanisms import g2p, gencc, packets
 
 
@@ -156,45 +156,3 @@ def test_contradictory_only_record_is_preserved_without_becoming_positive_suppor
     result = assess(m.copy(update={"direct_evidence": [], "contradictory_evidence": [negative]}))
     assert result.mechanism_confidence == "UNKNOWN"
     assert result.supporting_evidence == [] and result.conflicting_evidence == [negative]
-
-
-def test_assembler_preserves_assessment_and_provenance_in_real_engine_contract(tmp_path, monkeypatch, engine):
-    from helper_next.core.acmg_evidence import EvidenceAssembler
-    from helper_next.core.acmg_pvs1 import transform
-    from test_acmg_pvs1 import bundle, provider, document
-    manager, _ = provider(tmp_path, bundle())
-    src = manager.get("ENST000001.1", "GRCh38", fetch=True)
-    doc = document(tmp_path, monkeypatch, src["data"])
-    snapshot = doc["normalized_evidence"]["snapshot"]
-    assessment = assess(matrix({"g2p":[g2p()]}))
-    transformed = transform(snapshot["variant"]["identity"], doc["original_vcf_evidence"]["annotations"][0],
-                            snapshot["context"], src, [], assessment)
-    snapshot["evidence"].append(transformed["evidence"])
-    result = EvidenceAssembler(engine).assemble(doc, originals={transformed["evidence"]["id"]:transformed["original"]})
-    assert not result["errors"], result["errors"]
-    assert result["contract"]["schema_version"] == "evidence-contract-1.1"
-    envelope = next(e for e in result["contract"]["evidence"] if e["value"]["kind"] == "PVS1")
-    import json
-    value = envelope["value"]["observation"]["mechanism"]["confidence_assessment"]
-    assert value["mechanism_confidence"] == "DEFINITIVE"
-    assert json.loads(value["source_evidence_json"])[0]["source_record_ref"] == assessment.supporting_evidence[0].source_record_ref
-    assert json.loads(value["provenance_json"]) == assessment.provenance
-    assert envelope["validation_status"] == "UNVERIFIED"
-    assert any("verification" in item["path"] for item in transformed["missing_evidence"])
-
-
-def test_assembler_does_not_relabel_an_assessment_for_different_inheritance(tmp_path):
-    from helper_next.core.acmg_pvs1 import transform
-    from test_acmg_pvs1 import bundle, provider, case, CONTEXT
-    manager, _ = provider(tmp_path, bundle())
-    src = manager.get("ENST000001.1", "GRCh38", fetch=True)
-    identity, annotation = case(src["data"])
-    assessment = assess(matrix({"g2p":[g2p(requirement="biallelic_autosomal")]}, "AR"))
-    context = {"gene":CONTEXT["gene"], "disease":CONTEXT["disease"], "gene_disease":{"inheritance_modes":["AUTOSOMAL_DOMINANT"]}}
-    result = transform(identity, annotation, context, src, [], assessment)
-    assert "confidence_assessment" not in result["evidence"]["observation"]["mechanism"]
-    assert result["original"]["rejected_mechanism_assessment"] == assessment.dict()
-    assert any("does not match" in m["reason"] for m in result["missing_evidence"])
-
-
-from test_acmg_evidence import engine  # Authoritative validator runs in its separate runtime.

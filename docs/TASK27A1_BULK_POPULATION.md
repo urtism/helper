@@ -1,5 +1,7 @@
 # Task 27A.1 — Bulk population della Mechanism Evidence Cache
 
+> Nota 2026-10-29: audit/inventario storico. I riferimenti al Workbench, ai relativi test e al vecchio contratto descrivono lo stato precedente alla rimozione; non sono istruzioni operative attuali. Per componenti conservati, cache e verifiche aggiornate vedere [HELPER_STRUCTURAL_CLEANUP.md](HELPER_STRUCTURAL_CLEANUP.md).
+
 Stato: implementato e verificato. Eseguiti dry-run e prova offline su **20**
 associazioni reali. **Il popolamento completo non è stato avviato.** Nessun commit.
 

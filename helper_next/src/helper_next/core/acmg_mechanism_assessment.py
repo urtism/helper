@@ -1,12 +1,11 @@
 """Task 28 biological interpretation of the existing mechanism matrix; no ACMG rules."""
-import json
 from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import Field
 
 from helper_next.core.acmg_mechanism_models import Model, MechanismEvidence, MechanismIdentity
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 
 VERSION = "helper-mechanism-assessment-1.0"
 RULES_VERSION = "helper-mechanism-assessment-rules-1.1"
@@ -36,11 +35,6 @@ def approved_vcep_assertion(evidence):
             and evidence.source_record_hash == digest(evidence.raw_assertion)["value"])
 
 
-def context_curie(identifier):
-    value = identifier["identifier"]
-    return value if ":" in value else identifier["namespace"] + ":" + value
-
-
 class MechanismAssertion(Model):
     mechanism: Literal["LOSS_OF_FUNCTION", "GAIN_OF_FUNCTION", "DOMINANT_NEGATIVE", "OTHER", "UNKNOWN"]
     confidence: Literal["DEFINITIVE", "INFERRED", "DISPUTED", "UNKNOWN"]
@@ -64,29 +58,6 @@ class MechanismAssessment(Model):
     mapping_uncertainty: list[str] = Field(default_factory=list)
     provenance: dict = Field(default_factory=dict)
     limitations: list[str] = Field(default_factory=list)
-
-    def matches_context(self, context):
-        """One scope check for transport; no ACMG applicability decision."""
-        from helper_next.core.acmg_mechanism_normalizer import allelic
-        modes = context.get("gene_disease", {}).get("inheritance_modes", [])
-        return (bool(context.get("gene") and context.get("disease")) and len(modes) == 1
-                and self.identity.gene_id == context_curie(context["gene"])
-                and context_curie(context["disease"]) in {self.identity.disease_id, *self.identity.disease_aliases}
-                and self.identity.allelic_requirement == allelic(modes[0]))
-
-    def confidence_contract(self):
-        """Serialize the existing Engine confidence contract without reinterpretation.
-
-        Association status, assertions and mapping fields remain for wire and
-        snapshot compatibility; they are audit details, not extra policy axes.
-        """
-        assessment = self.dict()
-        source_evidence = {e["evidence_id"]: e for e in assessment["supporting_evidence"] + assessment["conflicting_evidence"]}
-        return {"schema_version": "mechanism-confidence-1.0",
-                **{k: assessment[k] for k in ("mechanism", "mechanism_confidence", "mechanism_scope",
-                    "mechanism_basis", "gene_disease_association_status", "assertions", "mapping_uncertainty", "limitations")},
-                "source_evidence_json": json.dumps(list(source_evidence.values()), ensure_ascii=False, allow_nan=False),
-                "provenance_json": json.dumps(assessment["provenance"], ensure_ascii=False, allow_nan=False)}
 
 
 def assess(matrix):

@@ -6,7 +6,8 @@ It deliberately has no database, web, pipeline, or UI dependencies.
 
 import re
 
-from helper_prioritization.profiles import DEFAULT_PROFILE
+from helper_prioritization.profiles import DEFAULT_PROFILE, get_profile
+from helper_prioritization.population_frequency import score_population
 
 
 _LOF_CONSEQUENCES = {
@@ -78,9 +79,25 @@ def score_variant(variant, profile=None):
 
 def apply_clinvar_evidence(priority, evidence, profile=None):
     """Recalculate ClinVar priority from exact-allele evidence returned by ClinVar."""
-    profile = profile or DEFAULT_PROFILE
+    profile = profile or get_profile((priority or {}).get("ruleset"))
+    if priority and priority.get("ruleset") != profile["version"]:
+        raise ValueError("Cannot mix Priority scoring versions when updating ClinVar evidence")
     evidence = evidence or {}
+    aggregate_classifications = _values(evidence.get("classifications"))
+    conflict = bool(evidence.get("has_conflict") or evidence.get("conflicts")) or any(
+        re.search(r"\bconflict(?:s|ing)?\b", label.casefold().replace("_", " "))
+        for label in aggregate_classifications
+    )
     breakdown = evidence.get("classification_breakdown") or []
+    # Local counts cover all SCV pages. Use them to interpret an existing
+    # germline conflict, without replacing the reported ClinVar aggregate.
+    submission_breakdown = []
+    if not breakdown and conflict and aggregate_classifications and evidence.get("matching_status") == "FOUND":
+        submission_breakdown = [
+            row for row in evidence.get("submission_classification_breakdown") or []
+            if isinstance(row, dict) and (_number(row.get("count")) or 0) > 0
+        ]
+        breakdown = submission_breakdown
     breakdown_labels = [
         str(row.get("label") or "").strip()
         for row in breakdown if isinstance(row, dict) and row.get("label")
@@ -90,11 +107,7 @@ def apply_clinvar_evidence(priority, evidence, profile=None):
         int(_number(row.get("stars")) or 0)
         for row in review_statuses if isinstance(row, dict)
     ]
-    classifications = breakdown_labels or _values(evidence.get("classifications"))
-    conflict = bool(evidence.get("has_conflict") or evidence.get("conflicts")) or any(
-        re.search(r"\bconflict(?:s|ing)?\b", label.casefold().replace("_", " "))
-        for label in _values(evidence.get("classifications"))
-    )
+    classifications = breakdown_labels or aggregate_classifications
     live_context = {
         "clinical_significance": classifications,
         "clinvar_conflict": conflict,
@@ -102,6 +115,11 @@ def apply_clinvar_evidence(priority, evidence, profile=None):
         "clinvar_stars": max(stars or [0]),
     }
     component = _score_clinvar(live_context, profile)
+    if submission_breakdown:
+        component["evidence"].append("Submission classifications: " + ", ".join(
+            "{} ({})".format(row["label"], row["count"])
+            for row in submission_breakdown if row.get("label")
+        ))
 
     updated = dict(priority or {})
     components = [
@@ -147,17 +165,25 @@ def _component(key, label, score, maximum, reason, evaluated=True,
 
 
 def _score_maf(variant, profile):
+    if profile["maf"].get("algorithm") == "population-v2":
+        return score_population(variant, profile)
     maximum = profile["component_maxima"]["maf"]
-    af = _number(variant.get("population_af"))
+    faf = _number(variant.get("population_faf"))
+    af = faf if faf is not None else _number(variant.get("population_af"))
+    frequency_label = "gnomAD FAF95" if faf is not None else "AF"
     threshold = _number(variant.get("max_credible_af"))
     threshold = threshold if threshold is not None else profile["maf"]["default_max_credible_af"]
+    if (
+        variant.get("population_absent")
+        and variant.get("population_coverage_adequate")
+        and (af is None or af <= 0)
+    ):
+        return _component(
+            "maf", "Population frequency", maximum, maximum,
+            "Absent from gnomAD with adequate locus coverage.",
+            evidence=["gnomAD absence verified", "Maximum credible AF {}".format(threshold)],
+        )
     if af is None:
-        if variant.get("population_absent") and variant.get("population_coverage_adequate"):
-            return _component(
-                "maf", "Population frequency", maximum, maximum,
-                "Absent from a population resource with adequate coverage.",
-                evidence=["Population absence verified", "Maximum credible AF {}".format(threshold)],
-            )
         coverage_adequate = bool(variant.get("population_coverage_adequate"))
         coverage_available = bool(variant.get("population_coverage_available"))
         if coverage_adequate:
@@ -188,7 +214,15 @@ def _score_maf(variant, profile):
         return _component(
             "maf", "Population frequency", profile["maf"]["ba1_score"], maximum,
             "Population AF is at or above the general BA1-level threshold.",
-            evidence=["AF {}".format(af), "BA1 threshold {}".format(ba1)],
+            evidence=["{} {}".format(frequency_label, af), "BA1 threshold {}".format(ba1)],
+        )
+    very_rare = _number(profile["maf"].get("very_rare_af"))
+    if very_rare is not None and af <= very_rare:
+        return _component(
+            "maf", "Population frequency", maximum, maximum,
+            "Population frequency is at or below the very-rare threshold.",
+            evidence=["{} {}".format(frequency_label, af),
+                      "Very-rare threshold {}".format(very_rare)],
         )
     ratio = af / threshold if threshold > 0 else float("inf")
     for limit, score in profile["maf"]["rare_ratios"]:
@@ -200,13 +234,15 @@ def _score_maf(variant, profile):
             )
             return _component(
                 "maf", "Population frequency", score, maximum, reason,
-                evidence=["AF {}".format(af), "Maximum credible AF {}".format(threshold),
+                evidence=["{} {}".format(frequency_label, af),
+                          "Maximum credible AF {}".format(threshold),
                           "AF / threshold {:.3g}".format(ratio)],
             )
     return _component(
         "maf", "Population frequency", profile["maf"]["too_common_score"], maximum,
         "Population AF is substantially above the configured maximum credible AF.",
-        evidence=["AF {}".format(af), "Maximum credible AF {}".format(threshold),
+        evidence=["{} {}".format(frequency_label, af),
+                  "Maximum credible AF {}".format(threshold),
                   "AF / threshold {:.3g}".format(ratio)],
     )
 

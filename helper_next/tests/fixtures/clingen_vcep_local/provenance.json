@@ -1,0 +1,16 @@
+{
+  "accessed_at": "2026-11-02",
+  "export_url": "https://erepo.clinicalgenome.org/evrepo/api/summary/classifications/download",
+  "summary_url": "https://erepo.clinicalgenome.org/evrepo/api/summary/classifications?pgSize=20000&pg=1",
+  "export_sha256": "b022b993061af0b90c9928a866df7d1d9666bc9d5410d95bafdf62a81b6604d2",
+  "export_records": 13682,
+  "summary_records": 13675,
+  "fixture_records": 7,
+  "license": "CC0-1.0",
+  "attribution": "Clinical Genome Resource (ClinGen), Evidence Repository",
+  "terms_url": "https://www.clinicalgenome.org/docs/terms-of-use/",
+  "fixture_sha256": {
+    "erepo.tsv": "3518984a6004370318e91cba88c79f1cf51f2a917d35715abf6de316da805ecc",
+    "summary.json": "08e979480dbbc1ceedee44280bed34f1cb7970c86f2d439f76c64a5fc573056c"
+  }
+}

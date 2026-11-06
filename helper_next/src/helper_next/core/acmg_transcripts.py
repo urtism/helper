@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.analysis_history import now
 
 

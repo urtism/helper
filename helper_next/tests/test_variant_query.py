@@ -243,13 +243,15 @@ def test_priority_occurrence_counts_unrelated_groups_not_family_members(tmp_path
 
 
 def test_priority_pagination_reuses_cached_global_order(tmp_path, monkeypatch):
+    from test_clinvar_integration import install, at
+    install(tmp_path, monkeypatch, [at()])
     path, sample_id, _ = query_store(tmp_path)
     original = query.score_variant
     scored = []
 
-    def counting_score(variant):
+    def counting_score(variant, **kwargs):
         scored.append(variant)
-        return original(variant)
+        return original(variant, **kwargs)
 
     monkeypatch.setattr(query, "score_variant", counting_score)
     first = query.list_variants(path, sample_id, limit=2)
@@ -270,23 +272,16 @@ def test_list_priority_reuses_detail_evidence_and_invalidates_cached_order(tmp_p
         raise AssertionError("Variant list must only use already retrieved ClinVar evidence")
 
     monkeypatch.setattr(clinvar, "_request", unexpected_request)
-    query.list_variants(path, sample_id, limit=1)
-    evidence = {
-        "status": "available", "classifications": ["Likely pathogenic"],
-        "review_statuses": [{"label": "germline review", "stars": 2}],
-        "classification_breakdown": [{"label": "Likely pathogenic", "count": 2}],
-    }
-    clinvar._store(clinvar.cache_path(), "GRCh38|1|5|A|G", evidence)
+    from test_clinvar_integration import install, at
+    install(tmp_path, monkeypatch, [at(ClinicalSignificance="Likely pathogenic")])
     positive = query.list_variants(path, sample_id, limit=1)
     assert positive["items"][0]["position"] == 5
     item = positive["items"][0]
     component = next(c for c in item["priority"]["components"] if c["key"] == "clinvar")
     assert component["score"] == 20
 
-    # Apply a contradictory remote update to the same allele, as detail lookup does.
-    evidence["classifications"] = ["Benign"]
-    evidence["classification_breakdown"] = [{"label": "Benign", "count": 2}]
-    clinvar._store(clinvar.cache_path(), "GRCh38|1|5|A|G", evidence)
+    # Activating a different local snapshot invalidates the existing global order.
+    install(tmp_path, monkeypatch, [at(ClinicalSignificance="Benign")])
     negative = query.list_variants(path, sample_id)
     assert negative["items"][-1]["position"] == 5
     item = negative["items"][-1]
@@ -350,16 +345,16 @@ def test_compact_projection_chooses_canonical_annotation_and_detail_is_lazy(tmp_
         "clinvar": ["456", "VCV000000456.2"],
         "clingen": ["CA789"],
     }
-    assert detail["clinvar_evidence"]["status"] == "available"
-    assert detail["clinvar_evidence"]["review_statuses"] == [{
+    assert detail["vcf_clinvar_evidence"]["status"] == "available"
+    assert detail["vcf_clinvar_evidence"]["review_statuses"] == [{
         "label": "Criteria provided, multiple submitters, no conflicts", "stars": 2,
     }]
-    assert detail["clinvar_evidence"]["conditions"] == ["Gene 1 disorder"]
-    assert detail["clinvar_evidence"]["condition_ids"] == ["MONDO:0000001"]
-    assert detail["clinvar_evidence"]["has_conflict"] is True
+    assert detail["vcf_clinvar_evidence"]["conditions"] == ["Gene 1 disorder"]
+    assert detail["vcf_clinvar_evidence"]["condition_ids"] == ["MONDO:0000001"]
+    assert detail["vcf_clinvar_evidence"]["has_conflict"] is True
     assert clinvar_component["score"] == 0
     assert "no clinvar germline classification" in clinvar_component["reason"].casefold()
-    assert detail["clinvar_evidence"]["last_evaluated"] == ["2026-09-01"]
+    assert detail["vcf_clinvar_evidence"]["last_evaluated"] == ["2026-09-01"]
     assert query.variant_detail(path, other_sample, item["variant_id"]) is not None
     second_variant = query.list_variants(path, sample_id, limit=2)["items"][1]
     assert query.variant_detail(path, other_sample, second_variant["variant_id"]) is None
@@ -369,7 +364,7 @@ def test_cached_gnomad_coverage_distinguishes_verified_absence_from_missing_af(
         tmp_path, monkeypatch):
     path, sample_id, _ = query_store(tmp_path)
 
-    def frequency_contexts(alleles):
+    def frequency_contexts(alleles, **kwargs):
         return [
             {
                 "population_frequency_status": "not_observed_covered",
@@ -382,7 +377,7 @@ def test_cached_gnomad_coverage_distinguishes_verified_absence_from_missing_af(
 
     monkeypatch.setattr(query.gnomad_frequency, "cached_contexts", frequency_contexts)
 
-    page = query.list_variants(path, sample_id)
+    page = query.list_variants(path, sample_id, scoring_version="germline-wes-v1.9.2")
     by_position = {item["position"]: item for item in page["items"]}
     verified = by_position[2]
     unknown = by_position[3]
@@ -400,6 +395,29 @@ def test_cached_gnomad_coverage_distinguishes_verified_absence_from_missing_af(
     assert verified_maf["evaluated"] is True
     assert unknown_maf["score"] == 10
     assert unknown_maf["evaluated"] is True
+
+
+def test_priority_scores_cached_gnomad_faf95_instead_of_annotation_af(tmp_path, monkeypatch):
+    path, sample_id, _ = query_store(tmp_path)
+
+    def frequency_contexts(alleles, **kwargs):
+        return [
+            {
+                "population_frequency_status": "observed",
+                "population_frequency_source": "gnomAD genomes v4.1",
+                "population_af": 0.00001,
+                "population_faf": 0.0008,
+            }
+            for _ in alleles
+        ]
+
+    monkeypatch.setattr(query.gnomad_frequency, "cached_contexts", frequency_contexts)
+    item = query.list_variants(path, sample_id, scoring_version="germline-wes-v1.9.2")["items"][0]
+    maf = next(component for component in item["priority"]["components"] if component["key"] == "maf")
+
+    assert item["population_af"] >= 0.00001
+    assert maf["score"] == 10
+    assert "gnomAD FAF95 0.0008" in maf["evidence"]
 
 
 def test_missing_sample_is_rejected(tmp_path):
@@ -462,11 +480,11 @@ def test_variant_panel_annotation_and_numeric_filters_are_server_side(tmp_path):
     panel = query.list_variants(path, sample_id, genes="GENE2, GENE1", consequences="missense_variant")
     assert [item["position"] for item in panel["items"]] == [1]
     clinical = query.list_variants(path, sample_id, clinical_significances="pathogenic")
-    assert [item["position"] for item in clinical["items"]] == [1]
+    assert clinical["items"] == []  # No local snapshot; the original VCF is not a fallback.
     not_reported = query.list_variants(
         path, sample_id, clinical_significances="__not_reported__"
     )
-    assert [item["position"] for item in not_reported["items"]] == [2, 3, 4, 5]
+    assert sorted(item["position"] for item in not_reported["items"]) == [1, 2, 3, 4, 5]
     african = query.list_variants(
         path, sample_id, max_af=0.001, population_frequency="AFR_AF", include_missing_af=False
     )
@@ -527,7 +545,7 @@ def test_pass_selected_filter_status_and_filter_options(tmp_path):
     assert options["consequences"] == ["intron_variant", "missense_variant"]
     assert options["clinical_significances"] == [
         "pathogenic", "likely_pathogenic", "uncertain_significance",
-        "likely_benign", "benign", "drug_response", "__not_reported__",
+        "likely_benign", "benign", "__not_reported__",
     ]
     assert options["population_frequencies"] == ["MAX_AF", "AFR_AF", "EUR_AF"]
     assert options["filter_statuses"] == list(query.DEFAULT_FILTER_STATUSES)

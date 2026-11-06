@@ -20,7 +20,10 @@ Keep context small. Start from the user request, then open only the listed area.
 - `helper_next/src/helper_next/core/`: project discovery, samplesheets, panels, annotation, tool resolution, Nextflow manifest/run config builders.
 - `helper_next/src/helper_next/core/tool_wrappers/`: tool invocation model and wrapper registry.
 - `helper_next/src/helper_next/web/static/`: static frontend (`app.js`, `styles.css`, `sections/`).
+- `helper_next/src/helper_variants/`: local VCF indexing/query, biological sources and variant frontend.
+- `pvs1/`: local PVS1 models, calculator and molecular analysis; called by `api/acmg_calculator.py` and `helper_variants/web/static/acmg-calculator.js`.
 - `helper_next/tests/`: focused tests for core/API behavior.
+- `tests/test_pvs1_*.py`: local calculator, molecular fixtures and optional browser checks.
 
 ## Legacy Notes
 

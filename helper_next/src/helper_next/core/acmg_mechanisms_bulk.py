@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from helper_variants import gene_phenotype
 from helper_next.core import acmg_mechanism_normalizer as norm
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.acmg_mechanism_models import SourcePacket
 from helper_next.core.acmg_mechanisms import MechanismEvidenceCache
 from helper_next.core.acmg_mechanism_store import record_reference

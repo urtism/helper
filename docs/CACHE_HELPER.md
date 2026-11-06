@@ -1,5 +1,7 @@
 # Cache utilizzate da HELPER
 
+> Nota 2026-10-29: audit/inventario storico. I riferimenti al Workbench, ai relativi test e al vecchio contratto descrivono lo stato precedente alla rimozione; non sono istruzioni operative attuali. Per componenti conservati, cache e verifiche aggiornate vedere [HELPER_STRUCTURAL_CLEANUP.md](HELPER_STRUCTURAL_CLEANUP.md).
+
 **Stato del codice: 29 ottobre 2026**
 
 Questa relazione descrive le cache implementate nel codice HELPER attivo e i

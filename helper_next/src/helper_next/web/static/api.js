@@ -21,6 +21,30 @@ export async function getProject() {
   return requestJson("/api/project");
 }
 
+export async function getDataSources() {
+  return requestJson("/api/data-sources");
+}
+
+export async function getDataSource(sourceId) {
+  return requestJson(`/api/data-sources/${encodeURIComponent(sourceId)}`);
+}
+
+export async function checkDataSource(sourceId) {
+  return requestJson(`/api/data-sources/${encodeURIComponent(sourceId)}/check`, {method: "POST"});
+}
+
+export async function updateClinVar(selection) {
+  return requestJson("/api/data-sources/clinvar/update", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(selection),
+  });
+}
+
+export async function postponeClinVar(selection) {
+  return requestJson("/api/data-sources/clinvar/postpone", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(selection),
+  });
+}
+
 export async function getPipelines() {
   return requestJson("/api/pipelines");
 }
@@ -55,6 +79,22 @@ export async function savePipeline(name, config, overwrite) {
 
 export async function deletePipeline(name) {
   return requestJson(`/api/pipelines/${encodeURIComponent(name)}`, {method: "DELETE"});
+}
+
+export async function getPanels() {
+  return requestJson("/api/panels");
+}
+
+export async function savePanel(name, design, originalName = "") {
+  return requestJson("/api/panels", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({name, design, original_name: originalName || null}),
+  });
+}
+
+export async function deletePanel(name) {
+  return requestJson(`/api/panels/${encodeURIComponent(name)}`, {method: "DELETE"});
 }
 
 export async function getTools(filename = "tools_cfg/tools.cfg") {

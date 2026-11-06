@@ -16,7 +16,7 @@ Escape, pulsante di chiusura e clic sullo sfondo chiudono la modal; il focus tor
 `pvs1/calculator.py:calculate_pvs1(PVS1Input, policy="STANDARD") -> PVS1Result` contiene logica Python esplicita; non esiste un nuovo motore generico di regole.
 `POST /api/acmg-calculator/pvs1` legge la variante dall'indice del campione e richiede run/sample/variant, annotation_id e transcript corrispondenti; il browser non può sostituire identità/alleli con un input arbitrario.
 La route chiama direttamente il nuovo Calculator; non chiama vecchio Engine, Task 22, Workbench o relative API di valutazione. Riusa solo indice/contesto HELPER, riferimenti trascrizionali e componenti DOM/HTTP esistenti.
-La normale shell HELPER e il vecchio percorso restano indipendenti; aprire il nuovo pulsante non invia richieste ai vecchi endpoint ACMG.
+Il vecchio Workbench e i suoi endpoint sono stati rimossi: vedere [pulizia strutturale](HELPER_STRUCTURAL_CLEANUP.md). Il calcolatore locale PVS1 è l'unico percorso di valutazione disponibile.
 Il package `pvs1` resta nella root ed è incluso nella distribuzione `helper-next`, insieme ai namespace `api` e `core`: dopo la reinstallazione l'import funziona anche avviando il backend fuori dal repository, senza aggiungere la root al PYTHONPATH.
 
 - Variante/gene/conseguenza/trascritto provengono dall'annotazione esatta dell'ALT selezionato; malattia/ereditarietà dal contesto locale già disponibile. Validità del gene non viene trasformata in meccanismo LoF.

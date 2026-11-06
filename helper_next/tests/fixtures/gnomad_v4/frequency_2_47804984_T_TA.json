@@ -1,0 +1,26 @@
+{
+  "description": "Selected counts and EAS population from the diagnostic gnomAD v4.1.1 response; offline regression of the reported insertion.",
+  "source_url": "https://gnomad.broadinstitute.org/variant/2-47804984-T-TA?dataset=gnomad_r4",
+  "data": {
+    "v0_all": {
+      "variant_id": "2-47804984-T-TA", "reference_genome": "GRCh38",
+      "chrom": "2", "pos": 47804984, "ref": "T", "alt": "TA", "flags": [],
+      "exome": {
+        "ac": 14, "an": 1461806, "filters": [], "flags": [],
+        "faf95": {"popmax": 0.00000835, "popmax_population": "eas"},
+        "populations": [{"id": "eas", "ac": 2, "an": 39694}]
+      },
+      "genome": {
+        "ac": 1, "an": 152198, "filters": [], "flags": [],
+        "faf95": {"popmax": null, "popmax_population": null},
+        "populations": [{"id": "eas", "ac": 0, "an": 5206}]
+      },
+      "joint": {
+        "ac": 15, "an": 1614004, "filters": [],
+        "faf95": {"popmax": 0.00000738, "popmax_population": "eas"},
+        "populations": [{"id": "eas", "ac": 2, "an": 44900}]
+      }
+    },
+    "v0_non_ukb": null
+  }
+}

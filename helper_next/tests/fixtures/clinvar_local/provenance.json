@@ -1,0 +1,32 @@
+{
+  "source": "NCBI ClinVar",
+  "acquired_at": "2026-10-30",
+  "selection_variation_ids": [
+    2,
+    3,
+    7105,
+    13961,
+    17662
+  ],
+  "note": "Exact header and rows selected by VariationID; no edits to source fields. These files are test subsets, not complete releases.",
+  "variant_summary": {
+    "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz",
+    "original_md5_manifest": "c79b46f3c02ef544608e0d9a83cac46e  /am/ftp-pub-clinvar/tab_delimited/variant_summary.txt.gz",
+    "fixture_uncompressed_sha256": "edd8c0249a74b55ada552d2d10c7da450382a1d85145dc4fb1160c4109078bd5"
+  },
+  "submission_summary": {
+    "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/submission_summary.txt.gz",
+    "original_md5_manifest": "b7f5d29bdc0fdace0cdfb7c8f2e23ca1  /am/ftp-pub-clinvar/tab_delimited/submission_summary.txt.gz",
+    "fixture_uncompressed_sha256": "5376c36a9811dc89bbf86f50514fc998c6f0cfdcfeca9249060be15ea66fac38"
+  },
+  "duplicate_scv_fixture": {
+    "file": "submission_duplicate_scv.tsv.gz",
+    "scv": "SCV000024996.132",
+    "variation_ids": [
+      "4559"
+    ],
+    "rows": 2,
+    "fixture_uncompressed_sha256": "91d78539568cc08f24c016c5553512af8791bfa43e0414f36a05c9c3f03d2f27",
+    "source": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/submission_summary.txt.gz"
+  }
+}

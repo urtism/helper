@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Helper Next</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20261008-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20261102-1">
   </head>
   <body>
     <div class="app-shell">
@@ -22,6 +22,7 @@
           <button class="nav-item" type="button" data-section="pipeline">Pipeline</button>
           <button class="nav-item" type="button" data-section="tools">Tools</button>
           <button class="nav-item" type="button" data-section="panels">Gene Panels</button>
+          <button class="nav-item" type="button" data-section="data-sources">Data Sources</button>
           <button class="nav-item" type="button" data-section="analysis">Analysis</button>
           <button class="nav-item" type="button" data-section="analysis-history">Analysis History</button>
           <button class="nav-item" type="button" data-section="variants">Variants</button>
@@ -316,17 +317,103 @@
         <section class="module" id="panels" aria-labelledby="panels-title">
           <div class="module-header">
             <div>
-              <h3 id="panels-title">Add or Edit Gene Panel Info</h3>
-              <p>Collect panel targets, transcripts, CNV assets, and chemistry metadata.</p>
+              <h3 id="panels-title">Gene Panel Designs</h3>
+              <p>Manage panel design assets used by analysis runs.</p>
             </div>
-            <button type="button">New Panel</button>
+            <button type="button" class="primary-action" id="panels-new">New design</button>
           </div>
-          <div class="form-grid">
-            <label>Panel Name<input type="text" placeholder="e.g. TrusightCardio"></label>
-            <label>Target List<input type="text" placeholder="Select target .list"></label>
-            <label>Target BED<input type="text" placeholder="Select target .bed"></label>
-            <label>Transcript List<input type="text" placeholder="Select transcript list"></label>
+          <div class="panels-layout">
+            <article class="panels-catalog-panel">
+              <div class="tools-list-heading">
+                <label for="panels-select">Saved designs</label>
+                <span class="muted" id="panels-count"></span>
+              </div>
+              <select id="panels-select" aria-label="Select a saved panel design">
+                <option value="">Select a design...</option>
+              </select>
+            </article>
+            <article class="panels-editor-panel">
+              <div class="tools-editor-empty" id="panels-editor-empty">Select a design or create a new one.</div>
+              <form id="panels-editor" hidden>
+                <div class="tools-editor-heading">
+                  <div>
+                    <h4 id="panels-editor-title">Panel design</h4>
+                    <span class="resource-status" id="panels-editor-status"></span>
+                  </div>
+                  <button type="button" id="panels-delete">Delete</button>
+                </div>
+                <div class="form-grid panels-form-grid">
+                  <label>Panel name
+                    <input id="panel-name" name="panel_name" type="text" required autocomplete="off">
+                  </label>
+                  <label>Technology
+                    <input id="panel-technology" name="panel_technology" type="text" placeholder="e.g. Capture Enrichment">
+                  </label>
+                  <label>Gene list
+                    <input id="panel-gene-list" name="gene_list" type="text" spellcheck="false">
+                  </label>
+                  <label>Transcript list
+                    <input id="panel-transcripts-list" name="transcripts_list" type="text" spellcheck="false">
+                  </label>
+                  <label>Target list
+                    <input id="panel-target-list" name="target_list" type="text" spellcheck="false">
+                  </label>
+                  <label>Target BED <span class="required-mark">Required</span>
+                    <input id="panel-target-bed" name="target_bed" type="text" required spellcheck="false">
+                  </label>
+                </div>
+                <details class="collapsible-subpanel panel-cnv-details">
+                  <summary>GATK CNV models and assets</summary>
+                  <div class="form-grid panels-form-grid">
+                    <label>Calls model
+                      <input id="panel-cnv-calls-model" name="cnv_calls_model" type="text" spellcheck="false">
+                    </label>
+                    <label>Ploidy model
+                      <input id="panel-cnv-ploidy-model" name="cnv_ploidy_model" type="text" spellcheck="false">
+                    </label>
+                    <label>CNV target list
+                      <input id="panel-cnv-target-list" name="cnv_target_list" type="text" spellcheck="false">
+                    </label>
+                    <label>Exons information
+                      <input id="panel-cnv-exons-info" name="cnv_exons_info" type="text" spellcheck="false">
+                    </label>
+                  </div>
+                </details>
+                <div class="tools-editor-actions">
+                  <button type="button" id="panels-cancel">Cancel</button>
+                  <button type="submit" class="primary-action">Save design</button>
+                </div>
+              </form>
+            </article>
           </div>
+          <p class="pipeline-status" id="panels-feedback" aria-live="polite"></p>
+        </section>
+
+        <section class="module" id="data-sources" aria-labelledby="data-sources-title">
+          <div class="table-heading">
+            <div>
+              <h3 id="data-sources-title">Data Sources</h3>
+              <p class="muted">Database, cache e reference locali. Versioni e date sconosciute non vengono dedotte.</p>
+            </div>
+            <button id="data-sources-reload" type="button">Rileggi stato locale</button>
+          </div>
+          <p id="data-sources-feedback" role="status" aria-live="polite"></p>
+          <p id="data-sources-notice" class="resource-status" role="status" hidden></p>
+          <div class="history-table-scroll">
+            <table id="data-sources-table" aria-label="Sorgenti biologiche globali">
+              <thead><tr><th>Sorgente</th><th>Tipologia</th><th>Versione / snapshot</th><th>Ultimo aggiornamento</th><th>Stato</th><th>Aggiornamenti</th><th>Azioni</th></tr></thead>
+              <tbody id="data-sources-body"></tbody>
+            </table>
+          </div>
+          <p class="muted">Il controllo ClinVar automatico ogni 7 giorni consulta soltanto i checksum. Download e installazione richiedono la conferma di Aggiorna. Posticipa rinvia l’avviso di 7 giorni.</p>
+          <article id="data-sources-detail" hidden aria-labelledby="data-sources-detail-title">
+            <h3 id="data-sources-detail-title">Dettagli sorgente</h3>
+            <dl id="data-sources-detail-fields"></dl>
+          </article>
+          <article aria-labelledby="data-sources-annotations-title">
+            <h3 id="data-sources-annotations-title">VEP e annotazioni statiche</h3>
+            <p class="muted">Le versioni dichiarate dei tool sono consultabili nella riga VEP. Le versioni effettive e le risorse delle annotazioni restano associate alle singole run.</p>
+          </article>
         </section>
 
         <section class="module" id="analysis" aria-labelledby="section-title">
@@ -448,7 +535,7 @@
       </main>
     </div>
 
-    <script type="module" src="/variant-module/variant-browser.js?v=20261027-1"></script>
-    <script type="module" src="/static/app.js?v=20260925-2"></script>
+    <script type="module" src="/variant-module/variant-browser.js?v=20261106-detail-cache-1"></script>
+    <script type="module" src="/static/app.js?v=20261102-2"></script>
   </body>
 </html>

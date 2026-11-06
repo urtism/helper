@@ -1,13 +1,9 @@
 # Helper Next
 
-ACMG Interpretation Workbench (research): [installazione e uso](../docs/TASK22_WORKBENCH.md),
-[stato e verifiche TASK 22](../docs/TASK22_STATUS.md),
-[contratto ACMG Engine e limiti dell'audit](../docs/TASK22_ACMG_CONTRACT.md).
-
-Task 23 criteria-only workspace: [audit, compatibility matrix, setup and validation](../docs/TASK23_ACMG_INTEGRATION.md).
-The Task 22 engine protocols appear inside the existing variant detail, with
-criteria status/strength, actual decision graphs and trace inspection, protocol
-comparison, separate reviews, typed evidence corrections and JSON/CSV exports.
+Il calcolatore ACMG locale implementa attualmente PVS1: [uso e limiti](../docs/HELPER_NEW_ACMG_PVS1_MVP.md).
+Il pulsante **Valuta ACMG** nel dettaglio variante richiama direttamente
+`POST /api/acmg-calculator/pvs1`, senza un servizio di valutazione separato.
+[Audit e pulizia strutturale](../docs/HELPER_STRUCTURAL_CLEANUP.md).
 
 Prototype for the next Helper interface.
 
@@ -48,15 +44,10 @@ python -m pip install -e .
 helper-next serve
 ```
 
-Il server avvia anche ACMG Engine locale, se installato nel repository adiacente
-`acmg-engine/.venv` o disponibile nel `PATH`, e riutilizza un motore già attivo.
-Per un altro eseguibile usare `HELPER_ACMG_COMMAND`; per disabilitare l'avvio
-automatico usare `HELPER_ACMG_AUTOSTART=0`.
-I sei profili sperimentali selezionati sono elencati in
-`configs/acmg_engine.json`; `ACMG_PROFILES_DIR` ha priorità su questa selezione.
-La stessa configurazione abilita l'esecuzione research; l'ambiente
-`ACMG_ENABLE_RESEARCH_INTERPRETATION` ha priorità su tale impostazione.
-[Installazione e configurazione ACMG](../docs/TASK22_WORKBENCH.md).
+PVS1 viene eseguito nello stesso processo Python del backend. Le fonti
+biologiche esterne e le cache locali esistenti restano disponibili.
+La classificazione ACMG completa e i profili di valutazione del precedente
+servizio non hanno un equivalente nel calcolatore locale attuale.
 
 Use `python -m pip` rather than plain `pip` in the `gatk43` environment. On
 some workstations the `pip` command still points to Python 2.7.

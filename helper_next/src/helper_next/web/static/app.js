@@ -2,6 +2,8 @@ import {initAnalysisHistory} from "./sections/analysis_history.js?v=20260922-1";
 import {getProject} from "./api.js?v=20260910-2";
 import {initAnalysis} from "./sections/analysis.js?v=20260922-1";
 import {initPipeline} from "./sections/pipeline.js?v=20260921-1";
+import {initPanels} from "./sections/panels.js?v=20261030-1";
+import {initDataSources} from "./sections/data_sources.js?v=20261102-2";
 import {initSampleSheet} from "./sections/samplesheet.js?v=20260909-2";
 import {initTools} from "./sections/tools.js?v=20260915-2";
 
@@ -10,6 +12,7 @@ const sectionTitles = {
   pipeline: "Add or Edit Pipeline",
   tools: "Tools Settings",
   panels: "Add or Edit Gene Panel Info",
+  "data-sources": "Data Sources",
   analysis: "Start Analysis",
   "analysis-history": "Analysis History",
   variants: "Variant Browser",
@@ -47,6 +50,7 @@ function showSection(sectionId, updateHash = true) {
 
   document.querySelector("#section-title").textContent = sectionTitles[sectionId];
   variantSourceInfo.hidden = sectionId !== "variants";
+  window.dispatchEvent(new CustomEvent("helper:section-changed", {detail: sectionId}));
   if (updateHash && !window.location.hash.startsWith(`#${sectionId}`)) {
     window.history.replaceState(null, "", `#${sectionId}`);
   }
@@ -71,6 +75,8 @@ initSampleSheet();
 initAnalysis();
 initAnalysisHistory();
 initPipeline();
+initPanels();
+initDataSources();
 initTools();
 
 loadProject().catch((error) => {

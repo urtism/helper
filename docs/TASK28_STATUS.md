@@ -1,5 +1,7 @@
 # Task 28A/28C — stato integrazione HELPER
 
+> Nota 2026-10-29: documento storico. La cache pubblica dei meccanismi e il relativo assessment locale sono conservati; Workbench, Coordinator/Assembler, contratti e valutazioni del servizio esterno descritti qui sono stati rimossi. Stato operativo: [HELPER_STRUCTURAL_CLEANUP.md](HELPER_STRUCTURAL_CLEANUP.md).
+
 Data: 2026-10-28. Esito complessivo: **PARTIALLY_IMPLEMENTED**.
 Le modifiche sono implementate nel codice HELPER e riesaminate staticamente;
 non si dichiara il task VALIDATED o COMPLETED. Nessun test è stato eseguito

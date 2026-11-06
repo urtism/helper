@@ -4,7 +4,7 @@ No remote lookup, phenotype inference or VCEP selection occurs here.
 """
 import re
 
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.acmg_mechanism_normalizer import allelic
 from helper_variants import gene_phenotype
 

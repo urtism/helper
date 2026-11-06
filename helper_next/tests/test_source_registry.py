@@ -1,7 +1,9 @@
 from helper_variants import source_registry
 
 
-def test_registry_separates_source_dates_from_local_snapshots(monkeypatch):
+def test_registry_separates_source_dates_from_local_snapshots(tmp_path, monkeypatch):
+    from test_clinvar_integration import install
+    install(tmp_path, monkeypatch)
     monkeypatch.setattr(source_registry.gene_phenotype, "cache_status", lambda database=None: {
         "status": "ready", "stale": False, "database": "/not/read",
         "updated_at": "2026-10-06T12:00:00Z",
@@ -19,10 +21,6 @@ def test_registry_separates_source_dates_from_local_snapshots(monkeypatch):
         "orphadata": {"count": 60, "updated": ""},
         "gnomad": {"count": 4, "updated": "2026-10-06T13:00:00Z"},
     })
-    monkeypatch.setattr(source_registry.clinvar, "cache_status", lambda database=None: {
-        "record_count": 7, "latest_record_update": "2026-09-27",
-        "synchronized_at": "2026-10-06T13:40:00Z",
-    })
     monkeypatch.setattr(source_registry.panelapp, "cache_status", lambda database=None: {
         "status": "ready", "stale": False, "panel_count": 433,
         "latest_panel_update": "2026-10-05T15:42:00Z",
@@ -38,15 +36,18 @@ def test_registry_separates_source_dates_from_local_snapshots(monkeypatch):
 
     assert result["schema_version"] == "1"
     assert result["summary"] == {
-        "total": 11, "on_demand": 4, "synchronized": 6, "bundled": 1,
+        "total": 11, "on_demand": 3, "synchronized": 7, "bundled": 1,
     }
-    assert by_id["gnomad"]["release"] == "v4.1.2"
-    assert by_id["gnomad_frequency"]["release"] == "v2.1.1 (GRCh37); v4.1 (GRCh38)"
+    assert by_id["gnomad"]["release"] == "Unverified legacy release"
+    assert by_id["gnomad_frequency"]["release"] == "v4.1.1 (GRCh38)"
     assert by_id["gencc"]["data_updated_at"] == "2026-10-04"
     assert by_id["gencc"]["synchronized_at"] == "2026-10-06T12:00:00Z"
     assert by_id["panelapp"]["release"] == "Per-panel versions in catalogue snapshot"
     assert by_id["acmg_sf"]["release"].startswith("v3.3")
-    assert by_id["clinvar"]["status"] == "on_demand"
+    assert by_id["clinvar"]["status"] == "synchronized"
+    assert by_id["clinvar"]["name"] == "ClinVar Local"
+    assert by_id["clinvar"]["release"].startswith("composite-sha256:")
+    assert by_id["clinvar"]["data_updated_at"] == ""
     assert by_id["ncbi_variation"]["record_count"] == 3
 
 
@@ -58,7 +59,6 @@ def test_registry_marks_missing_snapshot_sources_unavailable(monkeypatch):
         key: {"count": 0, "updated": ""}
         for key in ("gencc", "hpo", "g2p", "clingen_dosage", "orphadata", "gnomad")
     })
-    monkeypatch.setattr(source_registry.clinvar, "cache_status", lambda database=None: {})
     monkeypatch.setattr(source_registry.panelapp, "cache_status", lambda database=None: {
         "status": "missing",
     })
@@ -71,3 +71,5 @@ def test_registry_marks_missing_snapshot_sources_unavailable(monkeypatch):
     assert by_id["gencc"]["status"] == "unavailable"
     assert by_id["hpo"]["status"] == "unavailable"
     assert by_id["panelapp"]["status"] == "unavailable"
+    assert by_id["clinvar"]["status"] == "unavailable"
+    assert by_id["clinvar"]["data_updated_at"] == ""

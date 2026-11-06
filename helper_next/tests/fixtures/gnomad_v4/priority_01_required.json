@@ -1,0 +1,17 @@
+{
+  "description": "PRIORITY-01 mandatory example. AF derived from exact AC/AN; supplied display AFs are rounded.",
+  "allele": ["GRCh38", "1", 1000, "A", "G"],
+  "response": {"data": {"variant": {
+    "variant_id": "1-1000-A-G", "reference_genome": "GRCh38",
+    "exome": {"ac": 4, "an": 1335596, "filters": [], "homozygote_count": 0,
+      "faf95": {"popmax": 0.000008140, "popmax_population": null}},
+    "genome": null,
+    "joint": {"ac": 4, "an": 1480618, "filters": [], "homozygote_count": 0,
+      "faf95": {"popmax": 0.000006000, "popmax_population": null}}
+  }}},
+  "displayed_genomes_an": 145022,
+  "note": "No variant is not an allele-specific PASS record. Browser denominator is not supplied as AC=0 evidence to the parser.",
+  "expected_v1": 10,
+  "expected_v2_generic": 20,
+  "expected_v2_context_mcaf_0_001": 25
+}

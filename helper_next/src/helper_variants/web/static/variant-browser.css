@@ -524,14 +524,33 @@ a.gene-disease-identifier:hover, a.gene-disease-identifier:focus-visible { borde
 .frequency-external-link:hover, .frequency-external-link:focus-visible { color: #153f5c; text-decoration: underline; }
 .frequency-tool-version { color: #68798b; font-size: var(--detail-metadata-size); font-weight: 600; }
 .external-link-icon { font-size: 11px; line-height: 1; }
-.frequency-group dl { grid-template-columns: 185px minmax(0, 1fr); }
-.frequency-group dt { font-size: var(--detail-secondary-size); white-space: nowrap; }
+.frequency-group dl { grid-template-columns: 125px minmax(0, 1fr); }
+.frequency-group dt { font-size: var(--detail-secondary-size); }
 .frequency-summary { grid-column: 1 / -1; }
-.frequency-summary dl { grid-template-columns: 185px minmax(0, 1fr) 185px minmax(0, 1fr); }
+.frequency-summary dl { grid-template-columns: 125px minmax(0, 1fr) 125px minmax(0, 1fr); }
+.population-frequency-groups > .detail-disclosure { grid-column: 1 / -1; }
 .frequency-direct { grid-column: 1 / -1; }
-.frequency-direct > dl { grid-template-columns: 185px minmax(0, 1fr) 185px minmax(0, 1fr); }
+.frequency-direct > dl { grid-template-columns: 125px minmax(0, 1fr) 125px minmax(0, 1fr); }
 .frequency-population-heading { color: #53677b; font-size: var(--detail-secondary-size); margin: 3px 2px 0; }
 .frequency-note { margin: 0; }
+.gnomad-compact { gap: 2px; }
+.gnomad-frequency-table, .gnomad-population-table, .gnomad-constraint-table { border-collapse: collapse; font-size: var(--detail-secondary-size); font-variant-numeric: tabular-nums; width: 100%; }
+.gnomad-frequency-table { table-layout: fixed; }
+.gnomad-frequency-table th, .gnomad-frequency-table td, .gnomad-population-table th, .gnomad-population-table td, .gnomad-constraint-table th, .gnomad-constraint-table td { border-bottom: 1px solid #e5eaf0; padding: 2px 4px; text-align: right; line-height: 1.35; }
+.gnomad-frequency-table th:first-child, .gnomad-population-table :is(th,td):first-child, .gnomad-constraint-table :is(th,td):first-child { text-align: left; }
+.gnomad-frequency-table th:first-child { width: 16%; }
+.gnomad-frequency-table td { overflow-wrap: anywhere; }
+.gnomad-frequency-table [data-filter="pass"] { color: #37734e; }
+.gnomad-frequency-table [data-filter="other"] { color: #92611b; }
+.gnomad-frequency-table [data-filter="absent"] { color: #768392; }
+.gnomad-populations { border-top: 1px solid #e5eaf0; font-size: var(--detail-secondary-size); margin-top: 2px; min-width: 0; padding-top: 5px; }
+.gnomad-populations > summary { align-items: center; color: #53677b; cursor: pointer; display: flex; gap: 7px; list-style: none; min-height: 22px; }
+.gnomad-populations > summary::-webkit-details-marker { display: none; }
+.gnomad-populations > summary::before { color: #6c7b8b; content: "▸"; font-size: 10px; }
+.gnomad-populations[open] > summary::before { content: "▾"; }
+.gnomad-population-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 2px 0; }
+.gnomad-population-controls select { font: inherit; max-width: 150px; padding: 1px 3px; }
+.gnomad-population-controls label { display: inline-flex; align-items: center; gap: 2px; }
 .sample-evidence-call { display: grid; gap: 8px; }
 .sample-evidence-grid dl { grid-template-columns: 170px minmax(0, 1fr) 170px minmax(0, 1fr); }
 .sample-evidence-grid dt { white-space: nowrap; }
@@ -549,13 +568,29 @@ a.gene-disease-identifier:hover, a.gene-disease-identifier:focus-visible { borde
 .carrier-empty { color: #7a8795; font-size: var(--detail-compact-size); margin: 0 2px 3px; }
 .inline-error { font-size: 12px; padding: 8px 13px; }
 .clinvar-evidence-content { gap: 7px; }
+.clinvar-disclosure { overflow: visible; }
+.clinvar-disclosure > summary { border-radius: 7px; }
+.clinvar-source-information { display: inline-flex; position: relative; }
+.clinvar-source-tooltip { background: #243746; border-radius: 6px; box-shadow: 0 5px 18px rgba(22, 38, 50, .24); color: #fff; display: grid; font-size: var(--detail-secondary-size); gap: 4px; left: -65px; line-height: 1.45; opacity: 0; padding: 8px 9px; pointer-events: none; position: absolute; top: calc(100% + 5px); transition: opacity .12s ease; visibility: hidden; width: min(270px, 65vw); z-index: 10; }
+.clinvar-source-information:hover .clinvar-source-tooltip, .clinvar-source-information:focus-within .clinvar-source-tooltip { opacity: 1; visibility: visible; }
+.clinvar-submissions-scroll { align-content: start; display: grid; gap: 4px; grid-auto-rows: max-content; max-height: 278px; min-width: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.clinvar-submissions-scroll:focus-visible { outline: 2px solid #497b9e; outline-offset: 2px; }
+.clinvar-submission-preview { align-content: start; border: 1px solid #dce3eb; border-radius: 6px; display: grid; font-size: var(--detail-secondary-size); gap: 2px; grid-template-rows: repeat(4, auto); min-width: 0; overflow: hidden; padding: 6px 8px; }
+.clinvar-submission-heading { align-items: center; display: flex; gap: 5px 10px; justify-content: space-between; min-width: 0; }
+.clinvar-submission-heading > strong, .clinvar-submission-heading > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clinvar-submission-heading .database-identifiers, .clinvar-submission-heading .clinvar-review-stars { flex-shrink: 0; }
+.clinvar-submission-heading .clinvar-classification { padding: 1px 6px; }
+.clinvar-submission-preview p { color: #53677b; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; margin: 0; overflow: hidden; overflow-wrap: anywhere; }
+.clinvar-submission-preview small { color: #667385; font-size: var(--detail-metadata-size); }
 .clinvar-evidence-heading { align-items: center; display: flex; flex-wrap: wrap; gap: 7px 10px; justify-content: space-between; }
 .clinvar-evidence-heading > strong { color: #263e51; font-size: var(--detail-subsection-title-size); }
 .clinvar-classifications { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
 .clinvar-classification { border: 1px solid transparent; border-radius: 999px; font-size: var(--detail-secondary-size); font-weight: 700; padding: 3px 8px; }
+.vcep-met-codes { display: flex; flex-wrap: wrap; gap: 5px; }
+.vcep-met-code { overflow-wrap: anywhere; }
 .clinvar-identifiers { align-items: center; display: flex; min-height: 18px; }
 .clinvar-identifiers .database-identifiers { gap: 4px 7px; }
-.clinvar-identifiers .database-identifier-link { font-size: var(--detail-compact-size); }
+.clinvar-identifiers .database-identifier-link { font-size: 14px; font-weight: 700; }
 .clinvar-classification.pathogenic { background: #f7dddd; border-color: #e5bcbc; color: #852a2a; }
 .clinvar-classification.likely-pathogenic { background: #fae8dc; border-color: #ebc8b2; color: #86451d; }
 .clinvar-classification.uncertain { background: #fff3cf; border-color: #e9d394; color: #70570f; }
@@ -684,7 +719,7 @@ button.primary { background: #326b88; border-color: #326b88; color: #fff; }
   .panelapp-result small { grid-column: 1 / -1; text-align: left; }
   .population-frequency-groups, .variant-summary-grid { grid-template-columns: 1fr; }
   .frequency-summary { grid-column: auto; }
-  .frequency-summary dl { grid-template-columns: 185px minmax(0, 1fr); }
+  .frequency-summary dl { grid-template-columns: 125px minmax(0, 1fr); }
   .sample-evidence-grid dl { grid-template-columns: 125px minmax(0, 1fr); }
   .detail-cards dl.transcript-card { grid-template-columns: 105px minmax(0, 1fr); }
   .transcript-card dt:nth-of-type(even) { border-left: 0; }

@@ -1,6 +1,11 @@
+"""Frozen v1.9.2 regressions; current AF scale is tested separately."""
+from functools import partial
+
 import pytest
 
-from helper_prioritization import RULESET_VERSION, apply_clinvar_evidence, score_variant
+from helper_prioritization import LEGACY_PROFILE, apply_clinvar_evidence, score_variant as _score_variant
+
+score_variant = partial(_score_variant, profile=LEGACY_PROFILE)
 
 
 def component(result, key):
@@ -24,12 +29,12 @@ def test_scores_strong_lof_case_and_explains_exact_sum():
         "quality": 50,
     })
 
-    assert result["ruleset"] == RULESET_VERSION
-    assert result["score"] == 85
+    assert result["ruleset"] == LEGACY_PROFILE["version"]
+    assert result["score"] == 80
     assert result["max_score"] == 85
-    assert result["normalized_score"] == 100
+    assert result["normalized_score"] == 94
     assert result["band"] == "P1"
-    assert result["formula"] == "25 + 25 + 20 + 15 = 85 / 85"
+    assert result["formula"] == "20 + 25 + 20 + 15 = 80 / 85"
     assert component(result, "prediction")["applicable"] is False
     assert result["call_confidence"]["status"] == "high"
 
@@ -124,6 +129,43 @@ def test_missing_population_af_keeps_positive_score_when_absence_is_unverified(
 
 
 @pytest.mark.parametrize(
+    "population_af, population_absent, coverage_adequate, expected_score",
+    [
+        (None, True, True, 25),
+        (0, True, True, 25),
+        (None, True, False, 10),
+        (None, False, True, 10),
+        (0.000001, False, False, 25),
+        (0.0000011, False, False, 20),
+    ],
+)
+def test_population_frequency_maximum_score_requires_verified_absence_or_very_rare_af(
+    population_af, population_absent, coverage_adequate, expected_score
+):
+    maf = component(score_variant({
+        "population_af": population_af,
+        "population_absent": population_absent,
+        "population_coverage_adequate": coverage_adequate,
+        "population_frequency_source": "gnomAD genomes v4.1",
+    }), "maf")
+
+    assert maf["score"] == expected_score
+    assert maf["score"] <= maf["max_score"]
+
+
+def test_gnomad_faf95_is_used_instead_of_raw_population_af():
+    maf = component(score_variant({
+        "population_af": 0.00001,
+        "population_faf": 0.0008,
+        "population_absent": True,
+        "population_coverage_adequate": True,
+    }), "maf")
+
+    assert maf["score"] == 10
+    assert "gnomAD FAF95 0.0008" in maf["evidence"]
+
+
+@pytest.mark.parametrize(
     "significance, conflict_classifications, expected_score, expected_reason",
     [
         ("Pathogenic", ["Pathogenic(2)", "Uncertain_significance(1)"], 15, "P/LP and VUS"),
@@ -184,6 +226,56 @@ def test_detail_clinvar_submission_breakdown_resolves_plp_vus_conflict(stars, ex
 
     assert component(result, "clinvar")["score"] == expected
     assert "P/LP and VUS" in component(result, "clinvar")["reason"]
+
+
+@pytest.mark.parametrize("stars, expected", [(0, -7.5), (1, -11.2), (2, -15), (3, -15), (4, -15)])
+def test_local_benign_vus_conflict_uses_all_submission_counts(stars, expected):
+    result = apply_clinvar_evidence(score_variant({}), {
+        "matching_status": "FOUND",
+        "classifications": ["Conflicting classifications of pathogenicity"],
+        "classification_breakdown": [],
+        "submission_classification_breakdown": [
+            {"label": "Likely benign", "count": 8},
+            {"label": "Benign", "count": 3},
+            {"label": "Uncertain significance", "count": 1},
+            {"label": "Pathogenic", "count": 0},
+        ],
+        "review_statuses": [{"stars": stars}],
+    })
+    clinvar = component(result, "clinvar")
+    assert clinvar["score"] == expected
+    assert "B/LB and VUS" in clinvar["reason"]
+    assert "Likely benign (8), Benign (3), Uncertain significance (1)" in clinvar["evidence"][-1]
+
+
+@pytest.mark.parametrize("labels, expected", [
+    (["Likely pathogenic", "Uncertain significance"], 15),
+    (["Likely pathogenic", "Benign", "Uncertain significance"], 0),
+    (["Likely pathogenic"], 0),
+    (["Uncertain significance"], 0),
+    ([], 0),
+])
+def test_local_conflict_submission_directions(labels, expected):
+    result = apply_clinvar_evidence(score_variant({}), {
+        "matching_status": "FOUND",
+        "classifications": ["Conflicting classifications of pathogenicity"],
+        "submission_classification_breakdown": [{"label": label, "count": 1} for label in labels],
+        "review_statuses": [{"stars": 2}],
+    })
+    assert component(result, "clinvar")["score"] == expected
+
+
+@pytest.mark.parametrize("state", ["AMBIGUOUS", "UNRESOLVED", "NOT_FOUND", "ERROR"])
+def test_local_conflict_counts_require_confirmed_allele(state):
+    result = apply_clinvar_evidence(score_variant({}), {
+        "matching_status": state,
+        "classifications": ["Conflicting classifications of pathogenicity"],
+        "submission_classification_breakdown": [
+            {"label": "Benign", "count": 3}, {"label": "Uncertain significance", "count": 1},
+        ],
+        "review_statuses": [{"stars": 2}],
+    })
+    assert component(result, "clinvar")["score"] == 0
 
 
 @pytest.mark.parametrize("extra_classifications", [[], ["Uncertain significance"]])

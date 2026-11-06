@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.acmg_pvs1 import nonsense as task25_nonsense
 from helper_next.core.acmg_transcripts import complement, mrna_to_genomic, qualify, translate
 from helper_variants.indexer import IndexedFasta, sha256_file

@@ -1,9 +1,9 @@
-"""HELPER supplies structured identifiers; the workbench selects source records."""
+"""HELPER supplies local gene/disease contexts for indexed variant details."""
 import io
 
 import pytest
 
-from helper_next.api import acmg, variants
+from helper_next.api import variants
 from helper_next.core import acmg_context, analysis_history, external_vcf
 from helper_variants import gene_phenotype, gnomad_frequency, indexer, query
 
@@ -38,7 +38,8 @@ def test_cache_exposes_curated_stable_gene_ids_without_manual_hgnc(knowledge):
 
 
 @pytest.mark.parametrize("source_type", ["run", "external"])
-def test_api_builds_packet_without_user_entering_gene_or_disease_ids(tmp_path, knowledge, source_type):
+def test_variant_detail_supplies_context_without_manual_identifiers(tmp_path, knowledge, source_type, monkeypatch):
+    monkeypatch.setenv("HELPER_CLINVAR_OFFLINE", "1")
     content = ('##fileformat=VCFv4.2\n'
                '##INFO=<ID=CSQ,Number=.,Type=String,Description="Format: Allele|SYMBOL|Feature|Consequence">\n'
                '#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n'
@@ -59,7 +60,7 @@ def test_api_builds_packet_without_user_entering_gene_or_disease_ids(tmp_path, k
     variant_id = query.list_variants(database, 1)["items"][0]["variant_id"]
     allele = ("GRCh38", "14", 100, "A", "G")
     cached = gnomad_frequency._parse_response({"data": {
-        "variant": {"genome": {"ac": 0, "an": 100000, "filters": [], "populations": []}},
+        "variant": {"variant_id": "14-100-A-G", "genome": {"ac": 0, "an": 100000, "filters": [], "populations": []}},
         "region": {"coverage": {"genome": [{"pos": 100, "mean": 31, "over_20": .94}]}},
     }}, gnomad_frequency.DATASETS["GRCh38"], allele, "https://gnomad.broadinstitute.org/")
     gnomad_frequency._store(gnomad_frequency.cache_path(), gnomad_frequency.cache_key(*allele), cached)
@@ -67,19 +68,13 @@ def test_api_builds_packet_without_user_entering_gene_or_disease_ids(tmp_path, k
     assert selected["gnomad_frequency"]["ac"] == 0
     supplied = selected["interpretation_context"]["annotations"][0]
     assert supplied["gene"]["identifier"] == "HGNC:7577"
-    request = acmg.PrepareRequest(source_id=source_id, sample_id=1, variant_id=variant_id,
-                                 annotation_id=supplied["annotation_id"], transcript="ENST1.1", assembly="GRCh38")
-    result = acmg.prepare(request)
-    packet = result["document"]["normalized_evidence"]
-    assert packet["snapshot"]["context"]["gene"]["identifier"] == "HGNC:7577"
-    assert packet["snapshot"]["context"]["disease"]["identifier"] == "MONDO:0005045"
-    assert packet["snapshot"]["context"]["gene_disease"]["provenance"]["extraction_method"] == "DIRECT_IMPORT"
-    assert result["document"]["context_resolution"]["origin"]["assertions"][0]["source"] == "Test source"
-    assert request.context == {}
-    population = next(e for e in packet["snapshot"]["evidence"] if e["id"] == "helper-gnomad-genomes")
-    assert population["observation"]["aggregate"]["allele_count"] == 0
-    assert population["observation"]["aggregate"]["allele_number"] == 100000
-    assert population["provenance"]["source_version"] == "4.1"
+    context, resolution = acmg_context.select(selected["interpretation_context"], supplied["annotation_id"], "ENST1.1")
+    assert context["gene"]["identifier"] == "HGNC:7577"
+    assert context["disease"]["identifier"] == "MONDO:0005045"
+    assert resolution["origin"]["source_version"]
+    assert resolution["origin"]["assertions"][0]["source"] == "Test source"
+    assert selected["gnomad_frequency"]["an"] == 100000
+    assert selected["gnomad_frequency"]["release"] == "4.1.1"
 
 
 def test_multiple_diseases_require_selection_not_identifier_typing():

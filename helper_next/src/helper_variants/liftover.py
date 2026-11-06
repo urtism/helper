@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,11 +11,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from helper_variants.acquisition import projection_flights
+
 
 API_ROOT = "https://api.ncbi.nlm.nih.gov/variation/v0"
 SOURCE_URL = "https://www.ncbi.nlm.nih.gov/variation/services/"
 USER_AGENT = "HelperVariantBrowser/0.1 (assembly projection)"
 ALLELE_RE = re.compile(r"^[ACGT]+$")
+_request_gate = threading.Lock()
+_last_request = 0.0
 
 # Exact RefSeq accessions make the assembly interpretation explicit and stable.
 ASSEMBLY_ACCESSIONS = {
@@ -125,6 +130,15 @@ def project_variant(reference_build, chromosome, position, reference, alternate,
             message="Assembly projection is in offline mode and no cached result is available.",
         )
 
+    return projection_flights.run((str(database.resolve()), key), lambda: _acquire_projection(
+        database, key, source_build, target_build, chromosome, position, reference, alternate, source, timeout))
+
+
+def _acquire_projection(database, key, source_build, target_build, chromosome, position,
+                        reference, alternate, source, timeout):
+    cached = _cached(database, key)
+    if cached is not None:
+        return dict(cached, cache="hit", source_url=SOURCE_URL)
     try:
         projected = _retrieve(
             source_build, target_build, chromosome, position, reference, alternate, timeout
@@ -196,6 +210,12 @@ def _request_json(path, timeout):
     last_error = None
     for attempt in range(3):
         try:
+            global _last_request
+            with _request_gate:
+                delay = max(0.0, 1.0 - (time.monotonic() - _last_request))
+                if delay:
+                    time.sleep(delay)
+                _last_request = time.monotonic()
             with urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pydantic import ValidationError
 
 from helper_next.core import acmg_mechanism_normalizer as norm
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.acmg_mechanism_models import SOURCES, SourcePacket, SourceState
 from helper_next.core.acmg_mechanism_store import MechanismStore, json_text, record_reference
 from helper_next.core.acmg_sources import SourceManager

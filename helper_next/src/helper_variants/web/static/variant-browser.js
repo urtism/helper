@@ -1,7 +1,7 @@
 const ROW_HEIGHT = 36;
 const PAGE_SIZE = 200;
 const OVERSCAN = 8;
-const STYLESHEET_URL = new URL("./variant-browser.css?v=20261009-1", import.meta.url).href;
+const STYLESHEET_URL = new URL("./variant-browser.css?v=20261103-gnomad-1", import.meta.url).href;
 const IGV_THEME_URL = new URL("./igv-theme.css?v=20261008-2", import.meta.url).href;
 const IGV_MODULE_URL = "https://cdn.jsdelivr.net/npm/igv@3.8.5/dist/igv.esm.min.js";
 const CLINICAL_BROWSER_URL = new URL("./clinical-browser.html?v=20261009-1", import.meta.url);
@@ -15,7 +15,7 @@ const VARIANT_COLUMNS = [
   {key: "hgvsc", label: "HGVSc", width: 160},
   {key: "hgvsp", label: "HGVSp", width: 160},
   {key: "population_af", label: "AF_max", width: 85},
-  {key: "clinical_significance", label: "Clinical", width: 140},
+  {key: "clinvar_local", label: "ClinVar", width: 220},
   {key: "consequence", label: "Consequence", width: 180},
   {key: "exon_intron", label: "Exon / intron", width: 105},
   {key: "depth", label: "DP", width: 65},
@@ -27,7 +27,6 @@ const SORTABLE_VARIANT_COLUMNS = new Map([
   ["priority", {firstDirection: "desc", description: "by review priority; highest score first"}],
   ["gene", {firstDirection: "asc", description: "alphabetically"}],
   ["population_af", {firstDirection: "asc", description: "by AF_max; missing AF is the lowest value"}],
-  ["clinical_significance", {firstDirection: "desc", description: "by clinical priority; Pathogenic is highest"}],
   ["consequence", {firstDirection: "asc", description: "alphabetically"}],
 ]);
 const FORMAT_FIELD_LABELS = {
@@ -49,9 +48,9 @@ const FORMAT_FIELD_ORDER = [
 ];
 const POPULATION_LABELS = {
   AF: "Overall", AFR: "African", AMR: "Admixed American", AMI: "Amish",
-  ASJ: "Ashkenazi Jewish", EAS: "East Asia", FIN: "Finnish", MID: "Middle East",
-  NFE: "Non-Finnish European", EUR: "Europe", SAS: "South Asia", OTH: "Other",
-  REMAINING: "Remaining", AA: "African American", EA: "European American",
+  ASJ: "Ashkenazi Jewish", EAS: "East Asian", FIN: "Finnish", MID: "Middle Eastern",
+  NFE: "Non-Finnish European", EUR: "European", SAS: "South Asian", OTH: "Other",
+  REMAINING: "Remaining individuals", AA: "African American", EA: "European American",
 };
 
 function node(tag, text, className) {
@@ -188,12 +187,55 @@ class VariantBrowser extends HTMLElement {
     this.refreshRuns(true);
   }
 
-  async request(path, options) {
-    const response = await fetch(`${this.apiBase}${path}`, options);
+  async request(path, options = {}) {
+    const {responseCache, ...fetchOptions} = options;
+    if (responseCache?.etag && responseCache.payload) {
+      const headers = new Headers(fetchOptions.headers);
+      headers.set("If-None-Match", responseCache.etag);
+      fetchOptions.headers = headers;
+    }
+    const response = await fetch(`${this.apiBase}${path}`, fetchOptions);
+    if (response.status === 304 && responseCache?.payload) return responseCache.payload;
     let payload;
     try { payload = await response.json(); } catch { payload = {}; }
-    if (!response.ok) throw new Error(payload.detail || `${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      if (responseCache) { delete responseCache.etag; delete responseCache.payload; }
+      throw new Error(payload.detail || `${response.status} ${response.statusText}`);
+    }
+    if (responseCache) {
+      responseCache.etag = response.headers.get("ETag");
+      responseCache.payload = payload;
+    }
     return payload;
+  }
+
+  expandVariantDetail(payload) {
+    if (payload.format !== "helper-variant-detail-compact-v1") return payload;
+    const shared = payload.shared;
+    const expand = index => {
+      if (!Array.isArray(shared) || !Number.isInteger(index) || index < 0 || index >= shared.length) {
+        throw new Error("Invalid compact variant detail; reload the application.");
+      }
+      return shared[index];
+    };
+    const detail = {...payload.detail};
+    detail.annotations = (detail.annotations || []).map(annotation => {
+      const row = {...annotation};
+      if ("release_resources" in row) row.release_resources = expand(row.release_resources);
+      return row;
+    });
+    if (detail.interpretation_context) {
+      detail.interpretation_context = {...detail.interpretation_context, annotations:
+        (detail.interpretation_context.annotations || []).map(annotation => ({...annotation,
+          contexts: (annotation.contexts || []).map(choice => {
+            const row = {...choice};
+            for (const key of ["context", "origin"]) if (key in row) row[key] = expand(row[key]);
+            return row;
+          }),
+        })),
+      };
+    }
+    return detail;
   }
 
   setStatus(message, error = false) {
@@ -376,6 +418,18 @@ class VariantBrowser extends HTMLElement {
         });
         actions.append(indexButton);
       }
+      if (run.index_status === "complete") {
+        const enrich = node("button", "gnomAD", "secondary-button");
+        enrich.title = "Retrieve missing gnomAD frequencies for all unique run alleles";
+        enrich.addEventListener("click", async event => {
+          event.stopPropagation(); enrich.disabled = true;
+          try {
+            await this.request(`/runs/${encodeURIComponent(run.history_id)}/gnomad-enrichment`, {method:"POST"});
+            this.pollGnomadEnrichment(run.history_id);
+          } catch (error) { this.setStatus(error.message, true); enrich.disabled = false; }
+        });
+        actions.append(enrich);
+      }
       const infoButton = node("button", "ⓘ", "icon-button");
       infoButton.title = "Tools and versions";
       infoButton.setAttribute("aria-label", `Tools and versions for ${run.run_id || "run"}`);
@@ -486,6 +540,15 @@ class VariantBrowser extends HTMLElement {
       errorNode.textContent = error.message;
       submit.disabled = false;
     }
+  }
+
+  async pollGnomadEnrichment(historyId) {
+    try {
+      const result = await this.request(`/runs/${encodeURIComponent(historyId)}/gnomad-enrichment`);
+      this.setStatus(`gnomAD: ${result.status} · ${result.attempted || 0} alleles`, ["partial", "failed"].includes(result.status));
+      if (result.status === "running") window.setTimeout(() => this.pollGnomadEnrichment(historyId), 1500);
+      else { this.refreshRuns(); const workspace = this.workspaces.get(this.activeWorkspace); if (workspace) this.refreshVariantPriorities(workspace); }
+    } catch (error) { this.setStatus(error.message, true); }
   }
 
   async startIndex(run) {
@@ -680,6 +743,14 @@ class VariantBrowser extends HTMLElement {
     this.renderWorkspace();
     this.setRoute(sourceWorkspace.runId, sourceWorkspace.sample.sample_id);
     const workspace = this.workspaces.get(key);
+    if (!workspace.initialized && !workspace.loading && sourceWorkspace.allItems) {
+      workspace.allItems = sourceWorkspace.allItems;
+      for (const field of ["clinvarRevision", "clinvarSnapshot", "clinvarStatus", "geneContextWarning", "populationEvidenceUnavailable"]) {
+        workspace[field] = sourceWorkspace[field];
+      }
+      workspace.initialized = true;
+      this.updateFilteredVariants(workspace);
+    }
     if (!workspace.initialized && !workspace.loading) await this.loadPage(workspace);
   }
 
@@ -723,6 +794,10 @@ class VariantBrowser extends HTMLElement {
           this.activeWorkspace = workspace.key;
           this.renderTabs();
           this.renderWorkspace();
+          if (workspace.kind !== "igv" && workspace.kind !== "clinical"
+              && !workspace.initialized && !workspace.loading) {
+            this.loadPage(workspace);
+          }
           this.setRoute(
             workspace.runId, workspace.sample.sample_id,
             ["igv", "clinical"].includes(workspace.kind)
@@ -738,52 +813,89 @@ class VariantBrowser extends HTMLElement {
     tabs.replaceChildren(...elements);
   }
 
+  async preparePriorityEvidence(workspace, controller) {
+    let after = 0;
+    let attempted = 0;
+    let unavailable = 0;
+    do {
+      const result = await this.request(
+        `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}`
+          + `/priority-evidence?after_variant_id=${after}&limit=50`,
+        {method: "POST", signal: controller.signal, cache: "no-store"},
+      );
+      if (controller.signal.aborted || workspace.pageController !== controller) return;
+      if (result.gene_context) {
+        workspace.geneContextWarning = result.gene_context.status !== "ready"
+          ? "Gene-disease data unavailable"
+          : result.gene_context.stale || result.gene_context.preparation_error
+            ? "Gene-disease update unavailable; using installed data" : "";
+      }
+      attempted += result.attempted;
+      unavailable += Object.entries(result.outcomes || {})
+        .filter(([status]) => !["FOUND", "NOT_FOUND"].includes(status))
+        .reduce((sum, [, count]) => sum + count, 0);
+      after = result.next_after_variant_id;
+      workspace.loadingMessage = `Retrieving Priority evidence… ${attempted} / ${workspace.sample.variant_count ?? attempted} variants`;
+      if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+    } while (after !== null && after !== undefined);
+    workspace.populationEvidenceUnavailable = unavailable;
+  }
+
   async loadPage(workspace) {
     if (workspace.loading || (workspace.initialized && !workspace.cursor)) return;
     workspace.loading = true;
     workspace.error = "";
     workspace.pageController?.abort();
-    workspace.pageController = new AbortController();
+    const controller = new AbortController();
+    workspace.pageController = controller;
+    workspace.items = [];
+    workspace.allItems = null;
+    workspace.detailCache?.clear();
+    workspace.initialized = false;
+    workspace.cursor = null;
+    workspace.priorityExplanation = null;
+    workspace.loadingMessage = "Preparing gene-disease and population evidence for all variants…";
     this.renderWorkspace();
-    const params = new URLSearchParams({limit: String(PAGE_SIZE)});
-    if (workspace.cursor) params.set("cursor", workspace.cursor);
-    if (workspace.gene) params.set("gene", workspace.gene);
-    const filters = workspace.filters || this.emptyFilters();
-    if (!workspace.gene && filters.genes.length) params.set("genes", filters.genes.join(","));
-    if (filters.maxAf !== "") params.set("max_af", filters.maxAf);
-    if (filters.populationFrequency !== "MAX_AF") params.set("population_frequency", filters.populationFrequency);
-    if (!filters.includeMissingAf) params.set("include_missing_af", "false");
-    if (filters.consequences.length) params.set("consequences", filters.consequences.join(","));
-    if (filters.clinicalSignificances.length) params.set("clinical_significances", filters.clinicalSignificances.join(","));
-    if (filters.inheritanceCandidates.length) params.set("inheritance_candidates", filters.inheritanceCandidates.join(","));
-    if (filters.familyEvidence.length) params.set("family_evidence", filters.familyEvidence.join(","));
-    if ((filters.familyPattern || []).length) params.set("family_pattern", filters.familyPattern.join(","));
-    if (filters.priorityClasses.length) params.set("priority_classes", filters.priorityClasses.join(","));
-    if (filters.minPriority !== "") params.set("min_priority", filters.minPriority);
-    if (filters.maxPriority !== "") params.set("max_priority", filters.maxPriority);
-    if (filters.filterMode !== "all") params.set("filter_mode", filters.filterMode);
-    if (filters.filterStatuses.length) params.set("filter_statuses", filters.filterStatuses.join(","));
-    if (filters.minDepth !== "") params.set("min_depth", filters.minDepth);
-    if (filters.minVaf !== "") params.set("min_vaf", filters.minVaf);
-    if (filters.minQuality !== "") params.set("min_quality", filters.minQuality);
+    const params = new URLSearchParams({limit: String(PAGE_SIZE), load_all: "true"});
     if (workspace.sort?.key) {
       params.set("sort_by", workspace.sort.key);
       params.set("sort_direction", workspace.sort.direction);
     }
     try {
+      await this.preparePriorityEvidence(workspace, controller);
+      if (controller.signal.aborted || workspace.pageController !== controller) return;
+      workspace.loadingMessage = "Calculating Priority and loading all variants…";
+      if (workspace.key === this.activeWorkspace) this.renderWorkspace();
       const payload = await this.request(
         `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants?${params}`,
-        {signal: workspace.pageController.signal},
+        {signal: controller.signal, cache: "no-store"},
       );
-      const knownVariantIds = new Set(workspace.items.map(item => item.variant_id));
-      workspace.items.push(...(payload.items || []).filter(item => !knownVariantIds.has(item.variant_id)));
-      workspace.cursor = payload.next_cursor;
+      if (controller.signal.aborted || workspace.pageController !== controller) return;
+      if (payload.next_cursor) throw new Error("The server did not return all variants; reload the application.");
+      const revision = JSON.stringify([payload.clinvar_snapshot_id, payload.clinvar_status]);
+      if (workspace.clinvarRevision && workspace.clinvarRevision !== revision) {
+        workspace.detailController?.abort(); workspace.detail = null;
+        workspace.priorityExplanation = null; workspace.scrollTop = 0;
+      }
+      workspace.clinvarRevision = revision;
+      workspace.clinvarSnapshot = payload.clinvar_snapshot_id;
+      workspace.clinvarStatus = payload.clinvar_status;
+      workspace.allItems = payload.items || [];
+      this.updateFilteredVariants(workspace);
+      if (workspace.detail && !workspace.detail.loading) {
+        const current = workspace.items.find(item => String(item.variant_id) === String(workspace.detail.variant_id));
+        if (current) workspace.detail.priority = current.priority;
+        else workspace.detail = null;
+      }
+      workspace.cursor = null;
       workspace.initialized = true;
     } catch (error) {
-      if (error.name !== "AbortError") workspace.error = error.message;
+      if (error.name !== "AbortError" && workspace.pageController === controller) workspace.error = error.message;
     } finally {
-      workspace.loading = false;
-      if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+      if (workspace.pageController === controller) {
+        workspace.loading = false;
+        if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+      }
     }
   }
 
@@ -998,7 +1110,7 @@ class VariantBrowser extends HTMLElement {
     const heading = node("div", undefined, "filter-panel-heading");
     heading.append(
       node("div", undefined, "filter-panel-title"),
-      node("span", "Filters are applied to the complete indexed sample, before pagination.", "filter-help"),
+      node("span", "Filter the complete loaded sample. Priority scores stay unchanged.", "filter-help"),
     );
     heading.firstChild.append(node("strong", "Variant filters"), node("small", "Combine criteria with AND"));
     form.append(heading);
@@ -1088,7 +1200,7 @@ class VariantBrowser extends HTMLElement {
       "Consequence", "consequence", options.consequences, filters.consequences,
     ));
     interpretationGrid.append(this.filterChoiceGroup(
-      "Clinical", "clinicalSignificance", options.clinical_significances, filters.clinicalSignificances,
+      "ClinVar", "clinicalSignificance", options.clinical_significances, filters.clinicalSignificances,
     ));
     interpretationGrid.append(this.filterChoiceGroup(
       "Inheritance candidate", "inheritanceCandidate",
@@ -1479,18 +1591,95 @@ class VariantBrowser extends HTMLElement {
   }
 
   restartFilteredWorkspace(workspace) {
-    workspace.pageController?.abort();
-    workspace.items = []; workspace.cursor = null; workspace.initialized = false;
-    workspace.loading = false; workspace.error = ""; workspace.detail = null;
-    workspace.priorityExplanation = null; workspace.pinnedVariantId = null; workspace.scrollTop = 0;
-    this.renderWorkspace();
-    this.loadPage(workspace);
+    workspace.error = "";
+    this.updateFilteredVariants(workspace);
+    if (!workspace.initialized && !workspace.loading) return this.loadPage(workspace);
+  }
+
+  updateFilteredVariants(workspace) {
+    if (!workspace.allItems) return;
+    const filters = {...this.emptyFilters(), ...workspace.filters};
+    const genes = new Set((workspace.gene ? [workspace.gene] : filters.genes).map(gene => gene.toUpperCase()));
+    const intersects = (requested, values) => !requested.length || requested.some(value => values.includes(value));
+    const aliases = {LOW_DP: "LOW_DEPTH", LOW_AD: "LOW_ALTERNATE_DEPTH", LOWQUAL: "LOW_QUAL"};
+    workspace.items = workspace.allItems.filter(item => {
+      const data = item.filter_data || {};
+      const annotations = data.annotations?.length ? data.annotations : [{
+        gene: item.gene, consequence: item.consequence,
+        population_frequencies: {MAX_AF: item.population_af},
+      }];
+      const annotation = annotations.find(row => (!genes.size || genes.has((row.gene || "").toUpperCase()))
+        && intersects(filters.consequences.map(value => value.toLowerCase()),
+          (row.consequence || "").toLowerCase().split("&")));
+      if (!annotation) return false;
+      if (filters.maxAf !== "") {
+        const raw = filters.populationFrequency === "MAX_AF"
+          ? item.population_af : annotation.population_frequencies?.[filters.populationFrequency];
+        const af = this.variantFilterNumber(raw, 1);
+        if (af === null ? !filters.includeMissingAf : af > Number(filters.maxAf)) return false;
+      }
+      if (filters.clinicalSignificances.length) {
+        const classes = data.clinical_significances || [];
+        if (!filters.clinicalSignificances.some(value => value === "__not_reported__"
+          ? !classes.length : classes.includes(value.toLowerCase().replaceAll("_", " ")))) return false;
+      }
+      const zygosities = (item.zygosities || []).map(value => value.toLowerCase());
+      const chromosome = String(item.chromosome).toUpperCase().replace(/^CHR/, "");
+      const inheritance = {
+        compound: annotation.compound, dominant: zygosities.includes("het"),
+        recessive: zygosities.includes("hom_alt"), x_linked: chromosome === "X",
+        y_linked: chromosome === "Y", mitochondrial: ["M", "MT"].includes(chromosome),
+      };
+      if (filters.inheritanceCandidates.length && !filters.inheritanceCandidates.some(value => inheritance[value])) return false;
+      const family = [...(data.family_evidence || []), ...(annotation.parental_compound ? ["parental_compound"] : [])];
+      if (!intersects(filters.familyEvidence, family)) return false;
+      if (filters.familyPattern.some(pattern => {
+        const [member, state] = pattern.split(":");
+        return (data.family_carriers || []).includes(Number(member)) !== (state === "present");
+      })) return false;
+      const priority = item.priority || {};
+      if (!intersects(filters.priorityClasses, [priority.band])) return false;
+      const priorityScore = this.variantFilterNumber(priority.normalized_score, 100);
+      if (filters.minPriority !== "" && (priorityScore === null || priorityScore < Number(filters.minPriority))) return false;
+      if (filters.maxPriority !== "" && (priorityScore === null || priorityScore > Number(filters.maxPriority))) return false;
+      const statuses = (item.filter_status || []).flatMap(value => value.toUpperCase().split(/[;,]/))
+        .map(value => value.trim()).map(value => aliases[value] || value);
+      if (filters.filterMode === "pass" && statuses.some(value => !["", ".", "PASS"].includes(value))) return false;
+      const selectedStatus = filters.filterStatuses.some(value => statuses.includes(aliases[value.toUpperCase()] || value.toUpperCase()));
+      if (filters.filterMode === "selected" && !selectedStatus) return false;
+      if (filters.filterMode === "exclude" && selectedStatus) return false;
+      for (const [filter, field] of [["minDepth", "depth"], ["minVaf", "allele_fraction"], ["minQuality", "quality"]]) {
+        const number = this.variantFilterNumber(item[field], field === "allele_fraction" ? 1 : null);
+        if (filters[filter] !== "" && (number === null || number < Number(filters[filter]))) return false;
+      }
+      return true;
+    });
+    this.sortVariantItems(workspace);
+    workspace.scrollTop = 0;
+    workspace.pinnedVariantId = null;
+    if (workspace.detail && !workspace.items.some(item => String(item.variant_id) === String(workspace.detail.variant_id))) {
+      workspace.detailController?.abort();
+      workspace.detail = null;
+      workspace.priorityExplanation = null;
+    }
+    if (workspace.priorityExplanation && !workspace.items.some(item => item.variant_id === workspace.priorityExplanation.variant_id)) {
+      workspace.priorityExplanation = null;
+    }
+    if (!workspace.loading && workspace.key === this.activeWorkspace) this.renderWorkspace();
+  }
+
+  variantFilterNumber(raw, maximum = null) {
+    if (typeof raw !== "number" && typeof raw !== "string") return null;
+    if (typeof raw === "string" && !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(raw.trim())) return null;
+    const number = Number(raw);
+    return Number.isFinite(number) && number >= 0 && (maximum === null || number <= maximum) ? number : null;
   }
 
   loadColumnOrder() {
     const fallback = VARIANT_COLUMNS.map(column => column.key);
     try {
-      const saved = JSON.parse(localStorage.getItem(COLUMN_STORAGE_KEY) || "[]");
+      const stored = JSON.parse(localStorage.getItem(COLUMN_STORAGE_KEY) || "[]");
+      const saved = Array.isArray(stored) ? stored.filter(key => key !== "clinical_significance") : stored;
       if (Array.isArray(saved) && saved.length === fallback.length
           && saved[0] === "filter_alert" && saved.every(key => VARIANT_COLUMNS_BY_KEY.has(key))) {
         return saved;
@@ -1638,7 +1827,38 @@ class VariantBrowser extends HTMLElement {
         ? (workspace.sort.direction === "asc" ? "desc" : "asc")
         : definition.firstDirection,
     };
-    this.restartFilteredWorkspace(workspace);
+    this.sortVariantItems(workspace);
+    workspace.scrollTop = 0;
+    if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+  }
+
+  sortVariantItems(workspace) {
+    const {key = "priority", direction = "desc"} = workspace.sort || {};
+    const sign = direction === "desc" ? -1 : 1;
+    const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+    // Sort only the complete rows already calculated by the server. Keep the
+    // row/priority objects intact so the selected detail and explanations agree.
+    workspace.items = workspace.items.slice().sort((left, right) => {
+      let order = 0;
+      if (key === "priority") {
+        order = compare(left.priority?.normalized_score ?? 0, right.priority?.normalized_score ?? 0)
+          || compare(left.priority?.score ?? 0, right.priority?.score ?? 0);
+      } else if (key === "population_af") {
+        order = compare(left.population_af ?? -1, right.population_af ?? -1);
+      } else if (key === "gene" || key === "consequence") {
+        let a = left[key] || "";
+        let b = right[key] || "";
+        // Empty text stays last in either direction, matching the table query.
+        const missing = Number(!a.trim()) - Number(!b.trim());
+        if (missing) return missing;
+        if (key === "gene") {
+          a = a.replace(/[A-Z]/g, char => char.toLowerCase());
+          b = b.replace(/[A-Z]/g, char => char.toLowerCase());
+        }
+        order = compare(a, b);
+      }
+      return sign * order || compare(Number(left.variant_id), Number(right.variant_id));
+    });
   }
 
   compactHgvs(raw, marker) {
@@ -1651,6 +1871,7 @@ class VariantBrowser extends HTMLElement {
   }
 
   variantCell(item, key) {
+    if (key === "clinvar_local") return this.clinvarTableStatus(item.clinvar_evidence || {});
     if (key === "genotypes") {
       return Array.isArray(item[key]) ? item[key].join(", ") : item[key];
     }
@@ -1673,6 +1894,13 @@ class VariantBrowser extends HTMLElement {
 
   variantCellNode(workspace, item, key) {
     const cell = node("span");
+    if (key === "clinvar_local") {
+      const evidence = item.clinvar_evidence || {};
+      cell.textContent = this.clinvarTableStatus(evidence);
+      cell.title = evidence.matching_status === "NOT_FOUND" ? "Not found in the local ClinVar snapshot"
+        : this.clinvarClassificationLabels(evidence).join(" · ") || this.clinvarEvidenceStatus(evidence);
+      return cell;
+    }
     if (key === "filter_alert") {
       cell.classList.add("filter-alert-cell");
       if (workspace.detail?.variant_id === item.variant_id) {
@@ -1747,7 +1975,8 @@ class VariantBrowser extends HTMLElement {
       host.replaceChildren(this.renderClinicalWorkspace(workspace));
       return;
     }
-    host.className = `workspace-grid${workspace.detail ? "" : " detail-closed"}`;
+    const displayDetail = !workspace.loading && workspace.detail;
+    host.className = `workspace-grid${displayDetail ? "" : " detail-closed"}`;
     const tablePanel = node("section", undefined, "table-panel");
     const heading = node("div", undefined, "sample-heading");
     const headingActions = node("div", undefined, "sample-heading-actions");
@@ -1814,17 +2043,31 @@ class VariantBrowser extends HTMLElement {
     }, {passive: true});
     tablePanel.append(viewport);
     const footer = node("div", undefined, "table-footer");
-    if (workspace.loading) footer.append(node("span", "Loading variants…", "loading"));
+    if (workspace.loading) footer.append(node("span", workspace.loadingMessage || "Preparing Priority…", "loading"));
     else if (workspace.cursor) {
       const more = node("button", "Load next page");
       more.addEventListener("click", () => this.loadPage(workspace));
       footer.append(more);
-    } else if (workspace.initialized) footer.append(node("span", "All variants loaded", "complete-text"));
+    } else if (workspace.initialized) {
+      footer.append(node("span", "All variants loaded · Priority calculated", "complete-text"));
+      if (workspace.populationEvidenceUnavailable) footer.append(node("span",
+        `Population data unavailable for ${workspace.populationEvidenceUnavailable} variants · N/A where unevaluable`, "filter-message"));
+      if (workspace.geneContextWarning) footer.append(node("span", workspace.geneContextWarning, "filter-message"));
+      if (workspace.clinvarStatus === "ERROR") footer.append(node("span", "Local ClinVar data unavailable", "filter-message"));
+    }
     tablePanel.append(footer);
-    if (workspace.priorityExplanation) {
+    if (workspace.priorityExplanation && !workspace.loading) {
       tablePanel.append(this.priorityExplanationPanel(workspace));
     }
-    if (workspace.detail) host.replaceChildren(tablePanel, this.renderDetail(workspace));
+    if (displayDetail) {
+      const previous = host.querySelector(".detail-panel");
+      const next = this.renderDetail(workspace);
+      const retained = previous?.dataset.variantId === next.dataset.variantId;
+      const detailScroll = retained ? previous.scrollTop : 0;
+      if (retained) this.preserveDetailState(previous, next);
+      host.replaceChildren(tablePanel, next);
+      next.scrollTop = detailScroll;
+    }
     else host.replaceChildren(tablePanel);
     window.requestAnimationFrame(() => {
       viewport.scrollTop = workspace.scrollTop;
@@ -1885,7 +2128,9 @@ class VariantBrowser extends HTMLElement {
       const title = node("div", undefined, "priority-component-title");
       title.append(
         node("strong", component.label),
-        node("span", component.applicable ? `${component.score} / ${component.max_score}` : "N/A"),
+        node("span", component.applicable
+          ? `${component.score} / ${component.max_score}${component.key === "maf" && !component.evaluated ? " · N/A" : ""}`
+          : "N/A"),
       );
       card.append(title, node("p", component.reason));
       if (component.evidence?.length) {
@@ -2496,18 +2741,37 @@ class VariantBrowser extends HTMLElement {
     workspace.genePhenotypeController?.abort();
     window.clearTimeout(workspace.genePhenotypeTimer);
     workspace.detailController = new AbortController();
+    const controller = workspace.detailController;
+    workspace.detailCache ||= new Map();
+    const responseCache = workspace.detailCache.get(variantId) || {};
+    workspace.detailCache.delete(variantId);
+    workspace.detailCache.set(variantId, responseCache);
+    while (workspace.detailCache.size > 8) workspace.detailCache.delete(workspace.detailCache.keys().next().value);
     workspace.priorityExplanation = null;
     workspace.detail = {variant_id: variantId, loading: true};
     this.renderWorkspace();
     let loadCarriers = false;
     try {
-      const detail = await this.request(
-        `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants/${variantId}`,
-        {signal: workspace.detailController.signal, cache: "no-store"},
+      const payload = await this.request(
+        `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants/${variantId}?compact=true`,
+        {signal: controller.signal, cache: "no-store", responseCache},
       );
+      if (controller.signal.aborted || workspace.detailController !== controller) return;
+      const detail = this.expandVariantDetail(payload);
       const priorityItem = workspace.items.find(
         item => String(item.variant_id) === String(variantId),
       );
+      const revision = JSON.stringify([
+        detail.clinvar_evidence?.snapshot_id,
+        detail.clinvar_evidence?.matching_status === "ERROR" ? "ERROR" : "AVAILABLE",
+      ]);
+      if (workspace.clinvarRevision && workspace.clinvarRevision !== revision) {
+        workspace.pageController?.abort();
+        workspace.items = []; workspace.cursor = null; workspace.initialized = false;
+        workspace.loading = false; workspace.priorityExplanation = null; workspace.scrollTop = 0;
+        workspace.clinvarRevision = revision;
+        this.loadPage(workspace);
+      }
       if (priorityItem && detail.priority) {
         priorityItem.priority = detail.priority;
         if (workspace.priorityExplanation?.variant_id === variantId) {
@@ -2518,16 +2782,21 @@ class VariantBrowser extends HTMLElement {
         ...detail, variant_id: variantId, carriers: null, carriersLoading: true,
         genePhenotypes: [], genePhenotypesLoading: true,
         liftover: null, liftoverLoading: true,
-        gnomadFrequency: null, gnomadFrequencyLoading: true,
+        gnomadFrequency: detail.gnomad_frequency || null,
+        gnomadFrequencyLoading: !detail.gnomad_frequency,
       };
       loadCarriers = true;
     } catch (error) {
+      if (controller.signal.aborted || workspace.detailController !== controller) return;
       if (error.name !== "AbortError") workspace.detail = {variant_id: variantId, error: error.message};
     }
     if (workspace.key === this.activeWorkspace) this.renderWorkspace();
     if (loadCarriers) {
       this.loadLiftover(workspace, variantId);
-      this.loadGnomadFrequency(workspace, variantId);
+      if (!workspace.detail.gnomadFrequency || workspace.detail.gnomadFrequency.partial
+          || workspace.detail.gnomadFrequency.non_ukb_pending
+          || workspace.detail.gnomadFrequency.region_coverage_pending
+          || workspace.detail.gnomadFrequency.availability !== "AVAILABLE") this.loadGnomadFrequency(workspace, variantId);
       this.loadCarriers(workspace, variantId);
       this.loadGenePhenotypes(workspace, variantId);
     }
@@ -2535,42 +2804,45 @@ class VariantBrowser extends HTMLElement {
 
   async loadLiftover(workspace, variantId) {
     workspace.liftoverController = new AbortController();
+    const controller = workspace.liftoverController;
     try {
       const projection = await this.request(
         `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants/${variantId}/liftover`,
-        {signal: workspace.liftoverController.signal},
+        {signal: controller.signal},
       );
-      if (workspace.detail?.variant_id !== variantId) return;
+      if (controller.signal.aborted || workspace.liftoverController !== controller || workspace.detail?.variant_id !== variantId) return;
       workspace.detail.liftover = projection;
       workspace.detail.liftoverLoading = false;
     } catch (error) {
-      if (error.name === "AbortError" || workspace.detail?.variant_id !== variantId) return;
+      if (error.name === "AbortError" || controller.signal.aborted || workspace.liftoverController !== controller || workspace.detail?.variant_id !== variantId) return;
       workspace.detail.liftoverError = error.message;
       workspace.detail.liftoverLoading = false;
     }
-    if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+    this.renderDetailSection(workspace, "Variant details");
   }
 
   async loadGnomadFrequency(workspace, variantId) {
     workspace.gnomadFrequencyController = new AbortController();
+    const controller = workspace.gnomadFrequencyController;
     try {
       const frequency = await this.request(
         `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}`
           + `/variants/${variantId}/gnomad-frequency`,
-        {signal: workspace.gnomadFrequencyController.signal},
+        {signal: controller.signal},
       );
-      if (workspace.detail?.variant_id !== variantId) return;
+      if (controller.signal.aborted || workspace.gnomadFrequencyController !== controller || workspace.detail?.variant_id !== variantId) return;
       workspace.detail.gnomadFrequency = frequency;
       workspace.detail.gnomadFrequencyLoading = false;
-      if (frequency.cache === "miss" && ["observed", "not_observed_covered"].includes(frequency.status)) {
+      if (frequency.cache === "miss" && frequency.priority_evidence_changed !== false && (frequency.retrieval_status === "NOT_FOUND"
+          || ["observed", "not_observed_covered"].includes(frequency.status))) {
         this.refreshVariantPriorities(workspace);
       }
     } catch (error) {
-      if (error.name === "AbortError" || workspace.detail?.variant_id !== variantId) return;
+      if (error.name === "AbortError" || controller.signal.aborted || workspace.gnomadFrequencyController !== controller || workspace.detail?.variant_id !== variantId) return;
       workspace.detail.gnomadFrequencyError = error.message;
       workspace.detail.gnomadFrequencyLoading = false;
     }
-    if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+    this.renderDetailSection(workspace, "Population frequencies");
   }
 
   refreshVariantPriorities(workspace) {
@@ -2585,20 +2857,21 @@ class VariantBrowser extends HTMLElement {
 
   async loadCarriers(workspace, variantId) {
     workspace.carrierController = new AbortController();
+    const controller = workspace.carrierController;
     try {
       const carriers = await this.request(
         `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants/${variantId}/carriers`,
-        {signal: workspace.carrierController.signal},
+        {signal: controller.signal},
       );
-      if (workspace.detail?.variant_id !== variantId) return;
+      if (controller.signal.aborted || workspace.carrierController !== controller || workspace.detail?.variant_id !== variantId) return;
       workspace.detail.carriers = carriers;
       workspace.detail.carriersLoading = false;
     } catch (error) {
-      if (error.name === "AbortError" || workspace.detail?.variant_id !== variantId) return;
+      if (error.name === "AbortError" || controller.signal.aborted || workspace.carrierController !== controller || workspace.detail?.variant_id !== variantId) return;
       workspace.detail.carriersError = error.message;
       workspace.detail.carriersLoading = false;
     }
-    if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+    this.renderDetailSection(workspace, "Variant carriers");
   }
 
   async loadGenePhenotypes(workspace, variantId, attempt = 0) {
@@ -2606,12 +2879,13 @@ class VariantBrowser extends HTMLElement {
       workspace.genePhenotypeController?.abort();
       workspace.genePhenotypeController = new AbortController();
     }
+    const controller = workspace.genePhenotypeController;
     if (workspace.detail?.variant_id !== variantId) return;
     const genes = this.genePhenotypeGenes(workspace.detail.annotations || []);
     if (!genes.length) {
       workspace.detail.genePhenotypes = [];
       workspace.detail.genePhenotypesLoading = false;
-      if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+      this.renderDetailSection(workspace, "Gene–phenotype");
       return;
     }
     try {
@@ -2620,21 +2894,21 @@ class VariantBrowser extends HTMLElement {
         try {
           return await this.request(
             `/knowledge/gene-phenotypes/${encodeURIComponent(gene.symbol)}${query}`,
-            {signal: workspace.genePhenotypeController.signal},
+            {signal: controller.signal},
           );
         } catch (error) {
           if (error.name === "AbortError") throw error;
           return {gene: gene.symbol, associations: [], error: error.message};
         }
       }));
-      if (workspace.detail?.variant_id !== variantId) return;
+      if (controller.signal.aborted || workspace.genePhenotypeController !== controller || workspace.detail?.variant_id !== variantId) return;
       const waitingForCache = results.some(result => (
         result.cache?.status !== "ready" || result.cache?.stale || result.cache?.refreshing
       ));
       const waitingForConstraint = results.some(result => result.gene_constraint?.refreshing);
       workspace.detail.genePhenotypes = results;
       workspace.detail.genePhenotypesLoading = waitingForCache;
-      if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+      this.renderDetailSection(workspace, "Gene–phenotype");
       if ((waitingForCache || waitingForConstraint) && attempt < 12) {
         workspace.genePhenotypeTimer = window.setTimeout(
           () => this.loadGenePhenotypes(workspace, variantId, attempt + 1),
@@ -2642,15 +2916,54 @@ class VariantBrowser extends HTMLElement {
         );
       }
     } catch (error) {
-      if (error.name === "AbortError" || workspace.detail?.variant_id !== variantId) return;
+      if (error.name === "AbortError" || controller.signal.aborted || workspace.genePhenotypeController !== controller || workspace.detail?.variant_id !== variantId) return;
       workspace.detail.genePhenotypesError = error.message;
       workspace.detail.genePhenotypesLoading = false;
-      if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+      this.renderDetailSection(workspace, "Gene–phenotype");
     }
   }
 
-  renderDetail(workspace) {
+  preserveDetailState(previous, next) {
+    const key = item => item.dataset.disclosureKey || item.querySelector("summary strong")?.textContent
+      || item.querySelector("summary")?.textContent;
+    const opened = new Map([previous, ...previous.querySelectorAll("details")]
+      .filter(item => item.tagName === "DETAILS").map(item => [key(item), item.open]));
+    for (const item of [next, ...next.querySelectorAll("details")]) {
+      if (item.tagName === "DETAILS" && opened.has(key(item)) && !item.classList.contains("disabled")) {
+        item.open = opened.get(key(item));
+      }
+    }
+    for (const select of previous.querySelectorAll("select[aria-label]")) {
+      const replacement = [...next.querySelectorAll("select[aria-label]")]
+        .find(item => item.getAttribute("aria-label") === select.getAttribute("aria-label"));
+      if (replacement && [...replacement.options].some(option => option.value === select.value)) {
+        replacement.value = select.value;
+        replacement.dispatchEvent(new Event("change"));
+      }
+    }
+    next.scrollTop = previous.scrollTop;
+  }
+
+  renderDetailSection(workspace, title) {
+    if (workspace.key !== this.activeWorkspace || workspace.loading || !workspace.detail || workspace.detail.loading) return;
+    if (!this.shadowRoot) { this.renderWorkspace(); return; }
+    const panel = this.shadowRoot.querySelector(".detail-panel");
+    if (!panel || panel.dataset.variantId !== String(workspace.detail.variant_id)) return;
+    const previous = [...panel.children].find(item => item.dataset.disclosureKey === title);
+    if (!previous) return;
+    const updated = this.renderDetail(workspace, title);
+    const next = [...updated.children].find(item => item.dataset.disclosureKey === title);
+    if (!next) return;
+    const scrollTop = panel.scrollTop;
+    this.preserveDetailState(previous, next);
+    previous.replaceWith(next);
+    if (title === "Variant details") panel.querySelector(".detail-identity")?.replaceWith(updated.querySelector(".detail-identity"));
+    panel.scrollTop = scrollTop;
+  }
+
+  renderDetail(workspace, section = null) {
     const panel = node("aside", undefined, "detail-panel");
+    panel.dataset.variantId = String(workspace.detail.variant_id);
     const heading = node("div", undefined, "detail-heading");
     const close = node("button", "×", "detail-close");
     close.type = "button";
@@ -2689,14 +3002,7 @@ class VariantBrowser extends HTMLElement {
     clinical.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
     clinical.title = "Show nearby ClinVar variants in JBrowse";
     clinical.addEventListener("click", () => this.openClinicalWorkspace(workspace, workspace.detail));
-    const acmg = node("button", "Interpret with ACMG Engine", "acmg-open");
-    acmg.type = "button";
-    acmg.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
-    acmg.addEventListener("click", async () => {
-      const {openAcmgWorkbench} = await import("./acmg-workbench.js");
-      await openAcmgWorkbench(this, workspace);
-    });
-    headingActions.append(calculator, acmg, clinical, inspect, close);
+    headingActions.append(calculator, clinical, inspect, close);
     heading.append(node("h4", "Variant detail"), headingActions);
     panel.append(heading);
     if (workspace.detail.loading) {
@@ -2733,111 +3039,142 @@ class VariantBrowser extends HTMLElement {
       ));
     }
     panel.append(identity);
-    const sampleEvidence = this.sampleEvidenceContent(calls, detail);
     const databaseIds = detail.database_ids || {};
     const clinvarSearchUrl = this.clinvarSearchUrl(databaseIds.dbsnp);
 
-    const variantContent = node("div", undefined, "detail-content");
-    const variantSummary = this.assemblyCoordinateSummary(detail);
-    const identifierSummary = node("div", undefined, "detail-cards variant-identifier-grid");
-    identifierSummary.append(this.detailCard([
-      ["dbSNP", this.databaseIdentifierLinks("dbsnp", databaseIds.dbsnp)],
-      [
-        clinvarSearchUrl
-          ? this.externalDatabaseLabel("ClinVar", clinvarSearchUrl, `Search ClinVar by ${databaseIds.dbsnp[0]}`)
-          : "ClinVar",
-        this.databaseIdentifierLinks("clinvar", databaseIds.clinvar),
-      ],
-      ["ClinGen Allele Registry", this.databaseIdentifierLinks("clingen", databaseIds.clingen)],
-    ]));
-    variantContent.append(
-      node("h5", "Assembly coordinates"),
-      variantSummary,
-      this.assemblyProjectionNote(detail),
-      node("h5", "Variant identifiers"),
-      identifierSummary,
-      node("h5", "Sample evidence"),
-      sampleEvidence,
-    );
-    panel.append(this.detailDisclosure("Variant details", variantContent, {
-      open: true, status: `${calls.length} call${calls.length === 1 ? "" : "s"}`,
-    }));
+    if (!section || section === "Variant details") {
+      const sampleEvidence = this.sampleEvidenceContent(calls, detail);
+      const variantContent = node("div", undefined, "detail-content");
+      const variantSummary = this.assemblyCoordinateSummary(detail);
+      const identifierSummary = node("div", undefined, "detail-cards variant-identifier-grid");
+      identifierSummary.append(this.detailCard([
+        ["dbSNP", this.databaseIdentifierLinks("dbsnp", databaseIds.dbsnp)],
+        [
+          clinvarSearchUrl
+            ? this.externalDatabaseLabel("ClinVar", clinvarSearchUrl, `Search ClinVar by ${databaseIds.dbsnp[0]}`)
+            : "ClinVar",
+          this.databaseIdentifierLinks("clinvar", databaseIds.clinvar),
+        ],
+        ["ClinGen Allele Registry", this.databaseIdentifierLinks("clingen", databaseIds.clingen)],
+      ]));
+      variantContent.append(
+        node("h5", "Assembly coordinates"),
+        variantSummary,
+        this.assemblyProjectionNote(detail),
+        node("h5", "Variant identifiers"),
+        identifierSummary,
+        node("h5", "Sample evidence"),
+        sampleEvidence,
+      );
+      panel.append(this.detailDisclosure("Variant details", variantContent, {
+        open: true, status: `${calls.length} call${calls.length === 1 ? "" : "s"}`,
+      }));
+    }
 
-    const clinvarEvidence = detail.clinvar_evidence || {};
-    panel.append(this.detailDisclosure(
-      "ClinVar evidence",
-      this.clinvarEvidenceContent(clinvarEvidence, databaseIds, clinvarSearchUrl),
-      {
-        open: Boolean(clinvarEvidence.has_conflict),
-        status: this.clinvarEvidenceStatus(clinvarEvidence),
-      },
-    ));
+    if (!section) {
+      const clinvarEvidence = detail.clinvar_evidence || {};
+      const clinvarContent = this.clinvarEvidenceContent(clinvarEvidence, databaseIds, clinvarSearchUrl);
+      const clinvarSection = this.detailDisclosure(
+        "ClinVar",
+        clinvarContent,
+        {
+          disabled: clinvarEvidence.matching_status === "NOT_FOUND",
+          open: Boolean(clinvarEvidence.has_conflict),
+          status: this.clinvarEvidenceStatus(clinvarEvidence),
+        },
+      );
+      clinvarSection.classList.add("clinvar-disclosure");
+      clinvarSection.querySelector("summary strong").after(this.clinvarSourceInformation(clinvarEvidence));
+      panel.append(clinvarSection);
 
-    const genePhenotypeGenes = this.genePhenotypeGenes(annotations);
-    const associationCount = (detail.genePhenotypes || [])
-      .reduce((total, result) => total + (result.association_count || 0), 0);
-    panel.append(this.detailDisclosure(
-      "Gene–phenotype",
-      this.genePhenotypeContent(
-        genePhenotypeGenes,
-        detail.genePhenotypes || [],
-        detail.genePhenotypesLoading,
-        detail.genePhenotypesError,
-      ),
-      {
-        status: detail.genePhenotypesLoading
-          ? "Loading associations…"
-          : (genePhenotypeGenes.length
-            ? `${genePhenotypeGenes.length} gene${genePhenotypeGenes.length === 1 ? "" : "s"} · ${associationCount} associations`
-            : "No gene annotation"),
-      },
-    ));
+      const vcepEvidence = detail.clingen_vcep_evidence || {};
+      const vcepSection = this.detailDisclosure(
+        "ClinGen VCEP — Expert Panel Classifications",
+        this.vcepEvidenceContent(vcepEvidence),
+        {
+          disabled: vcepEvidence.matching_status === "NOT_FOUND",
+          status: this.vcepEvidenceStatus(vcepEvidence),
+        },
+      );
+      vcepSection.classList.add("vcep-disclosure");
+      vcepSection.querySelector("summary strong").after(this.vcepSourceInformation(vcepEvidence));
+      panel.append(vcepSection);
+    }
 
-    const sampleMetadata = workspace.sample.metadata || {};
-    const analysisType = String(sampleMetadata.analysis_type || "").trim().toLowerCase();
-    const onlyCase = !analysisType || ["only case", "only cases", "only_case"].includes(analysisType);
-    const familyContent = node("div", undefined, "detail-content");
-    familyContent.append(
-      this.detailCard([
-        ["Analysis", sampleMetadata.analysis_type], ["Family / group", sampleMetadata.analysis_id],
-        ["Role", sampleMetadata.relationship || workspace.sample.role],
-        ["Individual", sampleMetadata.individual_id], ["Sex", sampleMetadata.sex],
-        ["Affected", sampleMetadata.affected], ["Father", sampleMetadata.father],
-        ["Mother", sampleMetadata.mother],
-      ]),
-      node("p", "Pedigree and segregation data will be added in this section.", "detail-note"),
-    );
-    panel.append(this.detailDisclosure("Family", familyContent, {
-      disabled: onlyCase,
-      status: onlyCase ? "Not available for only-case analysis" : "Pedigree planned",
-    }));
+    if (!section || section === "Gene–phenotype") {
+      const genePhenotypeGenes = this.genePhenotypeGenes(annotations);
+      const associationCount = (detail.genePhenotypes || [])
+        .reduce((total, result) => total + (result.association_count || 0), 0);
+      panel.append(this.detailDisclosure(
+        "Gene–phenotype",
+        this.genePhenotypeContent(
+          genePhenotypeGenes,
+          detail.genePhenotypes || [],
+          detail.genePhenotypesLoading,
+          detail.genePhenotypesError,
+        ),
+        {
+          status: detail.genePhenotypesLoading
+            ? "Loading associations…"
+            : (genePhenotypeGenes.length
+              ? `${genePhenotypeGenes.length} gene${genePhenotypeGenes.length === 1 ? "" : "s"} · ${associationCount} associations`
+              : "No gene annotation"),
+        },
+      ));
+    }
 
-    panel.append(this.detailDisclosure(
-      "Variant carriers",
-      this.carrierContent(workspace, detail),
-      {status: this.carrierStatus(workspace, detail)},
-    ));
+    if (!section) {
+      const sampleMetadata = workspace.sample.metadata || {};
+      const analysisType = String(sampleMetadata.analysis_type || "").trim().toLowerCase();
+      const onlyCase = !analysisType || ["only case", "only cases", "only_case"].includes(analysisType);
+      const familyContent = node("div", undefined, "detail-content");
+      familyContent.append(
+        this.detailCard([
+          ["Analysis", sampleMetadata.analysis_type], ["Family / group", sampleMetadata.analysis_id],
+          ["Role", sampleMetadata.relationship || workspace.sample.role],
+          ["Individual", sampleMetadata.individual_id], ["Sex", sampleMetadata.sex],
+          ["Affected", sampleMetadata.affected], ["Father", sampleMetadata.father],
+          ["Mother", sampleMetadata.mother],
+        ]),
+        node("p", "Pedigree and segregation data will be added in this section.", "detail-note"),
+      );
+      panel.append(this.detailDisclosure("Family", familyContent, {
+        disabled: onlyCase,
+        status: onlyCase ? "Not available for only-case analysis" : "Pedigree planned",
+      }));
+    }
 
-    const populationGroups = this.populationFrequencyGroups(annotations);
-    const populationFieldCount = populationGroups.reduce((total, group) => total + group.fields.length, 0);
-    panel.append(this.detailDisclosure(
-      "Population frequencies",
-      this.populationFrequencyContent(populationGroups, detail),
-      {status: this.populationFrequencyStatus(detail, populationFieldCount)},
-    ));
+    if (!section || section === "Variant carriers") {
+      panel.append(this.detailDisclosure(
+        "Variant carriers",
+        this.carrierContent(workspace, detail),
+        {status: this.carrierStatus(workspace, detail)},
+      ));
+    }
 
-    const predictionFacts = this.damagePredictionFields(annotations);
-    panel.append(this.detailDisclosure(
-      "Damage predictions",
-      this.detailCards(predictionFacts.length ? [predictionFacts] : [], fields => fields),
-      {status: predictionFacts.length ? `${predictionFacts.length} fields` : "No data"},
-    ));
+    if (!section || section === "Population frequencies") {
+      const populationGroups = this.populationFrequencyGroups(annotations);
+      panel.append(this.detailDisclosure(
+        "Population frequencies",
+        this.populationFrequencyContent(populationGroups, detail),
+        {status: this.populationFrequencyStatus(detail, annotations)},
+      ));
+    }
 
-    panel.append(this.detailDisclosure(
-      "Transcripts",
-      this.transcriptCards(annotations),
-      {status: `${annotations.length} transcript${annotations.length === 1 ? "" : "s"}`},
-    ));
+    if (!section) {
+      const predictionFacts = this.damagePredictionFields(annotations);
+      panel.append(this.detailDisclosure(
+        "Damage predictions",
+        this.detailCards(predictionFacts.length ? [predictionFacts] : [], fields => fields),
+        {status: predictionFacts.length ? `${predictionFacts.length} fields` : "No data"},
+      ));
+
+      panel.append(this.detailDisclosure(
+        "Transcripts",
+        this.transcriptCards(annotations),
+        {status: `${annotations.length} transcript${annotations.length === 1 ? "" : "s"}`},
+      ));
+    }
     return panel;
   }
 
@@ -2946,12 +3283,15 @@ class VariantBrowser extends HTMLElement {
     let index = workspace.items.findIndex(item => item.variant_id === variantId);
     if (index < 0) {
       try {
-        const params = new URLSearchParams({limit: "1", variant_id: String(variantId)});
-        const payload = await this.request(
-          `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants?${params}`,
-          {signal: workspace.focusVariantController.signal},
-        );
-        const item = (payload.items || [])[0];
+        let item = workspace.allItems?.find(candidate => candidate.variant_id === variantId);
+        if (!item) {
+          const params = new URLSearchParams({limit: "1", variant_id: String(variantId)});
+          const payload = await this.request(
+            `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants?${params}`,
+            {signal: workspace.focusVariantController.signal},
+          );
+          item = (payload.items || [])[0];
+        }
         if (!item) {
           workspace.error = "The selected carrier variant is no longer available in this sample index.";
           return false;
@@ -2971,6 +3311,7 @@ class VariantBrowser extends HTMLElement {
 
   detailDisclosure(title, content, options = {}) {
     const details = node("details", undefined, `detail-disclosure${options.disabled ? " disabled" : ""}`);
+    details.dataset.disclosureKey = title;
     const summary = node("summary");
     summary.append(node("strong", title));
     if (options.status) summary.append(node("small", options.status));
@@ -3137,10 +3478,89 @@ class VariantBrowser extends HTMLElement {
       : null;
   }
 
+  vcepEvidenceStatus(evidence = {}) {
+    const states = {
+      NOT_FOUND: "Not found", UNSUPPORTED: "No supported exact match input",
+      AMBIGUOUS: "Ambiguous match — no assertion selected", ERROR: "Local dataset unavailable",
+    };
+    return states[evidence.matching_status] || (evidence.matching_status === "FOUND"
+      ? `${(evidence.assertions || []).length} expert assertion(s)` : "Not queried");
+  }
+
+  vcepEvidenceContent(evidence = {}) {
+    const content = node("div", undefined, "detail-content vcep-evidence-content");
+    if (evidence.matching_status === "AMBIGUOUS") {
+      content.append(node("p", "The following are unconfirmed candidates from discordant identifiers. No candidate is selected as this variant's classification.", "clinvar-retrieval-note"));
+    }
+    const assertions = evidence.matching_status === "AMBIGUOUS"
+      ? evidence.candidate_assertions || [] : evidence.assertions || [];
+    for (const assertion of assertions) {
+      const article = node("article", undefined, "vcep-assertion");
+      const retraction = assertion.retracted === true ? "RETRACTED"
+        : assertion.retracted === false ? "Not retracted (source flag)" : "Unknown — active status not established";
+      const classification = assertion.classification || "Classification not reported";
+      const heading = node("div", undefined, "clinvar-evidence-heading");
+      const classifications = node("div", undefined, "clinvar-classifications");
+      const classificationLabel = node(
+        "span", classification,
+        `clinvar-classification ${this.clinvarClassificationClass(classification)}`,
+      );
+      classificationLabel.title = classification;
+      classifications.append(classificationLabel);
+      heading.append(node("strong", "Classification"), classifications);
+      article.append(heading);
+      article.append(this.detailCard([
+        ["Retraction status", retraction], ["Gene", assertion.gene_symbol], ["Gene ID", assertion.gene_id],
+        ["Condition", assertion.disease], ["MONDO ID", assertion.disease_id],
+        ["MOI", assertion.mode_of_inheritance], ["Expert Panel", assertion.expert_panel],
+        ["Affiliation ID", assertion.expert_panel_id], ["Approval Date", assertion.approval_date],
+        ["Published Date", assertion.published_date], ["Assertion UUID", assertion.classification_id],
+        ["Assertion version", assertion.classification_version || "Unknown"],
+        ["Available versions (contents not loaded)", assertion.available_versions?.join(", ") || "Unknown"],
+      ]));
+      if (assertion.retracted === true) article.setAttribute("data-retracted", "true");
+      for (const [status, label] of [["Met", "Applied Evidence Codes (Met)"], ["Not Met", "Applied Evidence Codes (Not Met)"]]) {
+        const criteria = (assertion.criteria || []).filter(item => item.status === status);
+        article.append(node("h5", label));
+        if (!criteria.length) article.append(node("p", "No codes reported"));
+        if (status === "Met" && criteria.length) {
+          const metCodes = node("div", undefined, "vcep-met-codes");
+          for (const criterion of criteria) {
+            metCodes.append(node("span", criterion.code + (criterion.strength
+              ? ` · source strength suffix: ${criterion.strength}` : " · strength suffix not reported"),
+            "clinvar-classification other vcep-met-code"));
+          }
+          article.append(metCodes);
+        } else {
+          for (const criterion of criteria) {
+            article.append(node("p", criterion.code + (criterion.strength
+              ? ` · source strength suffix: ${criterion.strength}` : " · strength suffix not reported")));
+          }
+        }
+      }
+      article.append(node("h5", "Summary of interpretation"));
+      article.append(node("p", assertion.summary || "Not reported"));
+      for (const [label, url] of [["Official ERepo record ↗", assertion.official_url], ["Guideline ↗", assertion.guideline_url]]) {
+        if (!/^https:\/\//i.test(url || "")) continue;
+        const link = node("a", label, "clinvar-source-link");
+        link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer";
+        article.append(link);
+      }
+      content.append(article);
+    }
+    return content;
+  }
+
   clinvarEvidenceStatus(evidence = {}) {
+    const states = {
+      NOT_FOUND: "Not found", UNRESOLVED: "Unresolved genomic match",
+      AMBIGUOUS: "Ambiguous genomic match", ERROR: "ClinVar Local unavailable",
+    };
+    if (states[evidence.matching_status]) return states[evidence.matching_status];
+    if (evidence.clinical_status === "NO_GERMLINE_CLASSIFICATION") return "No germline classification";
     const review = (evidence.review_statuses || [])[0];
     const starCount = review ? Math.max(0, Math.min(4, Number(review.stars) || 0)) : 0;
-    const stars = review ? `${"★".repeat(starCount)}${"☆".repeat(4 - starCount)}` : "";
+    const stars = review && review.stars != null ? `${"★".repeat(starCount)}${"☆".repeat(4 - starCount)}` : "";
     const classifications = evidence.classifications || [];
     if (evidence.has_conflict) return [stars, "Conflicting classifications"].filter(Boolean).join(" · ");
     if (classifications.length) {
@@ -3150,8 +3570,33 @@ class VariantBrowser extends HTMLElement {
     return "Not reported";
   }
 
+  clinvarTableStatus(evidence = {}) {
+    if (!evidence.matching_status || evidence.matching_status === "NOT_FOUND") return "—";
+    if (evidence.matching_status !== "FOUND") return this.clinvarEvidenceStatus(evidence);
+    const abbreviations = {
+      pathogenic: "P", "likely pathogenic": "LP", "uncertain significance": "VUS",
+      "likely benign": "LB", benign: "B",
+    };
+    const compact = label => String(label).split("/")
+      .map(part => part.trim()).filter(part => !/^not[ _]provided$/i.test(part))
+      .map(part => abbreviations[part.toLowerCase()] || part).join("/");
+    const breakdown = (evidence.submission_classification_breakdown || [])
+      .filter(item => item?.label && compact(item.label) && Number(item.count) > 0);
+    if (breakdown.length) {
+      return breakdown.map(item => `${compact(item.label)}(${Number(item.count)})`).join(" ");
+    }
+    if (evidence.has_conflict || Array.isArray(evidence.submission_classification_breakdown)) return "—";
+    return (evidence.classifications || []).map(compact).filter(Boolean).join(" ") || "—";
+  }
+
   clinvarEvidenceContent(evidence = {}, databaseIds = {}, searchUrl = null) {
     const content = node("div", undefined, "detail-content clinvar-evidence-content");
+    if (evidence.matching_status) {
+      if (evidence.matching_status !== "FOUND" || !evidence.classifications?.length) {
+        content.append(node("p", this.clinvarEvidenceStatus(evidence), "empty"));
+      }
+    }
+    if (evidence.last_error) content.append(node("p", evidence.last_error, "clinvar-retrieval-note"));
     const identifiers = (evidence.identifiers || []).length
       ? evidence.identifiers : (databaseIds.clinvar || []);
     if (evidence.status === "not_reported" && !identifiers.length) {
@@ -3180,6 +3625,9 @@ class VariantBrowser extends HTMLElement {
       heading.append(classifications);
     }
     content.append(heading);
+    if (!evidence.reviewed_submission_classification_breakdown?.length) {
+      content.append(node("p", "No germline submission classifications with at least 1 review star are available.", "detail-note"));
+    }
     const identifierRow = node("div", undefined, "clinvar-identifiers");
     if (identifiers.length) {
       identifierRow.append(this.databaseIdentifierLinks("clinvar", identifiers));
@@ -3191,31 +3639,21 @@ class VariantBrowser extends HTMLElement {
       identifierRow.append(link);
     }
     if (identifierRow.childNodes.length) content.append(identifierRow);
-    if (evidence.has_conflict) {
-      content.append(node(
-        "p",
-        "ClinVar contains conflicting classifications. Review the condition-specific submissions and their review status.",
-        "clinvar-conflict-warning",
-      ));
-    }
     const fields = [];
     const review = this.clinvarReviewStatuses(evidence.review_statuses || []);
     if (review) fields.push(["Germline review", review]);
-    if ((evidence.conditions || []).length) fields.push(["Conditions", evidence.conditions.join(" · ")]);
-    if ((evidence.condition_ids || []).length) fields.push(["Condition identifiers", evidence.condition_ids.join(" · ")]);
-    if ((evidence.conflicts || []).length) fields.push(["Conflicting submissions", evidence.conflicts.join(" · ")]);
-    if ((evidence.origins || []).length) fields.push(["Allele origin", evidence.origins.join(" · ")]);
+    if ((evidence.conditions || []).length) {
+      const conditions = evidence.conditions.slice(0, 3).join(" · ");
+      fields.push(["Conditions", conditions + (evidence.conditions.length > 3 ? ` · +${evidence.conditions.length - 3} more on ClinVar` : "")]);
+    }
     if ((evidence.last_evaluated || []).length) fields.push(["Last evaluated", evidence.last_evaluated.join(" · ")]);
     if (evidence.submission_count != null || evidence.submitter_count != null) {
       const submissions = evidence.submission_count != null ? `${evidence.submission_count} submissions` : "";
       const submitters = evidence.submitter_count != null ? `${evidence.submitter_count} submitters` : "";
-      fields.push(["Aggregate evidence", [submissions, submitters].filter(Boolean).join(" · ")]);
+      fields.push(["Submissions", [submissions, submitters].filter(Boolean).join(" · ")]);
     }
     if (evidence.record_updated) fields.push(["Record updated", evidence.record_updated]);
     if (evidence.most_recent_submission) fields.push(["Most recent submission", evidence.most_recent_submission]);
-    if ((evidence.rcv_accessions || []).length) {
-      fields.push(["Condition records", this.databaseIdentifierLinks("clinvar", evidence.rcv_accessions)]);
-    }
     if ((evidence.oncogenicity || []).length) fields.push(["Oncogenicity", evidence.oncogenicity.join(" · ")]);
     const oncReview = this.clinvarReviewStatuses(evidence.oncogenicity_review_statuses || []);
     if (oncReview) fields.push(["Oncogenicity review", oncReview]);
@@ -3225,20 +3663,139 @@ class VariantBrowser extends HTMLElement {
     const somaticReview = this.clinvarReviewStatuses(evidence.somatic_review_statuses || []);
     if (somaticReview) fields.push(["Somatic review", somaticReview]);
     if (fields.length) content.append(this.detailCard(fields));
-    if (evidence.retrieval_status === "unavailable") {
-      content.append(node(
-        "p", "Live ClinVar enrichment is temporarily unavailable; indexed VEP evidence is shown.",
-        "clinvar-retrieval-note",
-      ));
+    if (evidence.submissions_error) content.append(node("p", evidence.submissions_error));
+    if (evidence.submissions?.length || evidence.submissions_next_offset != null) {
+      content.append(this.clinvarSubmissionsDisclosure(evidence));
     }
     return content;
   }
 
   clinvarClassificationLabels(evidence = {}) {
-    const breakdown = (evidence.classification_breakdown || [])
+    const breakdown = (evidence.reviewed_submission_classification_breakdown || [])
       .filter(item => item?.label && Number(item.count) > 0)
       .map(item => `${item.label} (${Number(item.count)})`);
-    return breakdown.length ? breakdown : (evidence.classifications || []);
+    return breakdown;
+  }
+
+  clinvarSubmissionPreview(row) {
+    const card = node("article", undefined, "clinvar-submission-preview");
+    const header = node("div", undefined, "clinvar-submission-heading");
+    const submitter = node("strong", row.submitter || "Submitter not reported");
+    submitter.title = submitter.textContent;
+    header.append(submitter, this.databaseIdentifierLinks("clinvar", [row.scv]));
+    const classification = node("div", undefined, "clinvar-submission-heading");
+    const label = row.clinical_significance
+      || (row.oncogenicity ? `Oncogenicity: ${row.oncogenicity}` : "")
+      || (row.somatic_clinical_impact ? `Somatic clinical impact: ${row.somatic_clinical_impact}` : "")
+      || "Classification not reported";
+    const significance = node("span", label, `clinvar-classification ${this.clinvarClassificationClass(label)}`);
+    significance.title = label;
+    classification.append(significance);
+    const review = this.clinvarReviewStatuses([{label: row.review_status || "Review not reported", stars: row.stars}]);
+    const stars = review.querySelector(".clinvar-review-stars");
+    stars.title = row.review_status || "Review not reported";
+    classification.append(stars);
+    const condition = node("p", row.condition_name || row.submitted_condition || "Condition not reported");
+    condition.title = condition.textContent;
+    card.append(header, classification, condition, node("small", `Last evaluated: ${row.last_evaluated || "Not reported"}`));
+    return card;
+  }
+
+  clinvarSubmissionsDisclosure(evidence) {
+    const content = node("div", undefined, "detail-content");
+    const list = node("div", undefined, "clinvar-submissions-scroll");
+    list.tabIndex = 0;
+    list.setAttribute("role", "region");
+    list.setAttribute("aria-label", "ClinVar submissions");
+    (evidence.submissions || []).forEach(row => list.append(this.clinvarSubmissionPreview(row)));
+    const progress = node("p", "", "detail-note");
+    progress.setAttribute("role", "status");
+    const retry = node("button", "Retry loading submissions");
+    retry.type = "button";
+    retry.hidden = true;
+    content.append(list, progress, retry);
+    const total = evidence.submission_interpretation_count ?? evidence.submission_count ?? evidence.submissions?.length ?? 0;
+    const disclosure = this.detailDisclosure("Submissions", content, {status: `${total}`});
+    disclosure.classList.add("clinvar-submissions-disclosure");
+    const workspace = this.workspaces.get(this.activeWorkspace);
+    const variantId = workspace?.detail?.variant_id;
+    let loading = false;
+    const load = async () => {
+      if (loading || !workspace || workspace.detail?.clinvar_evidence !== evidence) return;
+      loading = true;
+      retry.hidden = true;
+      try {
+        while (evidence.submissions_next_offset != null) {
+          const offset = evidence.submissions_next_offset;
+          progress.textContent = `Loading submissions… ${evidence.submissions?.length || 0} / ${total}`;
+          const next = await this.request(
+            `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants/${variantId}/clinvar-submissions?offset=${offset}&limit=500`,
+            {cache: "no-store", signal: workspace.detailController?.signal},
+          );
+          if (workspace.detail?.clinvar_evidence !== evidence || !disclosure.isConnected) return;
+          const page = next;
+          if (page.snapshot_id !== evidence.snapshot_id) {
+            await this.loadDetail(workspace, variantId);
+            return;
+          }
+          if (page.submissions_error) throw new Error(page.submissions_error);
+          if (page.submissions_next_offset != null && page.submissions_next_offset <= offset) {
+            throw new Error("Unable to load the next submissions page.");
+          }
+          const rows = page.submissions || [];
+          evidence.submissions = [...(evidence.submissions || []), ...rows];
+          evidence.submissions_next_offset = page.submissions_next_offset;
+          rows.forEach(row => list.append(this.clinvarSubmissionPreview(row)));
+        }
+        progress.textContent = "";
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          progress.textContent = error.message;
+          retry.hidden = false;
+        }
+      } finally { loading = false; }
+    };
+    disclosure.addEventListener("toggle", () => { if (disclosure.open) load(); });
+    retry.addEventListener("click", load);
+    return disclosure;
+  }
+
+  clinvarSourceInformation(evidence = {}) {
+    const provenance = evidence.provenance || {};
+    const information = node("span", undefined, "clinvar-source-information");
+    const button = node("button", "i", "gene-evidence-information-button");
+    button.type = "button";
+    button.setAttribute("aria-label", "About the ClinVar snapshot");
+    button.setAttribute("aria-describedby", "clinvar-snapshot-tooltip");
+    button.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); });
+    const tooltip = node("span", undefined, "clinvar-source-tooltip");
+    tooltip.id = "clinvar-snapshot-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.append(node("span", evidence.snapshot_id ? "Local ClinVar snapshot" : "Local ClinVar snapshot unavailable"));
+    const imported = new Date(provenance.imported_at || "");
+    tooltip.append(node("span", `Snapshot updated: ${Number.isNaN(imported.getTime()) ? "Not available" : imported.toLocaleString()}`));
+    const release = provenance.clinvar_version || provenance.release_version;
+    if (release) tooltip.append(node("span", `ClinVar version: ${release}`));
+    information.append(button, tooltip);
+    return information;
+  }
+
+  vcepSourceInformation(evidence = {}) {
+    const provenance = evidence.provenance || {};
+    const information = node("span", undefined, "clinvar-source-information");
+    const button = node("button", "i", "gene-evidence-information-button");
+    button.type = "button";
+    button.setAttribute("aria-label", "About the ClinGen VCEP snapshot");
+    button.setAttribute("aria-describedby", "clingen-vcep-snapshot-tooltip");
+    button.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); });
+    const tooltip = node("span", undefined, "clinvar-source-tooltip");
+    tooltip.id = "clingen-vcep-snapshot-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.append(node("span", evidence.snapshot_id ? "Local ClinGen VCEP snapshot" : "Local ClinGen VCEP snapshot unavailable"));
+    const imported = new Date(provenance.imported_at || "");
+    tooltip.append(node("span", `Snapshot updated: ${Number.isNaN(imported.getTime()) ? "Not available" : imported.toLocaleString()}`));
+    information.append(button, tooltip);
+    return information;
   }
 
   clinvarReviewStatuses(statuses = []) {
@@ -3247,8 +3804,8 @@ class VariantBrowser extends HTMLElement {
     statuses.forEach(status => {
       const row = node("span", undefined, "clinvar-review-status");
       const stars = Math.max(0, Math.min(4, Number(status.stars) || 0));
-      const rating = node("span", `${"★".repeat(stars)}${"☆".repeat(4 - stars)}`, "clinvar-review-stars");
-      rating.setAttribute("aria-label", `${stars} of 4 ClinVar review stars`);
+      const rating = node("span", status.stars == null ? "Stars not reported" : `${"★".repeat(stars)}${"☆".repeat(4 - stars)}`, "clinvar-review-stars");
+      rating.setAttribute("aria-label", status.stars == null ? "Stars not reported" : `${stars} of 4 ClinVar review stars`);
       row.append(rating, node("span", status.label));
       list.append(row);
     });
@@ -3576,43 +4133,29 @@ class VariantBrowser extends HTMLElement {
       ));
       return section;
     }
-    const observedExpected = (ratio, observed, expected) => {
-      const format = rawValue => (
-        rawValue === null || rawValue === undefined
-          ? "—"
-          : Number(rawValue).toLocaleString(undefined, {maximumFractionDigits: 3})
-      );
-      return `${format(ratio)} (${format(observed)}/${format(expected)})`;
-    };
-    const metrics = [
-      ["LOEUF", constraint.loeuf,
-        "Upper bound of the plausible pLoF observed/expected fraction. Lower values indicate stronger constraint. gnomAD v4.1 recommends <0.45 for pLoF-constrained genes."],
-      ["pLI", constraint.pli,
-        "Probability that a gene is loss-of-function intolerant. ≥0.9 indicates high intolerance; ≤0.1 indicates tolerance. gnomAD recommends preferring LOEUF."],
-      ["pLoF o/e", observedExpected(
-        constraint.lof_oe, constraint.lof_observed, constraint.lof_expected,
-      ), "Observed/expected high-confidence pLoF variants; observed and expected counts are in parentheses. Values <1 indicate depletion. There is no standalone hard cutoff: use LOEUF (<0.45).", true],
-      ["LoF Z-score", constraint.lof_z,
-        "Standardized depletion of pLoF variants. Higher positive values indicate stronger constraint. gnomAD v4 has no recommended hard cutoff and Z-scores depend on sample size."],
-      ["Missense o/e", observedExpected(
-        constraint.missense_oe, constraint.missense_observed, constraint.missense_expected,
-      ), "Observed/expected missense variants; observed and expected counts are in parentheses. Values <1 indicate depletion; there is no universal hard cutoff.", true],
-      ["Missense Z-score", constraint.missense_z,
-        "Standardized depletion of missense variants. Higher positive values indicate stronger constraint. >3.09 is a widely used historical threshold; gnomAD v4 Z-scores are sample-size sensitive."],
-    ];
-    const grid = node("dl", undefined, "gene-mechanism-metrics");
-    metrics.forEach(([label, rawValue, help, formatted]) => {
-      const value = formatted
-        ? rawValue
-        : rawValue === null || rawValue === undefined
-          ? "—"
-          : Number(rawValue).toLocaleString(undefined, {maximumFractionDigits: 3});
-      grid.append(this.geneConstraintMetricLabel(label, help), node("dd", value));
+    const table = node("table", undefined, "gnomad-constraint-table");
+    const header = node("tr");
+    ["Transcript", "LOEUF", "pLI", "LoF o/e", "Mis o/e", "Mis Z", "Syn o/e", "Decile"].forEach(label => header.append(node("th", label)));
+    const head = node("thead"); head.append(header); table.append(head);
+    const body = node("tbody");
+    (constraint.transcripts || [constraint]).forEach(transcript => {
+      const row = node("tr");
+      const name = node("td", transcript.transcript_id || "—");
+      name.title = [transcript.canonical ? "Canonical" : "", transcript.mane_select ? "MANE Select" : "",
+        ...(transcript.constraint_flags || []), ...(transcript.gene_flags || [])].filter(Boolean).join(" · ");
+      row.append(name);
+      for (const [key, metric] of [["loeuf"], ["pli"], ["lof_oe", "lof"], ["missense_oe", "mis"],
+        ["missense_z"], ["synonymous_oe", "syn"], ["decile"]]) {
+        const details = transcript[metric] || {};
+        const cell = node("td", this.frequencyNumber(transcript[key] ?? (metric ? details.oe : null)));
+        if (metric) cell.title = `Observed/expected: ${this.frequencyNumber(details.obs)}/${this.frequencyNumber(details.exp)}; CI: ${this.frequencyNumber(details["oe_ci.lower"])}–${this.frequencyNumber(details["oe_ci.upper"])}`;
+        if (key === "decile") cell.title = `Rank: ${this.frequencyNumber(transcript.rank)}`;
+        row.append(cell);
+      }
+      body.append(row);
     });
-    section.append(
-      node("p", "Constraint supports variant interpretation but is not a disease-mechanism assertion.", "gene-mechanism-note"),
-      grid,
-    );
+    table.append(body);
+    section.append(table, node("small", "Statistical constraint supports interpretation; it does not establish LoF, GoF or DN disease mechanisms.", "gene-mechanism-note"));
     return section;
   }
 
@@ -4088,7 +4631,7 @@ class VariantBrowser extends HTMLElement {
   populationFrequencyLabel(database, fieldName) {
     const normalized = fieldName.toUpperCase();
     if (database === "VEP summary") {
-      return normalized === "AF_MAX" ? "Maximum allele frequency" : "Population at maximum AF";
+      return normalized === "AF_MAX" ? "Max AF" : "Population";
     }
     let code = normalized;
     let scope = "";
@@ -4118,8 +4661,16 @@ class VariantBrowser extends HTMLElement {
       if (/^gnomAD[eg]_/i.test(token)) {
         return this.populationFrequencyLabel("gnomAD", `${token}_AF`);
       }
-      return POPULATION_LABELS[token.toUpperCase()] || this.readableFieldName(token);
+      return this.populationName(token);
     }).filter(Boolean).join(" · ");
+  }
+
+  populationName(populationId) {
+    const normalized = String(populationId || "").toUpperCase();
+    const sex = /_(XX|XY)$/.exec(normalized)?.[1] || "";
+    const population = normalized.replace(/_(XX|XY)$/, "").replace(/^GNOMAD[EG]_/, "");
+    const label = POPULATION_LABELS[population] || this.readableFieldName(population);
+    return `${label}${sex ? ` (${sex})` : ""}`;
   }
 
   readableFieldName(fieldName) {
@@ -4138,7 +4689,7 @@ class VariantBrowser extends HTMLElement {
     if (["grch38", "hg38", "b38", "hs38dh"].some(name => build.includes(name))) {
       return {
         referenceBuild: "GRCh38",
-        tools: {gnomad: {dataset: "gnomad_r4", version: "4.1"}},
+        tools: {gnomad: {dataset: "gnomad_r4", version: "4.1.1"}},
       };
     }
     return null;
@@ -4170,9 +4721,8 @@ class VariantBrowser extends HTMLElement {
       content.append(node("p", "No data available.", "empty"));
       return content;
     }
-    groups.forEach(group => {
-      const summaryClass = group.database === "VEP summary" ? " frequency-summary" : "";
-      const card = node("section", undefined, `frequency-group${summaryClass}`);
+    const renderGroup = group => {
+      const card = node("section", undefined, "frequency-group");
       const heading = node("h5");
       const externalTool = group.database === "gnomAD" ? this.externalVariantTool(detail, "gnomad") : null;
       if (externalTool) {
@@ -4195,99 +4745,194 @@ class VariantBrowser extends HTMLElement {
         heading.textContent = group.database;
       }
       card.append(heading, this.detailCard(group.fields));
-      content.append(card);
-    });
+      return card;
+    };
+    const summaryGroup = groups.find(group => group.database === "VEP summary");
+    const additionalGroups = groups.filter(group => group.database !== "VEP summary");
+    if (summaryGroup) {
+      const summaryFields = summaryGroup.fields.filter(([label]) => ["Max AF", "Population"].includes(label));
+      const additionalSummaryFields = summaryGroup.fields.filter(([label]) => !["Max AF", "Population"].includes(label));
+      if (summaryFields.length) {
+        const summaryCard = node("section", undefined, "frequency-group frequency-summary");
+        summaryCard.append(node("h5", "VEP summary"), this.detailCard(summaryFields));
+        content.append(summaryCard);
+      }
+      if (additionalSummaryFields.length) {
+        additionalGroups.unshift({...summaryGroup, fields: additionalSummaryFields});
+      }
+    }
+    const hiddenGroups = additionalGroups.filter(group => !(directFrequency && group.database === "gnomAD"));
+    if (hiddenGroups.length) {
+      const additionalContent = node("div", undefined, "detail-content population-frequency-groups");
+      hiddenGroups.forEach(group => additionalContent.append(renderGroup(group)));
+      content.append(this.detailDisclosure(
+        "Additional VEP, gnomAD and 1000 Genomes data",
+        additionalContent,
+      ));
+    }
     return content;
   }
 
-  populationFrequencyStatus(detail, indexedFieldCount) {
-    if (detail.gnomadFrequencyLoading) return "Retrieving gnomAD genomes…";
-    const frequency = detail.gnomadFrequency || {};
-    const labels = {
-      observed: "Observed in gnomAD genomes",
-      not_observed_covered: "Not observed · adequately covered",
-      not_observed_low_coverage: "Not observed · low coverage",
-      not_observed_coverage_unknown: "Not observed · coverage unknown",
-      unsupported: "gnomAD lookup unsupported",
-      unavailable: "gnomAD unavailable",
+  populationFrequencyStatus(detail, annotations) {
+    if (detail.gnomadFrequencyLoading) return "Retrieving gnomAD…";
+    const candidates = [];
+    const addFrequency = (rawValue, source = "", population = "") => {
+      if (rawValue === null || rawValue === undefined || rawValue === "") return;
+      String(rawValue).split(" · ").forEach(value => {
+        const frequency = Number(value.trim());
+        if (Number.isFinite(frequency) && frequency >= 0 && frequency <= 1) {
+          candidates.push({frequency, source, population});
+        }
+      });
     };
-    if (labels[frequency.status]) return labels[frequency.status];
-    if (detail.gnomadFrequencyError) return "gnomAD unavailable";
-    return indexedFieldCount ? `${indexedFieldCount} indexed fields` : "No data";
+    annotations.forEach(annotation => {
+      addFrequency(annotation.population_af);
+      Object.entries(annotation.metadata?.fields || {}).forEach(([name, value]) => {
+        const normalized = name.toUpperCase();
+        const gnomadMatch = /^GNOMAD[EG]_(.+)_AF$/.exec(normalized);
+        if (gnomadMatch || normalized === "GNOMAD_AF") {
+          const population = gnomadMatch ? this.populationName(gnomadMatch[1]) : "Overall";
+          addFrequency(value, "gnomAD", population);
+        } else if (normalized === "AF" || /^(AFR|AMR|EAS|EUR|SAS)_AF$/.test(normalized)) {
+          const populationCode = normalized === "AF" ? "AF" : normalized.slice(0, -3);
+          addFrequency(value, "1000G", this.populationName(populationCode));
+        }
+      });
+    });
+    const frequency = detail.gnomadFrequency || {};
+    const datasets = frequency.datasets || {};
+    const populationDataset = ["joint", "genomes", "exomes"]
+      .map(product => datasets[product]?.populations)
+      .find(populations => populations?.some(population => population.af !== null && population.af !== undefined));
+    (populationDataset || frequency.populations || []).forEach(population => {
+      addFrequency(population.af, "gnomAD", this.populationName(population.id));
+    });
+    addFrequency(frequency.af, "gnomAD", "Overall");
+    addFrequency(frequency.max_population_af, "gnomAD");
+    if (!candidates.length) return "Not found";
+    const maximum = candidates.reduce((best, candidate) =>
+      candidate.frequency > best.frequency
+        || (candidate.frequency === best.frequency && candidate.source && !best.source)
+        ? candidate : best);
+    const source = maximum.source
+      ? ` (${maximum.source}${maximum.population ? ` · ${maximum.population}` : ""})`
+      : "";
+    return `Max AF: ${this.frequencyNumber(maximum.frequency)}${source}`;
   }
 
   gnomadFrequencyCard(detail) {
-    if (detail.gnomadFrequencyLoading) {
-      const card = node("section", undefined, "frequency-group frequency-direct");
-      card.append(node("h5", "gnomAD genomes"), node("p", "Retrieving exact allele frequency and locus coverage…", "loading"));
-      return card;
-    }
     const frequency = detail.gnomadFrequency;
-    if (!frequency && !detail.gnomadFrequencyError) return null;
-    const card = node("section", undefined, "frequency-group frequency-direct");
+    const card = node("section", undefined, "frequency-group frequency-direct gnomad-compact");
     const heading = node("h5");
-    const externalTool = this.externalVariantTool(detail, "gnomad");
-    if (externalTool) {
-      const link = node("a", undefined, "frequency-external-link");
-      link.href = frequency?.source_url || externalTool.url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.title = `Open the exact ${externalTool.referenceBuild} allele in gnomAD genomes v${externalTool.version}`;
-      link.append(
-        node("span", "gnomAD genomes"),
-        node("small", `v${frequency?.release || externalTool.version}`, "frequency-tool-version"),
-        node("span", "↗", "external-link-icon"),
-      );
-      heading.append(link);
-    } else {
-      heading.textContent = "gnomAD genomes";
-    }
+    const link = node("a", `gnomAD v${frequency?.release || "4.1.1"} · GRCh38 ↗`, "frequency-external-link");
+    link.href = frequency?.source_url || "https://gnomad.broadinstitute.org/";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    heading.append(link);
     card.append(heading);
-    if (!frequency) {
-      card.append(node("p", detail.gnomadFrequencyError || "Frequency retrieval unavailable.", "inline-error"));
+    if (!frequency?.datasets) {
+      card.append(node("small", detail.gnomadFrequencyLoading ? "Retrieving gnomAD…"
+        : frequency?.message || frequency?.error || detail.gnomadFrequencyError || "No frequency data available.", "detail-note"));
       return card;
     }
-    const statusLabels = {
-      observed: "Observed",
-      not_observed_covered: "Not observed; locus adequately covered",
-      not_observed_low_coverage: "Not observed; locus coverage insufficient",
-      not_observed_coverage_unknown: "Not observed; locus coverage unavailable",
-      unsupported: "Unsupported allele or assembly",
-      unavailable: "Temporarily unavailable",
-    };
-    const coverage = frequency.coverage || {};
-    const coverageText = coverage.available
-      ? `${this.frequencyNumber(coverage.mean)}× mean · ${this.frequencyPercent(coverage.over_20)} ≥20×`
-        + ` · ${coverage.adequate ? "adequate" : "below heuristic"}`
-      : "Not available";
-    const fields = [
-      ["Dataset", `Genomes v${frequency.release || "—"} · ${frequency.reference_build || "—"}`],
-      ["Allele status", statusLabels[frequency.status] || frequency.status],
-      ["Allele frequency", this.frequencyNumber(frequency.af)],
-      ["Allele count / number", this.countRatio(frequency.ac, frequency.an)],
-      ["Homozygotes", frequency.ac_hom],
-      ["Hemizygotes", frequency.ac_hemi],
-      ["Site filters", frequency.status === "observed"
-        ? ((frequency.filters || []).length ? frequency.filters.join(" · ") : "PASS")
-        : "Not applicable"],
-      ["Locus coverage", coverageText, {
-        title: `Adequate-coverage heuristic: mean ≥${coverage.minimum_mean || 20}× and `
-          + `≥${Math.round((coverage.minimum_over_20 || 0.8) * 100)}% of samples at 20×.`,
-      }],
+    const products = ["joint", "exomes", "genomes"];
+    const table = node("table", undefined, "gnomad-frequency-table");
+    const header = node("tr");
+    ["", "Joint", "Exomes", "Genomes"].forEach(text => header.append(node("th", text)));
+    const head = node("thead"); head.append(header); table.append(head);
+    const body = node("tbody");
+    const rows = [
+      ["Filter", data => data.presence === "NOT_OBSERVED" ? "No variant" : data.filter || "—"],
+      ["AC/AN", data => this.countRatio(data.ac, data.an)],
+      ["AF", data => this.frequencyNumber(data.af)],
+      ["FAF95", data => this.frequencyNumber(data.grpmax_faf95)],
+      ["Hom", data => this.frequencyNumber(data.ac_hom)],
     ];
-    card.append(this.detailCard(fields));
-    if ((frequency.populations || []).length) {
-      const populationFields = frequency.populations.map(population => [
-        POPULATION_LABELS[String(population.id || "").toUpperCase()]
-          || this.readableFieldName(population.id),
-        population.an
-          ? `${this.frequencyNumber(population.af)} · AC/AN ${this.countRatio(population.ac, population.an)}`
-          : "Not covered",
-      ]);
-      card.append(node("h6", "Major populations", "frequency-population-heading"));
-      card.append(this.detailCard(populationFields));
+    rows.forEach(([label, format]) => {
+      const row = node("tr");
+      const term = node("th", label); term.scope = "row";
+      if (label === "FAF95") term.title = "Official Grpmax FAF95 across eligible ancestry groups; distinct from maximum observed AF.";
+      row.append(term);
+      products.forEach(product => {
+        const data = frequency.datasets[product] || {};
+        const cell = node("td", format(data));
+        if (label === "Filter") {
+          cell.dataset.filter = data.presence === "NOT_OBSERVED" ? "absent" : data.filter === "PASS" ? "pass" : "other";
+          cell.title = [...(data.filters || []), ...(data.flags || []), ...(frequency.variant_flags || [])].join(" · ");
+        }
+        if (label === "FAF95") cell.title = `Group: ${data.grpmax_faf95_population || "unavailable"}; FAF99: ${this.frequencyNumber(data.grpmax_faf99)}`;
+        if (label === "Hom" && data.ac_hemi !== null && data.ac_hemi !== undefined) cell.title = `Hemi: ${data.ac_hemi}`;
+        row.append(cell);
+      });
+      body.append(row);
+    });
+    table.append(body); card.append(table);
+    if (frequency.region_coverage) {
+      const coverage = frequency.region_coverage;
+      const descriptions = Object.entries(coverage.datasets || {}).map(([name, data]) => {
+        const metrics = data.mean_min == null || data.over_20_min == null ? ""
+          : `; min depth ${Number(data.mean_min).toFixed(1)}×; min ≥20× ${Math.round(data.over_20_min * 100)}%`;
+        return `${name}: ${String(data.status || "unavailable").toLowerCase()}${metrics}`;
+      });
+      const note = node("small", `Surrounding coverage · GRCh38 ${coverage.chromosome}:${coverage.start}–${coverage.stop}`
+        + ` · ${descriptions.join(" · ") || String(coverage.status || "unavailable").toLowerCase()}`
+        + " · Site AN unavailable; absence unverified.", "detail-note");
+      note.title = Object.values(coverage.datasets || {}).map(data => data.source).filter(Boolean).join(" · ")
+        + (coverage.error ? ` · ${coverage.error}` : "");
+      card.append(note);
     }
-    if (frequency.message) card.append(node("p", frequency.message, "detail-note frequency-note"));
+    const disclosure = node("details", undefined, "gnomad-populations");
+    const summary = node("summary");
+    summary.append(node("strong", "Population details", "gene-knowledge-label"));
+    disclosure.append(summary);
+    const controls = node("div", undefined, "gnomad-population-controls");
+    const select = node("select"); select.setAttribute("aria-label", "gnomAD population dataset");
+    for (const [subset, prefix] of [["all", ""], ["non_ukb", "non-UKB · "]]) {
+      if (subset !== "all" && !frequency.subsets?.[subset]?.datasets) continue;
+      products.forEach(product => {
+        const option = node("option", prefix + product[0].toUpperCase() + product.slice(1));
+        option.value = subset + ":" + product; select.append(option);
+      });
+    }
+    const stratum = node("select"); stratum.setAttribute("aria-label", "Population sex stratum");
+    [["all", "All"], ["XX", "XX"], ["XY", "XY"]].forEach(([key, label]) => {
+      const option = node("option", label); option.value = key; stratum.append(option);
+    });
+    const extras = node("input"); extras.type = "checkbox";
+    const extrasLabel = node("label"); extrasLabel.append(extras, "FAF99 / Hemi");
+    controls.append(select, stratum, extrasLabel);
+    const populationTable = node("table", undefined, "gnomad-population-table");
+    const render = () => {
+      populationTable.replaceChildren();
+      const [subset, product] = select.value.split(":");
+      const source = subset === "all" ? frequency : frequency.subsets[subset];
+      const populations = source?.datasets?.[product]?.populations || [];
+      const thead = node("thead"), titles = node("tr");
+      const columns = [["Pop", "id"], ["AC", "ac"], ["AN", "an"], ["AF", "af"], ["FAF95", "faf95"], ["Hom", "ac_hom"]];
+      if (extras.checked) columns.push(["FAF99", "faf99"], ["Hemi", "ac_hemi"]);
+      columns.forEach(([label]) => titles.append(node("th", label)));
+      thead.append(titles); populationTable.append(thead);
+      const tbody = node("tbody");
+      populations.filter(population => {
+        const sex = /(?:^|_)(XX|XY)$/.exec(population.id)?.[1];
+        return stratum.value === "all" ? !sex : sex === stratum.value;
+      }).forEach(population => {
+        const row = node("tr");
+        columns.forEach(([, key]) => row.append(node("td", key === "id"
+          ? this.populationName(population.id) : this.frequencyNumber(population[key]))));
+        tbody.append(row);
+      });
+      if (!tbody.children.length) {
+        const row = node("tr"), cell = node("td", "No population data"); cell.colSpan = columns.length;
+        row.append(cell); tbody.append(row);
+      }
+      populationTable.append(tbody);
+    };
+    select.addEventListener("change", render); stratum.addEventListener("change", render); extras.addEventListener("change", render);
+    render();
+    disclosure.append(controls, populationTable); card.append(disclosure);
+    if (frequency.partial) card.append(node("small", "Incomplete retrieval; retry available.", "inline-error"));
+    if (frequency.subset_errors?.non_ukb) card.append(node("small", "Non-UKB subset unavailable; full-cohort data retained.", "inline-error"));
     return card;
   }
 

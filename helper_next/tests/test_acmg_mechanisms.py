@@ -2,13 +2,9 @@
 import copy
 import asyncio
 import io
-import json
-import os
 import sqlite3
-import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from urllib.error import URLError
 
 import pytest
@@ -16,14 +12,11 @@ from fastapi import HTTPException
 
 from helper_next.api import acmg_mechanisms as api
 from helper_next.core import acmg_mechanism_normalizer as norm
-from helper_next.core.acmg_evidence import EvidenceCoordinator
-from helper_next.core.acmg_mechanism_models import SOURCES, SourcePacket
-from helper_next.core.acmg_mechanism_store import MechanismStore, compare_snapshots
+from helper_next.core.acmg_mechanism_models import SOURCES
+from helper_next.core.acmg_mechanism_store import compare_snapshots
 from helper_next.core.acmg_mechanisms import MechanismEvidenceCache
 from helper_next.core.acmg_sources import SourceManager
 from helper_variants import gene_phenotype
-from test_acmg_evidence import engine, PROTOCOL, ENGINE
-from test_acmg_pvs1 import bundle, provider, document
 from test_gene_phenotype import HEADER
 
 
@@ -378,45 +371,3 @@ def test_consultation_api_snapshot_diff_and_cross_association_guard(cache, monke
     with pytest.raises(HTTPException) as exc:
         api.snapshot("missing")
     assert exc.value.status_code == 404
-
-
-def test_opt_in_coordinator_extension_validated_by_real_engine_pvs1_unchanged(tmp_path, monkeypatch, engine):
-    monkeypatch.setenv("HELPER_MECHANISM_DB", str(tmp_path / "matrix.sqlite"))
-    monkeypatch.setenv("HELPER_TRANSCRIPT_FETCH", "0")
-    transcript_provider, _ = provider(tmp_path, bundle())
-    src = transcript_provider.get("ENST000001.1", "GRCh38", fetch=True)
-    doc = document(tmp_path, monkeypatch, src["data"])
-    sources = FixtureSources(packets({"g2p": [g2p()]}))
-    sources.transcript_provider = transcript_provider
-    before = EvidenceCoordinator(engine, sources).build(doc, PROTOCOL)
-    after = EvidenceCoordinator(engine, sources).build(doc, PROTOCOL, mechanism_request={"cache_policy": "CACHE_ONLY"})
-    assert not before["errors"] and not after["errors"]
-    matrix = next(e for e in after["contract"]["evidence"] if e["value"]["id"] == "helper-mechanism-matrix")
-    assert matrix["value"]["kind"] == "EXTENSION" and matrix["validation_status"] == "UNVERIFIED"
-    assert matrix["transformations"] and json.loads(matrix["received_json"])["snapshot_id"]
-    def pvs1(result):
-        return next(e["value"] for e in result["contract"]["evidence"] if e["value"]["kind"] == "PVS1")
-    first, second = pvs1(before), pvs1(after)
-    assert first["observation"]["mechanism"]["lof_established"] == second["observation"]["mechanism"]["lof_established"] == "UNKNOWN"
-    assert first["observation"]["transcript_effects"] == second["observation"]["transcript_effects"]
-    assert "mechanism_evidence" not in before and "mechanism_evidence" in after
-    script = """
-import json,sys
-from acmg_engine.domain.criteria_protocol import CriteriaEvaluationRequest
-from acmg_engine.services.criteria_protocols import CriteriaProtocolService
-results=[]
-for contract in json.load(sys.stdin):
-    branches=[]
-    for protocol in ('ACMG_2015','CLINGEN_GENERAL'):
-        request=CriteriaEvaluationRequest.model_validate({'evidence':contract,'protocol':{'protocol':protocol,'version':'1.0.0'}})
-        matrix=CriteriaProtocolService(allow_research=True).evaluate(request)
-        branches.append([(str(r.criterion_id),str(r.activation_status),r.assigned_strength.model_dump(mode='json') if r.assigned_strength else None) for r in matrix.criteria])
-    results.append(branches)
-print(json.dumps(results))
-"""
-    executable = os.environ.get("HELPER_TEST_ENGINE_PYTHON", str(ENGINE / ".venv/bin/python"))
-    response = subprocess.run([executable, "-c", script], input=json.dumps([before["contract"], after["contract"]]),
-                              text=True, capture_output=True, timeout=40, env=dict(os.environ, PYTHONPATH=str(ENGINE / "src")))
-    assert response.returncode == 0, response.stderr
-    previous, current = json.loads(response.stdout)
-    assert previous == current  # All 28 criteria, both pinned protocols.

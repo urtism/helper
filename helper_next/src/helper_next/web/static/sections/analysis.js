@@ -134,6 +134,14 @@ export function initAnalysis() {
   bindClick("#analysis-add-to-queue", addCurrentRunToQueue);
   bindClick("#analysis-stop-run", stopCurrentRunAndContinue);
   bindClick("#analysis-console-refresh", refreshConsole);
+  window.addEventListener("helper:panels-updated", ({detail}) => {
+    const select = document.querySelector("#analysis-gene-panel-design");
+    const current = select.value;
+    const desired = current === detail.previousName ? detail.name : current;
+    const designs = detail.designs || [];
+    populateSelect("#analysis-gene-panel-design", designs, "Select a saved design");
+    select.value = designs.includes(desired) ? desired : "";
+  });
   loadRunSetupOptions();
   renderWorkflowTree();
   renderQueueList();

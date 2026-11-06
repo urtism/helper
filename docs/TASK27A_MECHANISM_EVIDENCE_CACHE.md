@@ -1,5 +1,7 @@
 # Task 27A — Mechanism Evidence Cache
 
+> Nota 2026-10-29: documento storico. La cache pubblica dei meccanismi e il relativo assessment locale sono conservati; Workbench, Coordinator/Assembler, contratti e valutazioni del servizio esterno descritti qui sono stati rimossi. Stato operativo: [HELPER_STRUCTURAL_CLEANUP.md](HELPER_STRUCTURAL_CLEANUP.md).
+
 `TASK27A_IMPLEMENTATION_STATUS: COMPLETED`
 
 Aggiornamento Task 27A.2: il mapping operativo è ora qualificato dal registro

@@ -1,5 +1,7 @@
 # Task 27A.2 — Ontology Mapping Registry e validazione runtime
 
+> Nota 2026-10-29: audit/inventario storico. I riferimenti al Workbench, ai relativi test e al vecchio contratto descrivono lo stato precedente alla rimozione; non sono istruzioni operative attuali. Per componenti conservati, cache e verifiche aggiornate vedere [HELPER_STRUCTURAL_CLEANUP.md](HELPER_STRUCTURAL_CLEANUP.md).
+
 Data: **27 ottobre 2026**. Esito: **GO al popolamento conservativo degli indici
 locali validi**. Le identità non riconciliate restano isolate e consultabili;
 non generano trasferimenti di assertion fra malattie. Il popolamento completo

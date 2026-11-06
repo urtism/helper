@@ -1,4 +1,4 @@
-"""On-demand access to HELPER sources. Scientific qualification stays in the engine."""
+"""On-demand access to HELPER's existing public biological data sources."""
 import copy
 import os
 import sqlite3
@@ -13,12 +13,40 @@ from helper_next.core.acmg_transcripts import TranscriptReferenceProvider
 class SourceManager:
     """Use the existing public-data caches; never cache a clinical workspace here."""
 
-    def __init__(self, gene_database=None, population_database=None, transcript_provider=None, mechanism_fetch=None, mapping_registry=None):
+    def __init__(self, gene_database=None, population_database=None, transcript_provider=None, mechanism_fetch=None, mapping_registry=None,
+                 vcep_database=None):
         self.gene_database = gene_database
         self.population_database = population_database
         self.transcript_provider = transcript_provider or TranscriptReferenceProvider()
         self.mechanism_fetch = mechanism_fetch
         self.mapping_registry = mapping_registry
+        self.vcep_database = vcep_database
+
+    def vcep(self, identity, *, variation_ids=(), caids=(), hgvs=(), allele_identity=None, record=None):
+        """External expert assertions only; never an ACMG decision or fetch."""
+        context = dict(identity, variation_ids=variation_ids, caids=caids, hgvs=hgvs, allele_identity=allele_identity)
+        return self.vcep_batch([context], record=record)[0]
+
+    def vcep_batch(self, contexts, *, record=None, checksum_reference=True):
+        from helper_next.core.biological_identity import allele_refs_batch, ALLELE_CONTRACT_VERSION
+        from helper_variants.clingen_vcep_adapter import lookup_batch
+
+        contexts = [dict(context) for context in contexts]
+        genomic_fields = ("assembly", "chromosome", "position", "reference", "alternate")
+        for context in contexts:
+            attached = context.get("allele_identity")
+            if attached is not None and (attached.get("contract_version") != ALLELE_CONTRACT_VERSION
+                    or any(attached.get("original", {}).get(key) != context.get(key) for key in genomic_fields)):
+                context["allele_identity"] = None
+        pending = [index for index, context in enumerate(contexts)
+                   if context.get("allele_identity") is None
+                   and isinstance(context.get("reference"), str) and len(context["reference"]) == 1
+                   and isinstance(context.get("alternate"), str) and len(context["alternate"]) == 1]
+        qualified = allele_refs_batch([tuple(contexts[index].get(key) for key in genomic_fields)
+                                       for index in pending], record=record, checksum_reference=checksum_reference)
+        for index, identities in zip(pending, qualified):
+            contexts[index]["allele_identity"] = identities[0]
+        return lookup_batch(contexts, self.vcep_database)
 
     def ontology_registry(self, store=None):
         if self.mapping_registry is None:
@@ -91,23 +119,28 @@ class SourceManager:
         """Fetch only when explicitly requested; offline is the normal builder policy."""
         args = [identity[k] for k in ("assembly", "chromosome", "position", "reference", "alternate")]
         try:
+            try:
+                key = gnomad_frequency.cache_key(*args)
+            except (TypeError, ValueError):
+                return {"source_id": "gnomad_frequency", "status": "UNSUPPORTED",
+                        "data": None, "freshness": "UNKNOWN"}
+            if attached is not None and not gnomad_frequency._matches_context(attached, key):
+                attached = None
             raw = copy.deepcopy(attached) if attached is not None else gnomad_frequency.cached_variant(
                 *args, database=self.population_database)
             if raw is None and fetch:
                 raw = gnomad_frequency.lookup_variant(*args, database=self.population_database)
-            status = "CACHED" if raw and raw.get("cache") != "miss" else "AVAILABLE"
-            if raw and raw.get("status") == "unavailable":
-                # The legacy client merges transport and parsing failures. Its
-                # generic error is not proof that the source was unreachable.
-                status = "ERROR" if raw.get("error") else "AVAILABLE"
-            elif raw and raw.get("status") == "unsupported":
-                status = "ERROR"
+            if raw is not None:
+                raw = gnomad_frequency._access_metadata(raw)
+            status = (raw or {}).get("availability", "NOT_QUERIED")
             return {"source_id": "gnomad_frequency", "status": status, "data": raw,
                     "release": (raw or {}).get("release"),
                     "acquired_at": (raw or {}).get("retrieved_at"),
-                    "freshness": "NOT_RECORDED", "cache_policy": "existing allele/release cache"}
+                    "freshness": (raw or {}).get("freshness", "UNKNOWN"),
+                    "last_error": (raw or {}).get("last_error"),
+                    "cache_policy": "existing allele/release cache"}
         except (URLError, TimeoutError, ConnectionError):
-            return self._failure("gnomad_frequency", "UNREACHABLE")
+            return self._failure("gnomad_frequency", "ERROR")
         except (OSError, sqlite3.Error, ValueError):
             return self._failure("gnomad_frequency", "ERROR")
 

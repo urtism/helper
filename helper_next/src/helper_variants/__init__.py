@@ -1,8 +1,8 @@
 """Reusable storage, indexing, and query engine for genomic variants.
 
-This package deliberately has no dependency on Helper or FastAPI. Host
-applications supply run metadata and decide how users are authorized to access
-each database.
+The ClinVar Local reader reuses helper_next's ga2 identity helpers. There is no
+FastAPI dependency here: host applications supply run metadata and authorize
+access to each database.
 """
 
 from helper_variants.indexer import index_path, index_run, index_status

@@ -1,4 +1,4 @@
-"""Public-data cache models, separate from the ACMG Engine evidence contract."""
+"""Public-data models for local gene/disease mechanism evidence."""
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, StrictStr

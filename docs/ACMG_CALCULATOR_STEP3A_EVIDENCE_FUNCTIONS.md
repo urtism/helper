@@ -1,5 +1,7 @@
 # ACMG Calculator — STEP 3A: Molecular Evidence Computation
 
+> Nota 2026-10-29: audit/inventario storico. I riferimenti al Workbench, ai relativi test e al vecchio contratto descrivono lo stato precedente alla rimozione; non sono istruzioni operative attuali. Per componenti conservati, cache e verifiche aggiornate vedere [HELPER_STRUCTURAL_CLEANUP.md](HELPER_STRUCTURAL_CLEANUP.md).
+
 Libreria tecnica locale, senza strength, NMD decisionale o inferenze cliniche. Riferimenti di perimetro: [STEP 0](ACMG_CALCULATOR_STEP0_PVS1_MODEL.md), [STEP 1](ACMG_CALCULATOR_STEP1_RULES_DESIGN.md), [STEP 2](ACMG_CALCULATOR_STEP2_MODELS.md), [Task 25](TASK25_PVS1_EVIDENCE.md) e [Mechanism Evidence Cache](TASK27A_MECHANISM_EVIDENCE_CACHE.md).
 
 ## Differenze minime del contratto, definite prima dell'implementazione

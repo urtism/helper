@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.acmg_mechanism_models import GeneDiseaseMechanismResult
 from helper_next.core.acmg_mechanism_normalizer import describe, NORMALIZATION_VERSION
 from helper_next.core.analysis_history import now

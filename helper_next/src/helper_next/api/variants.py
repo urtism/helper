@@ -18,9 +18,10 @@ from helper_next.core import external_vcf
 from helper_next.core import acmg_context
 from helper_next.core.variant_import import ArchivedRunImportError, create_archived_run
 from helper_prioritization import apply_clinvar_evidence
-from helper_variants import clinvar
+from helper_variants.clinvar_adapter import LocalEvidence
 from helper_variants import gene_phenotype
 from helper_variants import gnomad_frequency
+from helper_variants import gnomad_enrichment
 from helper_variants import indexer as variant_indexer
 from helper_variants import igv
 from helper_variants import liftover
@@ -534,7 +535,8 @@ def sample_variants(identifier: str, sample_id: int, cursor: str = "",
                     filter_mode: str = "all", filter_statuses: str = "", zygosities: str = "",
                     min_depth: float | None = None, min_vaf: float | None = None,
                     min_quality: float | None = None, possible_compound: bool = False,
-                    sort_by: str = "priority", sort_direction: str = ""):
+                    sort_by: str = "priority", sort_direction: str = "", scoring_version: str | None = None,
+                    load_all: bool = False):
     entry = _entry(identifier)
     try:
         result = variant_query.list_variants(
@@ -550,7 +552,9 @@ def sample_variants(identifier: str, sample_id: int, cursor: str = "",
             filter_mode=filter_mode,
             filter_statuses=filter_statuses, zygosities=zygosities, min_depth=min_depth,
             min_vaf=min_vaf, min_quality=min_quality, possible_compound=possible_compound,
-            sort_by=sort_by, sort_direction=sort_direction,
+            sort_by=sort_by, sort_direction=sort_direction, scoring_version=scoring_version,
+            load_all=load_all,
+            record=entry.get("record"),
         )
     except variant_query.VariantQueryError as exc:
         raise HTTPException(status_code=404 if "sample not found" in str(exc) else 400, detail=str(exc))
@@ -558,6 +562,23 @@ def sample_variants(identifier: str, sample_id: int, cursor: str = "",
         raise HTTPException(status_code=409, detail=str(exc))
     result.update({"history_id": identifier, "sample_id": sample_id})
     return result
+
+
+@router.post("/runs/{identifier}/samples/{sample_id}/priority-evidence")
+def prepare_sample_priority_evidence(identifier: str, sample_id: int,
+                                     after_variant_id: int = Query(0, ge=0),
+                                     limit: int = Query(50, ge=1, le=100)):
+    entry = _entry(identifier)
+    try:
+        database = _entry_database(entry)
+        result = gnomad_enrichment.prepare_sample(
+            database, sample_id, after_variant_id=after_variant_id,
+            limit=limit, record=entry.get("record"), prepare_gene_context=after_variant_id == 0,
+        )
+        return result
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=404 if "sample not found" in str(exc) else 409,
+                            detail=str(exc))
 
 
 @router.get("/runs/{identifier}/samples/{sample_id}/filter-options")
@@ -572,29 +593,101 @@ def sample_variant_filter_options(identifier: str, sample_id: int):
 
 
 @router.get("/runs/{identifier}/samples/{sample_id}/variants/{variant_id}")
-def sample_variant_detail(identifier: str, sample_id: int, variant_id: int):
+def sample_variant_detail(identifier: str, sample_id: int, variant_id: int,
+                          refresh_clinvar: bool = False,
+                          submissions_limit: int = 100, submissions_offset: int = 0,
+                          scoring_version: str | None = None, compact: bool = False,
+                          request: Request = None, response: Response = None):
+    entry = _entry(identifier)
+    if not 1 <= submissions_limit <= 10000 or submissions_offset < 0:
+        raise HTTPException(status_code=400, detail="Invalid ClinVar submission page")
+    etag = None
+    if request is not None and not refresh_clinvar:
+        from helper_next.core.variant_detail_cache import detail_etag
+        identity = _sample_variant_identity(entry, sample_id, variant_id)
+        try:
+            etag = detail_etag(_entry_database(entry), entry.get("record"), identity, sample_id, variant_id,
+                               compact=compact, submissions_limit=submissions_limit,
+                               submissions_offset=submissions_offset, scoring_version=scoring_version)
+        except (OSError, ValueError, TypeError):
+            pass
+        validators = [value.strip().removeprefix("W/") for value in request.headers.get("if-none-match", "").split(",")]
+        if etag and etag.removeprefix("W/") in validators:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "private, no-cache"})
+    with LocalEvidence() as source:
+        detail = _sample_variant_detail(entry, sample_id, variant_id, source,
+                                       refresh_clinvar, submissions_limit, submissions_offset, scoring_version)
+    if etag and response is not None and detail["clinvar_evidence"].get("matching_status") != "ERROR":
+        try:
+            after = detail_etag(_entry_database(entry), entry.get("record"), identity, sample_id, variant_id,
+                                compact=compact, submissions_limit=submissions_limit,
+                                submissions_offset=submissions_offset, scoring_version=scoring_version)
+            if after == etag and detail.get("clingen_vcep_evidence", {}).get("matching_status") != "ERROR":
+                response.headers["ETag"] = etag
+        except (OSError, ValueError, TypeError):
+            pass
+    if response is not None:
+        response.headers["Cache-Control"] = "private, no-cache"
+    if compact:
+        from helper_variants.detail_transport import compact_detail
+        return compact_detail(detail)
+    return detail
+
+
+def _sample_variant_identity(entry, sample_id, variant_id):
+    try:
+        identity = variant_query.variant_identity(_entry_database(entry), sample_id, variant_id)
+    except variant_query.VariantQueryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if identity is None:
+        raise HTTPException(status_code=404, detail="Variant not found for this sample")
+    return identity
+
+
+@router.get("/runs/{identifier}/samples/{sample_id}/variants/{variant_id}/clinvar-submissions")
+def sample_variant_submissions(identifier: str, sample_id: int, variant_id: int,
+                               limit: int = Query(100, ge=1, le=10000),
+                               offset: int = Query(0, ge=0)):
     entry = _entry(identifier)
     try:
-        detail = variant_query.variant_detail(_entry_database(entry), sample_id, variant_id)
+        evidence = variant_query.variant_submissions(_entry_database(entry), sample_id, variant_id,
+                                                     record=entry.get("record"), limit=limit, offset=offset)
+    except variant_query.VariantQueryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="Variant not found for this sample")
+    return evidence
+
+
+def _sample_variant_detail(entry, sample_id, variant_id, source, refresh_clinvar,
+                           submissions_limit, submissions_offset, scoring_version=None):
+    try:
+        detail = variant_query.variant_detail(
+            _entry_database(entry), sample_id, variant_id,
+            record=entry.get("record"), clinvar_session=source,
+            submissions_limit=submissions_limit, submissions_offset=submissions_offset,
+        )
     except variant_query.VariantQueryError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except (OSError, sqlite3.Error, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     if detail is None:
         raise HTTPException(status_code=404, detail="Variant not found for this sample")
-    try:
-        retrieved = clinvar.lookup_variant(
-            detail["reference_build"], detail["chromosome"], detail["position"],
-            detail["reference"], detail["alternate"], refresh=True,
-        )
-        detail["clinvar_evidence"] = clinvar.merge_evidence({}, retrieved)
-    except clinvar.ClinVarError:
-        retrieved = {"status": "unavailable"}
-        detail["clinvar_evidence"] = clinvar.merge_evidence({}, retrieved)
+    if refresh_clinvar:
+        detail["clinvar_refresh"] = {
+            "status": "NOT_APPLICABLE",
+            "message": "ClinVar Local uses the installed snapshot; update the local dataset to refresh ClinVar.",
+        }
     detail.setdefault("database_ids", {})["clinvar"] = []
     try:
         priority_page = variant_query.list_variants(
             _entry_database(entry), sample_id, variant_id=variant_id, limit=1,
+            record=entry.get("record"), clinvar_session=source,
+            scoring_version=scoring_version,
         )
     except variant_query.VariantQueryError as exc:
         raise HTTPException(status_code=404 if "sample not found" in str(exc) else 400, detail=str(exc))
@@ -604,7 +697,22 @@ def sample_variant_detail(identifier: str, sample_id: int, variant_id: int):
         detail["priority"] = apply_clinvar_evidence(
             priority_page["items"][0]["priority"], detail["clinvar_evidence"]
         )
+        detail["priority"]["clinvar_snapshot_id"] = detail["clinvar_evidence"].get("snapshot_id")
+        detail["priority"]["clinvar_matching_status"] = detail["clinvar_evidence"].get("matching_status")
     _include_clinvar_identifiers(detail)
+    # Browsing verifies the allele locally without scanning the entire FASTA.
+    from helper_next.core.biological_identity import allele_refs
+    detail["allele_identity"] = allele_refs(
+        detail["reference_build"], detail["chromosome"], detail["position"],
+        detail["reference"], detail["alternate"], record=entry.get("record"), checksum_reference=False,
+    )[0]
+    # This existing detail route coordinates external source facts separately
+    # from priority and the independent interpretation context/ACMG inputs.
+    from helper_next.core.acmg_sources import SourceManager
+    from helper_variants.clingen_vcep_adapter import variant_context
+    detail["clingen_vcep_evidence"] = SourceManager().vcep_batch(
+        [variant_context(detail)], record=entry.get("record"), checksum_reference=False,
+    )[0]
     detail["interpretation_context"] = acmg_context.build(detail)
     return detail
 
@@ -630,14 +738,7 @@ def _include_clinvar_identifiers(detail):
 @router.get("/runs/{identifier}/samples/{sample_id}/variants/{variant_id}/liftover")
 def sample_variant_liftover(identifier: str, sample_id: int, variant_id: int):
     entry = _entry(identifier)
-    try:
-        detail = variant_query.variant_detail(_entry_database(entry), sample_id, variant_id)
-    except variant_query.VariantQueryError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except (OSError, sqlite3.Error, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    if detail is None:
-        raise HTTPException(status_code=404, detail="Variant not found for this sample")
+    detail = _sample_variant_identity(entry, sample_id, variant_id)
     return liftover.project_variant(
         detail["reference_build"], detail["chromosome"], detail["position"],
         detail["reference"], detail["alternate"],
@@ -646,20 +747,37 @@ def sample_variant_liftover(identifier: str, sample_id: int, variant_id: int):
 
 @router.get("/runs/{identifier}/samples/{sample_id}/variants/{variant_id}/gnomad-frequency")
 def sample_variant_gnomad_frequency(identifier: str, sample_id: int, variant_id: int):
-    """Retrieve assembly-matched, allele-specific gnomAD genome frequency evidence."""
+    """Retrieve gnomAD v4 for submitted/projected alleles without local FASTA checks."""
     entry = _entry(identifier)
-    try:
-        detail = variant_query.variant_detail(_entry_database(entry), sample_id, variant_id)
-    except variant_query.VariantQueryError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except (OSError, sqlite3.Error, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    if detail is None:
-        raise HTTPException(status_code=404, detail="Variant not found for this sample")
+    detail = _sample_variant_identity(entry, sample_id, variant_id)
     return gnomad_frequency.lookup_variant(
         detail["reference_build"], detail["chromosome"], detail["position"],
         detail["reference"], detail["alternate"],
+        record=entry.get("record"),
+        metadata=detail.get("metadata"),
     )
+
+
+@router.get("/runs/{identifier}/gnomad-enrichment")
+def run_gnomad_enrichment_status(identifier: str):
+    return gnomad_enrichment.status(_entry_database(_entry(identifier)))
+
+
+@router.post("/runs/{identifier}/gnomad-enrichment", status_code=202)
+def run_gnomad_enrichment_start(identifier: str, background_tasks: BackgroundTasks):
+    entry = _entry(identifier)
+    database = _entry_database(entry)
+    if not gnomad_enrichment.begin(database):
+        raise HTTPException(status_code=409, detail="gnomAD enrichment is already running")
+    background_tasks.add_task(_enrich_gnomad_in_background, database, entry.get("record") or {})
+    return {"status": "running", "release": gnomad_frequency.FREQUENCY_RELEASE}
+
+
+def _enrich_gnomad_in_background(database, record):
+    try:
+        gnomad_enrichment.enrich_run(record, database=database)
+    finally:
+        gnomad_enrichment.finish(database)
 
 
 @router.get("/runs/{identifier}/samples/{sample_id}/variants/{variant_id}/carriers")
@@ -667,9 +785,7 @@ def sample_variant_carriers(identifier: str, sample_id: int, variant_id: int):
     entry = _entry(identifier)
     try:
         database = _entry_database(entry)
-        detail = variant_query.variant_detail(database, sample_id, variant_id)
-        if detail is None:
-            raise HTTPException(status_code=404, detail="Variant not found for this sample")
+        detail = _sample_variant_identity(entry, sample_id, variant_id)
         allele = (
             detail["reference_build"], detail["chromosome"], detail["position"],
             detail["reference"], detail["alternate"],

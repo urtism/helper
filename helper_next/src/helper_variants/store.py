@@ -13,6 +13,15 @@ from pathlib import Path
 SCHEMA_VERSION = 2
 STORE_KINDS = ("run", "cohort")
 
+# Shared by sample loading and evidence preparation (variants table alias: v).
+# Apply before pagination so existing indexes need no rebuild or data removal.
+SEQUENCE_VARIANT_FILTER = (
+    "v.position > 0 AND v.reference != '' AND v.alternate != '' "
+    "AND upper(v.reference) NOT GLOB '*[^ACGT]*' "
+    "AND upper(v.alternate) NOT GLOB '*[^ACGT]*' "
+    "AND upper(v.reference) != upper(v.alternate)"
+)
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS store_metadata (

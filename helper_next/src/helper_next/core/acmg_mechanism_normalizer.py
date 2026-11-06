@@ -3,7 +3,7 @@ import re
 from collections import defaultdict
 
 from helper_variants.gene_phenotype import _normalize_disease_id, _is_exact_mapping
-from helper_next.core.acmg_client import digest
+from helper_next.core.acmg_digest import digest
 from helper_next.core.acmg_mechanism_models import (
     GeneDiseaseMechanismResult, MechanismEvidence, MechanismHypothesis, MechanismIdentity,
 )

@@ -66,41 +66,106 @@ def cache_status(database=None):
 
 
 def lookup_variant(reference_build, chromosome, position, reference, alternate,
-                   database=None, timeout=12, refresh=False):
-    """Return the current aggregate ClinVar assertion for one exact VCF allele."""
+                   database=None, timeout=12, refresh=False, fetch=True,
+                   require_breakdown=False):
+    """Cache-first exact allele lookup. Submission counts are optional enrichment.
+
+    ``fetch=False`` and HELPER_CLINVAR_OFFLINE forbid every HTTP request, even
+    explicit refreshes/enrichments. Failed attempts retain the last usable record
+    and its acquisition time; TTL always refers to that acquisition.
+    """
     database = Path(database or cache_path())
     try:
         allele = _allele(reference_build, chromosome, position, reference, alternate)
-        key = "|".join(str(value) for value in allele)
-        cached = None if refresh else _cached(database, key)
-        if cached is not None:
-            if "classification_breakdown" not in cached:
+    except (TypeError, ValueError) as exc:
+        return _access_metadata({"status": "unsupported", "error": str(exc)})
+    key = "|".join(str(value) for value in allele)
+    cache_error = None
+    try:
+        cached = _cached(database, key, include_stale=True)
+    except (ClinVarError, OSError, sqlite3.Error) as exc:
+        cached = None
+        cache_error = str(exc)
+    allow_fetch = fetch and os.environ.get("HELPER_CLINVAR_OFFLINE", "").strip().lower() not in (
+        "1", "true", "yes",
+    )
+    if cached is not None:
+        cached["cache"] = "hit"
+    if not allow_fetch:
+        return cached if cached is not None else _access_metadata({
+            "status": "unavailable" if cache_error else "not_queried", "cache": "miss",
+            "last_error": cache_error,
+        })
+    try:
+        if cached is not None and not refresh and cached["freshness"] == "FRESH" and _complete(cached):
+            if require_breakdown and cached["status"] == "available" and "classification_breakdown" not in cached:
                 variation_id = next(
                     (str(value) for value in cached.get("identifiers", [])
                      if str(value).isdigit()), ""
                 )
-                try:
+                if variation_id:
                     cached["classification_breakdown"] = _classification_breakdown(
                         variation_id, timeout
                     )
+                    cached.pop("last_error", None)
                     _store(database, key, cached)
-                except (
-                    ClinVarError, HTTPError, URLError, TimeoutError, OSError,
-                    ValueError, sqlite3.Error, ElementTree.ParseError,
-                ):
-                    cached["classification_breakdown"] = []
-            cached["cache"] = "hit"
-            return cached
+                    return _access_metadata(cached)
+                # No source ID: retrieve the aggregate rather than guess an ID.
+            else:
+                return cached
         result = _retrieve(*allele, timeout=timeout)
+        if result.get("status") not in ("available", "not_found"):
+            raise ClinVarError("Invalid ClinVar evidence status")
     except (
-        HTTPError, URLError, TimeoutError, OSError, ValueError,
-        sqlite3.Error,
+        ClinVarError, HTTPError, URLError, TimeoutError, OSError, ValueError,
+        sqlite3.Error, ElementTree.ParseError, TypeError, AttributeError,
     ) as exc:
-        raise ClinVarError("ClinVar enrichment is temporarily unavailable") from exc
+        error = str(exc) or type(exc).__name__
+        if cached is not None:
+            cached["last_error"] = error
+            try:
+                if cached.get("retrieved_at"):
+                    _store(database, key, cached)
+            except (OSError, sqlite3.Error):
+                pass
+            return cached
+        return _access_metadata({"status": "unavailable", "cache": "miss", "last_error": error})
     result["cache"] = "miss"
+    result = _access_metadata(result)
     try:
         _store(database, key, result)
     except (OSError, sqlite3.Error):
+        pass
+    return result
+
+
+def _complete(payload):
+    """The UI can display aggregate assertions without submission counts."""
+    return payload.get("status") == "not_found" or (
+        isinstance(payload.get("classifications"), list)
+        and isinstance(payload.get("review_statuses"), list)
+    )
+
+
+def _access_metadata(payload, retrieved_at=None):
+    """Add access state without changing the biological/legacy status."""
+    result = dict(payload)
+    result["source"] = "ClinVar"
+    result["availability"] = {
+        "available": "AVAILABLE", "not_found": "NOT_FOUND",
+        "not_queried": "NOT_QUERIED", "unsupported": "UNSUPPORTED",
+    }.get(result.get("status"), "ERROR")
+    result["freshness"] = "UNKNOWN"
+    acquired = retrieved_at or result.get("retrieved_at")
+    if acquired:
+        result["retrieved_at"] = acquired
+    try:
+        retrieved = datetime.fromisoformat(acquired.replace("Z", "+00:00"))
+        age = datetime.now(timezone.utc) - retrieved
+        if retrieved.tzinfo is not None and age >= timedelta(0):
+            ttl = CACHE_MAX_AGE if result.get("status") == "available" else NEGATIVE_CACHE_MAX_AGE
+            result["freshness"] = "STALE" if age > ttl else "FRESH"
+    except (AttributeError, TypeError, ValueError):
         pass
     return result
 
@@ -127,6 +192,8 @@ def merge_evidence(indexed, retrieved):
     for key in (
         "submission_count", "submitter_count", "record_updated", "most_recent_submission",
         "source_url", "retrieved_at", "cache",
+        "source", "availability", "freshness", "last_error", "breakdown_error",
+        "provenance",
     ):
         if retrieved.get(key) not in (None, ""):
             result[key] = retrieved[key]
@@ -136,6 +203,7 @@ def merge_evidence(indexed, retrieved):
             row.get("label", "") for row in result.get("review_statuses", [])
         ]
     )
+    result.setdefault("status", retrieved.get("status", "not_queried"))
     if retrieved.get("status") == "available" or any(result.get(key) for key in (
         "classifications", "review_statuses", "conditions", "identifiers",
     )):
@@ -144,7 +212,7 @@ def merge_evidence(indexed, retrieved):
     return result
 
 
-def cached_evidence(alleles, database=None):
+def cached_evidence(alleles, database=None, include_stale=True):
     """Read exact-allele detail evidence in bulk, without network requests."""
     keys = []
     for allele in alleles:
@@ -165,11 +233,17 @@ def cached_evidence(alleles, database=None):
                         "SELECT allele_key, payload, retrieved_at FROM evidence "
                         "WHERE allele_key IN ({})".format(placeholders), batch,
                     ):
-                        parsed = _parse_cached(payload, retrieved_at)
-                        if parsed is not None:
+                        parsed = _parse_cached(payload, retrieved_at, include_stale=True)
+                        if parsed is None:
+                            payloads[key] = _access_metadata({
+                                "status": "unavailable", "last_error": "Invalid ClinVar cache payload",
+                            })
+                        elif include_stale or parsed["freshness"] == "FRESH":
+                            parsed["cache"] = "hit"
                             payloads[key] = merge_evidence({}, parsed)
-        except (OSError, sqlite3.Error):
-            pass
+        except (OSError, sqlite3.Error) as exc:
+            for key in valid_keys:
+                payloads.setdefault(key, _access_metadata({"status": "unavailable", "last_error": str(exc)}))
     return [payloads.get(key, {}) for key in keys]
 
 
@@ -180,16 +254,23 @@ def _retrieve(reference_build, chromosome, position, reference, alternate, timeo
         "db": "clinvar", "term": term, "retmode": "json", "retmax": "100",
         "tool": "helper_variant_browser",
     }, timeout)
-    identifiers = (search.get("esearchresult") or {}).get("idlist") or []
+    search_result = search.get("esearchresult")
+    if not isinstance(search_result, dict) or not isinstance(search_result.get("idlist"), list) or search_result.get("ERROR") or search.get("error"):
+        raise ClinVarError("Invalid ClinVar search response")
+    identifiers = search_result["idlist"]
     if not identifiers:
         return _empty_result()
     summary = _json_request("esummary.fcgi", {
         "db": "clinvar", "id": ",".join(str(value) for value in identifiers),
         "retmode": "json", "tool": "helper_variant_browser",
     }, timeout)
-    records = summary.get("result") or {}
+    records = summary.get("result")
+    if not isinstance(records, dict) or not records.get("uids") or summary.get("error"):
+        raise ClinVarError("Invalid ClinVar summary response")
     for identifier in records.get("uids") or identifiers:
         record = records.get(str(identifier)) or {}
+        if not record or record.get("error"):
+            raise ClinVarError("Incomplete ClinVar summary response")
         if _summary_matches(record, assembly, chromosome, position, reference, alternate):
             evidence = _summary_evidence(record)
             try:
@@ -199,8 +280,8 @@ def _retrieve(reference_build, chromosome, position, reference, alternate, timeo
             except (
                 ClinVarError, HTTPError, URLError, TimeoutError, OSError,
                 ValueError, ElementTree.ParseError,
-            ):
-                evidence["classification_breakdown"] = []
+            ) as exc:
+                evidence["breakdown_error"] = str(exc) or type(exc).__name__
             return evidence
     return _empty_result()
 
@@ -257,7 +338,6 @@ def _summary_evidence(record):
     return {
         "status": "available", "identifiers": identifiers,
         "classifications": classifications, "review_statuses": review_statuses,
-        "classification_breakdown": [],
         "conditions": conditions, "condition_ids": condition_ids,
         "conflicts": classifications if any(
             _has_conflict_text(value) for value in classifications
@@ -396,7 +476,8 @@ def _allele(reference_build, chromosome, position, reference, alternate):
     chromosome = _chromosome(chromosome)
     reference = str(reference or "").upper().strip()
     alternate = str(alternate or "").upper().strip()
-    if not chromosome or not reference or not alternate:
+    if (not chromosome or not reference or not alternate or "," in reference
+            or "," in alternate or int(position) < 1 or reference == alternate):
         raise ValueError("An exact chromosome, REF and ALT are required")
     return assembly, chromosome, int(position), reference, alternate
 
@@ -446,28 +527,45 @@ def _connect(database):
     return connection
 
 
-def _cached(database, key):
+def _cached(database, key, include_stale=False):
     if not database.is_file():
         return None
-    with _connect(database) as connection:
+    with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
         row = connection.execute(
             "SELECT payload, retrieved_at FROM evidence WHERE allele_key = ?", (key,)
         ).fetchone()
     if row is None:
         return None
-    return _parse_cached(*row)
+    parsed = _parse_cached(*row, include_stale=True)
+    if parsed is None:
+        raise ClinVarError("Invalid ClinVar cache payload")
+    return parsed if include_stale or parsed["freshness"] == "FRESH" else None
 
 
-def _parse_cached(raw_payload, retrieved_at):
+def _parse_cached(raw_payload, retrieved_at, include_stale=False):
     try:
         payload = json.loads(raw_payload)
-        retrieved = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
-        if not isinstance(payload, dict) or retrieved.tzinfo is None:
+        if not isinstance(payload, dict) or payload.get("status") not in ("available", "not_found"):
             return None
     except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
         return None
-    max_age = CACHE_MAX_AGE if payload.get("status") == "available" else NEGATIVE_CACHE_MAX_AGE
-    if datetime.now(timezone.utc) - retrieved > max_age:
+    for field in ("identifiers", "classifications", "review_statuses", "classification_breakdown"):
+        if field in payload and not isinstance(payload[field], list):
+            return None
+    for field in ("review_statuses", "oncogenicity_review_statuses", "somatic_review_statuses", "classification_breakdown"):
+        if field in payload and (
+            not isinstance(payload[field], list)
+            or any(not isinstance(row, dict) for row in payload[field])
+        ):
+            return None
+    try:
+        for field in ("review_statuses", "oncogenicity_review_statuses", "somatic_review_statuses"):
+            for row in payload.get(field, []):
+                int(row.get("stars") or 0)
+    except (TypeError, ValueError):
+        return None
+    payload = _access_metadata(payload, retrieved_at)
+    if not include_stale and payload["freshness"] != "FRESH":
         return None
     return payload
 

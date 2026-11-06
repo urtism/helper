@@ -6,10 +6,11 @@ import json
 import os
 import re
 import threading
-import time
+from contextlib import nullcontext
 
-from helper_prioritization import RULESET_VERSION, apply_clinvar_evidence, score_variant
-from helper_variants import clinvar, gene_phenotype, gnomad_frequency, store
+from helper_prioritization import RULESET_VERSION, apply_clinvar_evidence, get_profile, score_variant
+from helper_variants import gene_phenotype, gnomad_frequency, store
+from helper_variants.clinvar_adapter import LocalEvidence, table_classifications
 
 
 DEFAULT_PAGE_SIZE = 100
@@ -95,7 +96,12 @@ def list_samples(database):
         } for row in rows]
 
 
-def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gene="",
+def list_variants(database, sample_id, *args, record=None, clinvar_session=None, **kwargs):
+    with nullcontext(clinvar_session) if clinvar_session is not None else LocalEvidence() as source:
+        return _list_variants(database, sample_id, *args, record=record, clinvar_session=source, **kwargs)
+
+
+def _list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gene="",
                   variant_id=None,
                   genes="", max_af=None, population_frequency="MAX_AF",
                   include_missing_af=True, consequences="",
@@ -104,8 +110,15 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
                   priority_classes="", min_priority=None, max_priority=None,
                   filter_mode="all", filter_statuses="", zygosities="", min_depth=None,
                   min_vaf=None, min_quality=None, possible_compound=False,
-                  sort_by="priority", sort_direction=""):
+                  sort_by="priority", sort_direction="", *, record=None, clinvar_session=None,
+                  scoring_version=None, load_all=False):
+    try:
+        scoring_profile = get_profile(scoring_version)
+    except KeyError:
+        raise VariantQueryError("Unknown Priority scoring version") from None
     limit = _page_size(limit)
+    if load_all and cursor:
+        raise VariantQueryError("A cursor cannot be used when loading all variants")
     gene = str(gene or "").strip()
     if len(gene) > 100:
         raise VariantQueryError("gene filter must be at most 100 characters")
@@ -134,6 +147,7 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
     signature = json.dumps(
         {
             "filters": filters, "variant_id": variant_id,
+            "scoring_version": scoring_profile["version"],
             "sort_by": sort_by, "sort_direction": sort_direction,
         },
         sort_keys=True, separators=(",", ":"),
@@ -148,14 +162,15 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
         filters["priority_classes"] or filters["min_priority"] is not None
         or filters["max_priority"] is not None
     )
+    deferred_pagination = load_all or computed_priority or bool(filters["clinical_significances"])
     priority_cache_key = _priority_order_cache_key(
-        database, sample_id, signature
-    ) if computed_priority else None
+        database, sample_id, signature, clinvar_session.snapshot_id, record
+    ) if computed_priority and not clinvar_session.error else None
     cached_priority_ids = (
         _priority_order_cache_get(priority_cache_key) if priority_cache_key else None
     )
     cached_page_ids = (
-        cached_priority_ids[page_offset:page_offset + limit]
+        (cached_priority_ids if load_all else cached_priority_ids[page_offset:page_offset + limit])
         if cached_priority_ids is not None else None
     )
 
@@ -175,32 +190,8 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             annotation_parameters.append("&{}&".format(consequence.lower()))
         annotation_clauses.append("(" + " OR ".join(matches) + ")")
         requires_annotation = True
-    if filters["clinical_significances"]:
-        matches = []
-        for significance in filters["clinical_significances"]:
-            if significance == "__not_reported__":
-                matches.append(
-                    "(trim(COALESCE(selected.clinical_significance, '')) IN ('', '.') "
-                    "AND NOT EXISTS (SELECT 1 FROM annotations clinical_reported "
-                    "WHERE clinical_reported.variant_id = selected.variant_id "
-                    "AND trim(COALESCE(clinical_reported.clinical_significance, '')) NOT IN ('', '.')))"
-                )
-                continue
-            matches.append(
-                "instr('&' || replace(replace(lower(selected.clinical_significance), ',', '&'), '|', '&') || '&', ?) > 0"
-            )
-            annotation_parameters.append("&{}&".format(significance.lower()))
-        annotation_clauses.append("(" + " OR ".join(matches) + ")")
-        if "__not_reported__" not in filters["clinical_significances"]:
-            requires_annotation = True
     annotation_filter = "".join(" AND " + clause for clause in annotation_clauses)
     result_clauses = ["an.id IS NOT NULL"] if requires_annotation else []
-    if "__not_reported__" in filters["clinical_significances"] and not requires_annotation:
-        result_clauses.append(
-            "(an.id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM annotations clinical_any "
-            "WHERE clinical_any.variant_id = v.id "
-            "AND trim(COALESCE(clinical_any.clinical_significance, '')) NOT IN ('', '.')))"
-        )
     result_parameters = []
     if variant_id is not None:
         result_clauses.append("v.id = ?")
@@ -334,9 +325,9 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
     having_filter = " HAVING " + " AND ".join(having_clauses) if having_clauses else ""
     variant_cursor_filter = "" if sort_by or computed_priority else " AND v.id > ?"
     order_by = _variant_order(sort_by, sort_direction)
-    pagination = "" if computed_priority else " LIMIT ? OFFSET ?" if sort_by else " LIMIT ?"
+    pagination = "" if deferred_pagination else " LIMIT ? OFFSET ?" if sort_by else " LIMIT ?"
     cursor_parameters = [] if sort_by or computed_priority else [after_variant_id]
-    pagination_parameters = [] if computed_priority else (
+    pagination_parameters = [] if deferred_pagination else (
         [limit + 1, page_offset] if sort_by else [limit + 1]
     )
     parameters = (annotation_parameters + [int(sample_id)] + cursor_parameters
@@ -346,7 +337,7 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
         _require_sample(db, sample_id)
         rows = db.execute(
             "SELECT v.id AS variant_id, v.reference_build, v.chromosome, v.position, v.reference, "
-            "v.alternate, v.variant_type, GROUP_CONCAT(DISTINCT NULLIF(c.caller, '')) AS callers, "
+            "v.alternate, v.variant_type, v.metadata_json AS variant_metadata_json, GROUP_CONCAT(DISTINCT NULLIF(c.caller, '')) AS callers, "
             "GROUP_CONCAT(DISTINCT NULLIF(c.genotype, '')) AS genotypes, MAX(c.depth) AS depth, "
             "GROUP_CONCAT(DISTINCT NULLIF(c.zygosity, '')) AS zygosities, "
             "MAX(c.alternate_depth) AS alternate_depth, MAX(c.allele_fraction) AS allele_fraction, "
@@ -363,11 +354,12 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             "  CASE selected.impact WHEN 'HIGH' THEN 0 WHEN 'MODERATE' THEN 1 "
             "       WHEN 'LOW' THEN 2 WHEN 'MODIFIER' THEN 3 ELSE 4 END, "
             "  selected.release_id DESC, selected.id LIMIT 1"
-            ") WHERE a.sample_id = ?" + variant_cursor_filter + " " + result_filter + call_filter +
+            ") WHERE a.sample_id = ? AND " + store.SEQUENCE_VARIANT_FILTER +
+            variant_cursor_filter + " " + result_filter + call_filter +
             " GROUP BY v.id" + having_filter + " ORDER BY " + order_by + pagination,
             parameters,
         ).fetchall()
-        score_rows = rows if computed_priority else rows[:limit]
+        score_rows = rows if deferred_pagination else rows[:limit]
         gene_context = gene_phenotype.priority_contexts(row["gene"] for row in score_rows)
         frequency_contexts = gnomad_frequency.cached_contexts((
             (
@@ -375,12 +367,13 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
                 row["reference"], row["alternate"],
             )
             for row in score_rows
-        ))
-        clinvar_evidence = clinvar.cached_evidence((
+        ), metadata=[json.loads(row["variant_metadata_json"] or "{}") for row in score_rows],
+            scoring_version=scoring_profile["version"])
+        clinvar_evidence = clinvar_session.batch((
             (row["reference_build"], row["chromosome"], row["position"],
              row["reference"], row["alternate"])
             for row in score_rows
-        ))
+        ), record=record)
         occurrence_counts = _run_occurrence_counts(
             db, sample_id, [row["variant_id"] for row in score_rows]
         )
@@ -398,22 +391,31 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
                 frequency_contexts[index],
                 occurrence_counts.get(row["variant_id"], {}),
                 clinvar_evidence[index],
+                scoring_profile,
             )
             for index, row in enumerate(score_rows)
         ]
+        if filters["clinical_significances"]:
+            selected_classes = {label.lower().replace("_", " ")
+                                for label in filters["clinical_significances"] if label != "__not_reported__"}
+            include_unreported = "__not_reported__" in filters["clinical_significances"]
+            scored_items = [item for item in scored_items
+                            if selected_classes.intersection(table_classifications(item["clinvar_evidence"]))
+                            or (include_unreported and not table_classifications(item["clinvar_evidence"]))]
         if cached_priority_ids is not None:
             position = {variant_id: index for index, variant_id in enumerate(cached_page_ids)}
             items = sorted(scored_items, key=lambda item: position[item["variant_id"]])
-            has_more = len(cached_priority_ids) > page_offset + limit
-        elif computed_priority:
+            has_more = not load_all and len(cached_priority_ids) > page_offset + limit
+        elif deferred_pagination:
             scored_items = _filter_priority(scored_items, filters)
             if sort_by == "priority":
                 scored_items = _sort_priority(scored_items, sort_direction)
             _priority_order_cache_put(
-                priority_cache_key, [item["variant_id"] for item in scored_items]
+                priority_cache_key if not clinvar_session.error else None,
+                [item["variant_id"] for item in scored_items]
             )
-            has_more = len(scored_items) > page_offset + limit
-            items = scored_items[page_offset:page_offset + limit]
+            has_more = not load_all and len(scored_items) > page_offset + limit
+            items = scored_items if load_all else scored_items[page_offset:page_offset + limit]
         else:
             has_more = len(rows) > limit
             items = scored_items
@@ -425,8 +427,12 @@ def list_variants(database, sample_id, cursor=None, limit=DEFAULT_PAGE_SIZE, gen
             next_cursor = _encode_cursor(int(sample_id), items[-1]["variant_id"], signature)
         else:
             next_cursor = None
+        if load_all:
+            _attach_sample_filter_data(database, db, sample_id, items)
         return {
             "items": items, "next_cursor": next_cursor, "limit": limit,
+            "clinvar_snapshot_id": clinvar_session.snapshot_id,
+            "clinvar_status": "ERROR" if clinvar_session.error else "AVAILABLE",
             "sort_by": sort_by, "sort_direction": sort_direction,
         }
 
@@ -442,15 +448,6 @@ def variant_filter_options(database, sample_id):
             (int(sample_id),),
         ):
             consequences.update(part for part in row[0].split("&") if part)
-        clinical_significances = set()
-        for row in db.execute(
-            "SELECT DISTINCT an.clinical_significance FROM annotations an "
-            "JOIN calls c ON c.variant_id = an.variant_id JOIN analyses a ON a.id = c.analysis_id "
-            "WHERE a.sample_id = ? AND an.clinical_significance != ''", (int(sample_id),),
-        ):
-            clinical_significances.update(
-                part.strip().lower() for part in re.split(r"[&,|]", row[0]) if part.strip()
-            )
         population_frequencies = {"MAX_AF"}
         for row in db.execute(
             "SELECT DISTINCT fields.key FROM annotations an "
@@ -469,13 +466,8 @@ def variant_filter_options(database, sample_id):
             "pathogenic", "likely_pathogenic", "uncertain_significance",
             "likely_benign", "benign",
         ]
-        clinical_order = {value: position for position, value in enumerate(standard_clinical)}
-        clinical_significances.update(standard_clinical)
         return {"consequences": sorted(consequences),
-                "clinical_significances": sorted(
-                    clinical_significances,
-                    key=lambda item: (clinical_order.get(item.casefold(), len(standard_clinical)), item.casefold()),
-                ) + ["__not_reported__"],
+                "clinical_significances": standard_clinical + ["__not_reported__"],
                 "population_frequencies": sorted(
                     population_frequencies,
                     key=lambda item: (0 if item == "MAX_AF" else 1 if item.upper() == "AF" else 2, item.casefold()),
@@ -490,7 +482,52 @@ def variant_filter_options(database, sample_id):
                 ), "zygosities": zygosities}
 
 
-def variant_detail(database, sample_id, variant_id):
+def variant_identity(database, sample_id, variant_id):
+    """Read the exact sample allele and metadata without annotations or sources."""
+    with store.connect(database) as db:
+        _require_sample(db, sample_id)
+        row = db.execute(
+            "SELECT v.* FROM variants v WHERE v.id=? AND EXISTS ("
+            "SELECT 1 FROM calls c JOIN analyses a ON a.id=c.analysis_id "
+            "WHERE c.variant_id=v.id AND a.sample_id=?)",
+            (int(variant_id), int(sample_id)),
+        ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["metadata"] = _json_value(result.pop("metadata_json"))
+        return result
+
+
+def variant_submissions(database, sample_id, variant_id, *, record=None, limit=100, offset=0):
+    """Page local ClinVar submissions without rebuilding the variant detail."""
+    identity = variant_identity(database, sample_id, variant_id)
+    if identity is None:
+        return None
+    with LocalEvidence() as source:
+        evidence = source.batch([tuple(identity[key] for key in (
+            "reference_build", "chromosome", "position", "reference", "alternate"
+        ))], record=record)[0]
+        return source.submissions(evidence, limit=limit, offset=offset)
+
+
+def variant_detail(database, sample_id, variant_id, *, record=None, clinvar_session=None,
+                   submissions_limit=100, submissions_offset=0):
+    with nullcontext(clinvar_session) if clinvar_session is not None else LocalEvidence() as source:
+        result = _variant_detail(database, sample_id, variant_id)
+        if result is not None:
+            result["vcf_clinvar_evidence"] = result.pop("clinvar_evidence")
+            result["vcf_clinvar_evidence"]["source"] = "Original VCF annotation"
+            evidence = source.batch([tuple(result[key] for key in (
+                "reference_build", "chromosome", "position", "reference", "alternate"
+            ))], record=record)[0]
+            result["clinvar_evidence"] = source.submissions(
+                evidence, limit=submissions_limit, offset=submissions_offset
+            )
+        return result
+
+
+def _variant_detail(database, sample_id, variant_id):
     with store.connect(database) as db:
         _require_sample(db, sample_id)
         variant = db.execute(
@@ -539,7 +576,7 @@ def variant_detail(database, sample_id, variant_id):
         )
         result["gnomad_frequency"] = gnomad_frequency.cached_variant(
             result["reference_build"], result["chromosome"], result["position"],
-            result["reference"], result["alternate"],
+            result["reference"], result["alternate"], metadata=result["metadata"],
         )
         return result
 
@@ -573,7 +610,8 @@ def variant_carriers(database, reference_build, chromosome, position, reference,
 
 
 def _compact_variant(row, gene_context=None, compound_candidate=False, family_context=None,
-                     population_context=None, occurrence_context=None, clinvar_evidence=None):
+                     population_context=None, occurrence_context=None, clinvar_evidence=None,
+                     scoring_profile=None):
     metadata = _json_value(row["metadata_json"])
     fields = (metadata or {}).get("fields") or {}
     zygosities = _csv(row["zygosities"])
@@ -604,8 +642,13 @@ def _compact_variant(row, gene_context=None, compound_candidate=False, family_co
     family_context = dict(family_context or {})
     occurrence_context = dict(occurrence_context or {})
     item["priority"] = score_variant({
+        "gene": row["gene"] or "",
+        "reference_build": row["reference_build"], "position": row["position"],
+        "reference": row["reference"], "alternate": row["alternate"],
+        "variant_type": row["variant_type"],
         "chromosome": row["chromosome"],
         "population_af": population_af,
+        "vep_max_af": row["population_af"],
         "consequence": row["consequence"] or "",
         "prediction_fields": fields,
         "zygosities": zygosities,
@@ -617,9 +660,18 @@ def _compact_variant(row, gene_context=None, compound_candidate=False, family_co
         **occurrence_context,
         **context,
         **population_context,
-    })
+    }, profile=scoring_profile)
+    if scoring_profile["maf"].get("selection_policy") == "maximum_gnomad_and_vep_af":
+        frequency = next(component for component in item["priority"]["components"] if component["key"] == "maf")
+        if frequency["observed_af"] is not None:
+            item["population_af"] = frequency["observed_af"]
     if clinvar_evidence:
-        item["priority"] = apply_clinvar_evidence(item["priority"], clinvar_evidence)
+        item["priority"] = apply_clinvar_evidence(item["priority"], clinvar_evidence, profile=scoring_profile)
+        item["priority"]["clinvar_snapshot_id"] = clinvar_evidence.get("snapshot_id")
+        item["priority"]["clinvar_matching_status"] = clinvar_evidence.get("matching_status")
+    item["clinvar_evidence"] = clinvar_evidence or {
+        "source": "ClinVar", "availability": "NOT_QUERIED", "freshness": "UNKNOWN",
+    }
     return item
 
 
@@ -1016,9 +1068,7 @@ def _family_member_ids(database, sample_id):
     return members
 
 
-def _family_call_exists(prefix, variant_expression, heterozygous=False):
-    call = "{}_call".format(prefix)
-    analysis = "{}_analysis".format(prefix)
+def _family_call_condition(call, heterozygous=False):
     genotype = "replace(trim(COALESCE({}.genotype, '')), '|', '/')".format(call)
     if heterozygous:
         carried = (
@@ -1032,11 +1082,98 @@ def _family_call_exists(prefix, variant_expression, heterozygous=False):
             "('het', 'hom_alt', 'hemi', 'hemizygous', 'compound_het') OR "
             "({1} NOT IN ('', '.', './.', '0', '0/0') AND instr({1}, '.') = 0))"
         ).format(call, genotype)
+    return carried
+
+
+def _family_call_exists(prefix, variant_expression, heterozygous=False):
+    call = "{}_call".format(prefix)
+    analysis = "{}_analysis".format(prefix)
     return (
         "EXISTS (SELECT 1 FROM calls {0} JOIN analyses {1} "
         "ON {1}.id = {0}.analysis_id WHERE {0}.variant_id = {2} "
         "AND {1}.sample_id = ? AND {3})"
-    ).format(call, analysis, variant_expression, carried)
+    ).format(call, analysis, variant_expression, _family_call_condition(call, heterozygous))
+
+
+def _attach_sample_filter_data(database, db, sample_id, items):
+    """Supply local table filters once, without changing already computed scores."""
+    if not items:
+        return
+    ids = json.dumps([item["variant_id"] for item in items])
+    annotations = {}
+    for row in db.execute(
+        "SELECT variant_id,gene,consequence,population_af,metadata_json FROM annotations "
+        "WHERE variant_id IN (SELECT value FROM json_each(?)) "
+        "ORDER BY canonical DESC, CASE impact WHEN 'HIGH' THEN 0 WHEN 'MODERATE' THEN 1 "
+        "WHEN 'LOW' THEN 2 WHEN 'MODIFIER' THEN 3 ELSE 4 END, release_id DESC,id", (ids,)
+    ):
+        fields = (_json_value(row["metadata_json"]) or {}).get("fields") or {}
+        annotations.setdefault(row["variant_id"], []).append(dict(
+            gene=row["gene"], consequence=row["consequence"],
+            population_frequencies={"MAX_AF": row["population_af"], **{
+                key: value for key, value in fields.items()
+                if key != "MAX_AF" and (key.upper() == "AF" or key.upper().endswith("_AF"))
+            }},
+        ))
+    father, mother = _family_parent_ids(database, sample_id)
+    members = _family_member_ids(database, sample_id) | {int(sample_id)}
+    members.update(parent for parent in (father, mother) if parent is not None)
+    carriers, heterozygous, zygosities = {}, {}, {}
+    for row in db.execute(
+        "SELECT c.variant_id,a.sample_id,MAX(" + _family_call_condition("c") + ") AS carried,"
+        "MAX(" + _family_call_condition("c", True) + ") AS het,"
+        "GROUP_CONCAT(DISTINCT lower(c.zygosity)) AS zygosities "
+        "FROM calls c JOIN analyses a ON a.id=c.analysis_id "
+        "WHERE a.sample_id IN (SELECT value FROM json_each(?)) "
+        "AND c.variant_id IN (SELECT value FROM json_each(?)) GROUP BY c.variant_id,a.sample_id",
+        (json.dumps(sorted(members)), ids),
+    ):
+        variant, member = row["variant_id"], row["sample_id"]
+        if row["carried"]:
+            carriers.setdefault(variant, set()).add(member)
+        if member == int(sample_id):
+            heterozygous[variant] = bool(row["het"])
+            zygosities[variant] = set(_csv(row["zygosities"]))
+    # Compound candidates use all sample annotations, including other transcripts.
+    compound_genes = {}
+    paternal_genes, maternal_genes = set(), set()
+    for variant, rows in annotations.items():
+        genes = {str(row["gene"] or "").upper() for row in rows} - {""}
+        if "het" in zygosities.get(variant, set()):
+            for gene in genes:
+                compound_genes.setdefault(gene, set()).add(variant)
+        carried = carriers.get(variant, set())
+        if father is not None and mother is not None and heterozygous.get(variant):
+            if father in carried and mother not in carried:
+                paternal_genes.update(genes)
+            if mother in carried and father not in carried:
+                maternal_genes.update(genes)
+    for item in items:
+        variant = item["variant_id"]
+        carried = carriers.get(variant, set())
+        origin = []
+        if father is not None and mother is not None:
+            if father in carried and mother in carried:
+                origin.append("both_parents")
+            elif father in carried:
+                origin.append("father_only")
+            elif mother in carried:
+                origin.append("mother_only")
+            elif int(sample_id) in carried:
+                origin.append("de_novo")
+        matches = annotations.get(variant, [])
+        for annotation in matches:
+            gene = str(annotation["gene"] or "").upper()
+            annotation["compound"] = ("het" in zygosities.get(variant, set())
+                                      and len(compound_genes.get(gene, set())) >= 2)
+            annotation["parental_compound"] = bool(heterozygous.get(variant) and (
+                ("father_only" in origin and gene in maternal_genes)
+                or ("mother_only" in origin and gene in paternal_genes)
+            ))
+        item["filter_data"] = dict(
+            annotations=matches, family_evidence=origin, family_carriers=sorted(carried),
+            clinical_significances=sorted(table_classifications(item["clinvar_evidence"])),
+        )
 
 
 def _family_evidence_clause(evidence, sample_id, father_id, mother_id):
@@ -1093,14 +1230,16 @@ def _family_evidence_clause(evidence, sample_id, father_id, mother_id):
     return clause, parameters
 
 
-def _priority_order_cache_key(database, sample_id, signature):
+def _priority_order_cache_key(database, sample_id, signature, clinvar_snapshot_id=None, record=None):
     return (
         os.path.abspath(os.fspath(database)),
         _file_fingerprint(database),
         _file_fingerprint(gene_phenotype.cache_path()),
         _file_fingerprint(gnomad_frequency.cache_path()),
-        _file_fingerprint(clinvar.cache_path()),
-        int(time.time() // 60),  # Revisit ordering as cached ClinVar evidence expires.
+        clinvar_snapshot_id,
+        json.dumps(record or {}, sort_keys=True, default=str),
+        os.environ.get("HELPER_ACMG_REFERENCE_CONFIG"),
+        _file_fingerprint(os.environ.get("HELPER_ACMG_REFERENCE_CONFIG", "")),
         int(sample_id),
         RULESET_VERSION,
         signature,

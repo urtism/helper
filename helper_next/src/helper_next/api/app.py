@@ -1,37 +1,47 @@
 from pathlib import Path
+import asyncio
+from contextlib import suppress
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from helper_next.api.analysis import router as analysis_router
+from helper_next.api.panels import router as panels_router
+from helper_next.api.data_sources import router as data_sources_router
 from helper_next.api.pipelines import router as pipelines_router
 from helper_next.api.samplesheet import router as samplesheet_router
 from helper_next.api.tools import router as tools_router
 from helper_next.api.variants import router as variants_router
 from helper_next.api.acmg_calculator import router as acmg_calculator_router
-from helper_next.api.acmg import router as acmg_router
-from helper_next.api.acmg_task22 import router as acmg_task22_router
 from helper_next.api.acmg_mechanisms import router as acmg_mechanisms_router
 from helper_next.core.panels import load_panel_registry
-from helper_next.core.acmg_service import ACMGService
 from helper_next.core.project import get_project_paths, list_named_files
+from helper_next.core.data_source_checks import periodic_checks
 import helper_variants
 
 
 def create_app():
     app = FastAPI(title="Helper Next", version="0.1.0")
-    acmg_service = ACMGService()
-    app.add_event_handler("startup", acmg_service.start)
-    app.add_event_handler("shutdown", acmg_service.stop)
+
+    @app.on_event("startup")
+    async def start_release_checks():
+        app.state.clinvar_checks = asyncio.create_task(periodic_checks())
+
+    @app.on_event("shutdown")
+    async def stop_release_checks():
+        task = app.state.clinvar_checks
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
     app.include_router(samplesheet_router)
     app.include_router(analysis_router)
+    app.include_router(panels_router)
+    app.include_router(data_sources_router)
     app.include_router(pipelines_router)
     app.include_router(tools_router)
     app.include_router(variants_router)
     app.include_router(acmg_calculator_router)
-    app.include_router(acmg_router)
-    app.include_router(acmg_task22_router)
     app.include_router(acmg_mechanisms_router)
 
     static_dir = Path(__file__).resolve().parents[1] / "web" / "static"
