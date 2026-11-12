@@ -81,6 +81,25 @@ def test_streamed_upload_api_size_limit_cleanup_and_shared_routes(tmp_path, monk
     assert len(list(external_vcf.root().iterdir())) == 1  # Failed upload removed.
 
 
+def test_failed_evidence_enqueue_keeps_successfully_indexed_upload(tmp_path, monkeypatch):
+    from fastapi import BackgroundTasks
+    from helper_variants import run_evidence
+
+    async def immediate(fn, *args):
+        return fn(*args)
+    class Request:
+        async def stream(self):
+            yield VCF.encode()
+    monkeypatch.setattr(api, 'run_in_threadpool', immediate)
+    def fail(*args, **kwargs):
+        raise OSError('Evidence job cannot be queued')
+    monkeypatch.setattr(run_evidence, 'schedule', fail)
+    uploaded = asyncio.run(api.upload_external_vcf(Request(), 'safe.vcf', 'GRCh38', BackgroundTasks()))
+    record = external_vcf.get(uploaded['source_id'])
+    assert record is not None
+    assert indexer.index_path(record['run_dir']).is_file()
+
+
 def test_ambiguous_minimized_deletions_do_not_mix_alts(tmp_path):
     vcf = VCF.split("#CHROM")[0] + (
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n"

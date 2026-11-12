@@ -1009,6 +1009,17 @@ def mechanism_source_records(gene_id, gene_symbol="", database=None, sources=Non
                 (gene_id, gene_id)) if row[0]}
             if len(symbols) == 1:
                 gene_symbol = next(iter(symbols))
+        # These two adapters are symbol-scoped. Bind them only when the full
+        # curated local index assigns that exact symbol to one stable gene ID.
+        # Retain the upstream NCBI/Ensembl ID and the mapping separately.
+        symbol_genes = {row[0] for row in connection.execute(
+            "SELECT gene_curie FROM assertions WHERE gene_symbol=? COLLATE NOCASE "
+            "UNION SELECT gene_curie FROM g2p_records WHERE gene_symbol=? COLLATE NOCASE",
+            (gene_symbol, gene_symbol)) if row[0]}
+        gene_mapping = ({"method": "LOCAL_CURATED_UNIQUE_SYMBOL", "gene_id": gene_id,
+                         "gene_symbol": gene_symbol, "index_updated_at": metadata.get("updated_at"),
+                         "source_urls": [metadata[key] for key in ("source_url", "g2p_source_url") if metadata.get(key)]}
+                        if symbol_genes == {gene_id} else None)
         tables = {"g2p": ("g2p_records", "g2p_source_url"), "gencc": ("assertions", "source_url"),
                   "clingen_dosage": ("clingen_dosage", "clingen_dosage_source_url"),
                   "gnomad": ("gnomad_constraints", None)}
@@ -1042,6 +1053,11 @@ def mechanism_source_records(gene_id, gene_symbol="", database=None, sources=Non
                         row["disease_mappings"] = [dict(a, source_url=metadata.get("orphadata_source_url")) for a in aliases]
             if source == "clingen_dosage":
                 originals = [dict(row, assessment=kind) for row in originals for kind in ("haploinsufficiency", "triplosensitivity")]
+            if source in ("clingen_dosage", "gnomad") and gene_mapping:
+                # Conflicting upstream gene IDs for one symbol stay unresolved.
+                upstream_ids = {row.get("gene_id") for row in originals}
+                if len(upstream_ids) == 1 and next(iter(upstream_ids), None):
+                    originals = [dict(row, gene_mapping=gene_mapping) for row in originals]
             index_acquired = metadata.get("updated_at")
             packet.update(records=originals, status="AVAILABLE" if originals else "NO_RECORDS",
                           retrieved_at=index_acquired or timestamp, source_updated_at=None,
@@ -1075,6 +1091,41 @@ def mechanism_source_records(gene_id, gene_symbol="", database=None, sources=Non
                     packet["stale"] = False
             except (ValueError, TypeError):
                 packet["stale"] = True
+    return result
+
+
+def classification_labels(identities, database=None):
+    """Read compact display labels for exact saved gene/disease pairs only."""
+    pairs = {(item.get("gene"), item.get("disease")) for item in identities}
+    genes = sorted({gene for gene, disease in pairs if gene and disease})
+    database = Path(database or cache_path())
+    if not genes:
+        return {}
+    status = cache_status(database)
+    if status["status"] != "ready":
+        return {}
+    result = {}
+    with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
+        connection.row_factory = sqlite3.Row
+        for offset in range(0, len(genes), 400):
+            batch = genes[offset:offset + 400]
+            placeholders = ",".join("?" for _ in batch)
+            for table, label, aliases in (("assertions", "disease_title", ("disease_curie",)),
+                                           ("g2p_records", "disease_name", ("disease_curie", "disease_mim"))):
+                if not status.get("row_count" if table == "assertions" else "g2p_row_count"):
+                    continue
+                rows = connection.execute(
+                    "SELECT gene_curie,gene_symbol," + label + "," + ",".join(aliases)
+                    + " FROM " + table + " WHERE gene_curie IN (" + placeholders + ") ORDER BY rowid", batch)
+                for row in rows:
+                    for alias in aliases:
+                        key = (row["gene_curie"], row[alias])
+                        if key in pairs:
+                            labels = result.setdefault(key, {})
+                            if row["gene_symbol"]:
+                                labels.setdefault("gene_label", row["gene_symbol"])
+                            if row[label]:
+                                labels.setdefault("disease_label", row[label])
     return result
 
 

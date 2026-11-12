@@ -1,4 +1,5 @@
 """API for creating and inspecting run-local variant indexes."""
+import json
 import logging
 import math
 import re
@@ -8,7 +9,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -16,12 +17,16 @@ from helper_next.api.samplesheet import consume_picker_selection
 from helper_next.core import analysis_history as history
 from helper_next.core import external_vcf
 from helper_next.core import acmg_context
+from helper_next.core import acmg_classification_store
+from helper_next.core import acmg_automatic_store
+from helper_next.core.acmg_transcripts import primary_chromosome
 from helper_next.core.variant_import import ArchivedRunImportError, create_archived_run
 from helper_prioritization import apply_clinvar_evidence
 from helper_variants.clinvar_adapter import LocalEvidence
 from helper_variants import gene_phenotype
 from helper_variants import gnomad_frequency
 from helper_variants import gnomad_enrichment
+from helper_variants import run_evidence
 from helper_variants import indexer as variant_indexer
 from helper_variants import igv
 from helper_variants import liftover
@@ -29,6 +34,8 @@ from helper_variants import panelapp
 from helper_variants import query as variant_query
 from helper_variants import secondary_findings
 from helper_variants import source_registry
+from helper_variants import store as variant_store
+from helper_variants.table_transport import compact_table
 
 
 router = APIRouter(prefix="/api/variants", tags=["variants"])
@@ -266,7 +273,7 @@ def indexed_variant_runs():
         database = variant_indexer.index_path(record["run_dir"])
         summary = None
         try:
-            status = variant_indexer.index_status(record["run_dir"])
+            status = _index_progress(record)
             if database.is_file():
                 summary = variant_query.run_summary(database)
         except (OSError, sqlite3.Error, ValueError) as exc:
@@ -276,15 +283,21 @@ def indexed_variant_runs():
             "history_id": record["id"], "run_id": record.get("run_id", ""),
             "created_at": public_run["created_at"], "run_status": record.get("status", ""),
             "index_status": status["status"], "summary": summary,
+            "priority_preparation": status.get("priority_preparation"),
             "panel": public_run["panel"], "pipeline": public_run["pipeline"],
             "reference_build": public_run["reference_build"],
             "sample_count": public_run["sample_count"],
         })
-    return {"runs": runs + external_vcf.public_sources()}
+    external = external_vcf.public_sources()
+    for item in external:
+        progress = _index_progress(external_vcf.get(item['history_id']))
+        item.update(index_status=progress['status'], priority_preparation=progress.get('priority_preparation'))
+    return {"runs": runs + external}
 
 
 @router.post("/external-sources", status_code=201)
-async def upload_external_vcf(request: Request, filename: str = Header(..., alias="X-VCF-Filename"), assembly: str = Query(...)):
+async def upload_external_vcf(request: Request, filename: str = Header(..., alias="X-VCF-Filename"), assembly: str = Query(...),
+                              background_tasks: BackgroundTasks = None):
     """Raw streamed file body avoids multipart buffering and synthetic run history."""
     identifier = None
     try:
@@ -300,6 +313,12 @@ async def upload_external_vcf(request: Request, filename: str = Header(..., alia
                     raise HTTPException(status_code=413, detail="VCF upload size limit exceeded")
                 handle.write(chunk)
         record = await run_in_threadpool(external_vcf.finish, identifier, path, filename, assembly)
+        if background_tasks is not None:
+            try:
+                _queue_run_priority(variant_indexer.index_path(record['run_dir']), record, background_tasks)
+            except (OSError, sqlite3.Error, ValueError):
+                # A failed evidence job must not discard a successfully indexed upload.
+                logging.getLogger(__name__).exception('Cannot queue evidence for external source %s', identifier)
         return {"source_id": identifier, "source_type": "EXTERNAL_UPLOAD", "sha256": record["sha256"]}
     except HTTPException:
         if identifier:
@@ -335,17 +354,77 @@ def add_archived_variant_run(payload: ArchivedRunRequest, background_tasks: Back
 
 
 @router.get("/runs/{identifier}/index-status")
-def variant_index_status(identifier: str):
+def variant_index_status(identifier: str, background_tasks: BackgroundTasks = None):
     record = _record(identifier)
     try:
-        result = variant_indexer.index_status(record["run_dir"])
-    except (OSError, ValueError) as exc:
+        result = _index_progress(record)
+        preparation = result.get('priority_preparation') or {}
+        if preparation.get('status') == 'interrupted' and background_tasks is not None:
+            _queue_run_priority(variant_indexer.index_path(record['run_dir']), record, background_tasks)
+            result = _index_progress(record)
+    except (OSError, sqlite3.Error, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    with _active_lock:
-        if _physical_run_key(record) in _active:
-            result["status"] = "indexing"
     result.update({"history_id": identifier, "run_id": record.get("run_id", "")})
     return result
+
+
+def _index_progress(record):
+    result = variant_indexer.index_status(record['run_dir'])
+    result['phase'] = 'indexing'
+    if result['status'] == 'complete':
+        preparation = run_evidence.status(variant_indexer.index_path(record['run_dir']))
+        result['priority_preparation'] = preparation
+        result['phase'] = 'priority_evidence'
+        if preparation['status'] in ('queued', 'running', 'interrupted'):
+            result['status'] = 'indexing'
+        elif preparation['status'] in ('complete', 'partial'):
+            result['phase'] = 'ready'
+    with _active_lock:
+        if _physical_run_key(record) in _active:
+            result['status'] = 'indexing'
+    return result
+
+
+@router.get('/runs/{identifier}/priority-evidence')
+def run_priority_evidence_status(identifier: str, background_tasks: BackgroundTasks = None):
+    entry = _entry(identifier)
+    database = _entry_database(entry)
+    result = run_evidence.status(database)
+    if result['status'] == 'interrupted' and background_tasks is not None:
+        result = _queue_run_priority(database, entry.get('record') or {}, background_tasks)
+    return result
+
+
+@router.post('/runs/{identifier}/priority-evidence', status_code=202)
+def start_run_priority_evidence(identifier: str, background_tasks: BackgroundTasks, force: bool = False):
+    entry = _entry(identifier)
+    try:
+        return _queue_run_priority(_entry_database(entry), entry.get('record') or {}, background_tasks, force=force)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+def _queue_run_priority(database, record, background_tasks, *, force=False):
+    return run_evidence.schedule(database, record,
+        lambda function, *args: background_tasks.add_task(run_evidence.launch, function, *args), force=force)
+
+
+def recover_run_priority_preparations():
+    """Resume only previously queued/interrupted work, never acquire new runs on startup."""
+    records = history.list_runs() + external_vcf.list_sources()
+    seen = set()
+    for record in records:
+        key = _physical_run_key(record)
+        if key in seen:
+            continue
+        seen.add(key)
+        database = variant_indexer.index_path(record['run_dir'])
+        if not database.is_file():
+            continue
+        try:
+            run_evidence.recover(database, record)
+        except (OSError, sqlite3.Error, ValueError):
+            logging.getLogger(__name__).exception('Cannot resume Priority preparation for %s', record.get('id'))
 
 
 @router.get("/runs/{identifier}/samples")
@@ -536,7 +615,7 @@ def sample_variants(identifier: str, sample_id: int, cursor: str = "",
                     min_depth: float | None = None, min_vaf: float | None = None,
                     min_quality: float | None = None, possible_compound: bool = False,
                     sort_by: str = "priority", sort_direction: str = "", scoring_version: str | None = None,
-                    load_all: bool = False):
+                    load_all: bool = False, compact: bool = False):
     entry = _entry(identifier)
     try:
         result = variant_query.list_variants(
@@ -556,12 +635,52 @@ def sample_variants(identifier: str, sample_id: int, cursor: str = "",
             load_all=load_all,
             record=entry.get("record"),
         )
+        _attach_classification_summaries(entry, sample_id, result["items"])
     except variant_query.VariantQueryError as exc:
         raise HTTPException(status_code=404 if "sample not found" in str(exc) else 400, detail=str(exc))
     except (OSError, sqlite3.Error, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     result.update({"history_id": identifier, "sample_id": sample_id})
+    if compact:
+        return JSONResponse(compact_table(result))
     return result
+
+
+def _attach_classification_summaries(entry, sample_id, items):
+    """Table enrichment reads saved heads only; it never evaluates criteria."""
+    for item in items:
+        item["acmg_classifications"] = []
+    run_dir = entry.get("record", {}).get("run_dir")
+    if not items or not run_dir or not acmg_classification_store.path(run_dir).is_file():
+        return
+    with variant_store.connect(_entry_database(entry)) as db:
+        sample = db.execute("SELECT sample_key FROM samples WHERE id=?", (sample_id,)).fetchone()
+    if sample is None:
+        return
+    identities = []
+    for item in items:
+        build = item["reference_build"]
+        assembly = {"hg19": "GRCh37", "hg38": "GRCh38", "grch37": "GRCh37", "grch38": "GRCh38"}.get(build.lower(), build)
+        identities.append(dict(sample=sample["sample_key"], assembly=assembly,
+            chromosome=primary_chromosome(item["chromosome"]), position=item["position"],
+            reference=item["reference"], alternate=item["alternate"]))
+    summaries = acmg_classification_store.batch_summaries(run_dir, identities)
+    variant_ids = {acmg_classification_store.variant_key(identity): item["variant_id"]
+                   for item, identity in zip(items, identities) if "variant_id" in item}
+    if variant_ids:
+        automatic = acmg_automatic_store.batch_summaries(run_dir, identities, _entry_database(entry), variant_ids, entry.get("record"))
+        for key, records in automatic.items():
+            manual = summaries.setdefault(key, [])
+            assessed = {tuple(json.dumps(record["identity"][field], sort_keys=True) for field in ("gene", "disease", "transcript", "inheritance"))
+                        for record in manual}
+            manual.extend(record for record in records if tuple(json.dumps(record["identity"][field], sort_keys=True)
+                          for field in ("gene", "disease", "transcript", "inheritance")) not in assessed)
+    labels = gene_phenotype.classification_labels(
+        record["identity"] for records in summaries.values() for record in records)
+    for item, identity in zip(items, identities):
+        item["acmg_classifications"] = summaries.get(acmg_classification_store.variant_key(identity), [])
+        for record in item["acmg_classifications"]:
+            record.update(labels.get((record["identity"]["gene"], record["identity"]["disease"]), {}))
 
 
 @router.post("/runs/{identifier}/samples/{sample_id}/priority-evidence")
@@ -714,6 +833,9 @@ def _sample_variant_detail(entry, sample_id, variant_id, source, refresh_clinvar
         [variant_context(detail)], record=entry.get("record"), checksum_reference=False,
     )[0]
     detail["interpretation_context"] = acmg_context.build(detail)
+    detail["acmg_revision"] = [acmg_automatic_store.source_revision(detail["reference_build"], entry.get("record"),
+        [annotation["gene"] for annotation in detail["annotations"] if annotation.get("gene")]),
+        acmg_automatic_store.user_revision((entry.get("record") or {}).get("run_dir"))]
     return detail
 
 
@@ -854,6 +976,7 @@ def start_variant_index(identifier: str, background_tasks: BackgroundTasks):
 def _index_in_background(identifier, physical_key, record):
     try:
         variant_indexer.index_run(record)
+        run_evidence.schedule(variant_indexer.index_path(record['run_dir']), record, run_evidence.launch)
     except Exception:
         logging.getLogger(__name__).exception("Cannot index variants for analysis %s", identifier)
     finally:

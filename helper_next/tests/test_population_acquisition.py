@@ -162,6 +162,93 @@ def test_projection_pipeline_overlaps_frequency_fetch_and_keeps_order(monkeypatc
     assert [r['identity_resolution']['original'] for r in result] == [list(a) for a in alleles]
 
 
+def test_slow_frequency_group_does_not_block_the_next_group(monkeypatch):
+    second = threading.Event()
+    calls = []
+    lock = threading.Lock()
+    def fetch(query, variables, timeout):
+        with lock:
+            calls.append(dict(variables))
+        if variables['id0'] == '1-1-G-T':
+            assert second.wait(3), 'The second group must start while the first is waiting'
+        else:
+            second.set()
+        return response_for(variables)
+    monkeypatch.setattr(g, '_request_graphql', fetch)
+    alleles = [('GRCh38', '1', pos, 'G', 'T') for pos in range(1, 7)]
+    result = g.lookup_variants(alleles, batch_size=3, include_non_ukb=False)
+    assert len(calls) == 2 and all(r['retrieval_status'] == 'FOUND' for r in result)
+    assert [r['position'] for r in result] == list(range(1, 7))
+    assert not frequency_flights._active
+
+
+def test_pipeline_does_not_queue_the_rest_of_a_large_sample(monkeypatch):
+    second = threading.Event()
+    release = threading.Event()
+    resolved = []
+    original = g._resolve_one
+    def resolve(allele, *args, **kwargs):
+        resolved.append(allele)
+        return original(allele, *args, **kwargs)
+    monkeypatch.setattr(g, '_resolve_one', resolve)
+    def fetch(query, variables, timeout):
+        if variables['id0'] == '1-1-G-T':
+            assert release.wait(3)
+        else:
+            second.set()
+        return response_for(variables)
+    monkeypatch.setattr(g, '_request_graphql', fetch)
+    alleles = [('GRCh38', '1', pos, 'G', 'T') for pos in range(1, 61)]
+    with ThreadPoolExecutor(1) as pool:
+        future = pool.submit(g.lookup_variants, alleles, batch_size=3, include_non_ukb=False)
+        try:
+            assert second.wait(2)
+            assert len(resolved) == 6, 'Only two bounded groups may be submitted ahead'
+        finally:
+            release.set()
+        result = future.result(3)
+    assert [r['position'] for r in result] == list(range(1, 61))
+
+
+def test_graphql_reads_overlap_with_two_slots_and_keep_start_pacing(monkeypatch):
+    import io
+    import json
+    from urllib.request import Request
+
+    entered = threading.Event()
+    release = threading.Event()
+    guard = threading.Lock()
+    starts, delays = [], []
+    clock = [1000.]
+    def sleep(delay):
+        delays.append(delay)
+        clock[0] += delay
+    monkeypatch.setattr(g.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(g.time, 'sleep', sleep)
+    monkeypatch.setattr(g, '_last_request', 0.)
+    monkeypatch.setattr(g, '_last_cost', 0)
+    def open_request(request: Request, timeout):
+        with guard:
+            starts.append(clock[0])
+            if len(starts) == 2:
+                entered.set()
+        assert release.wait(3)
+        return io.BytesIO(json.dumps({'data': {'ok': True}}).encode())
+    monkeypatch.setattr(g, 'urlopen', open_request)
+    query = 'query { ' + ' '.join(f'v{i}: variant(variantId: "1-{i}-A-G") {{ variant_id }}' for i in range(5)) + ' }'
+    with ThreadPoolExecutor(3) as pool:
+        futures = [pool.submit(g._request_graphql, query, {}, 12) for _ in range(3)]
+        try:
+            assert entered.wait(2), 'Two HTTP reads should overlap'
+            assert len(starts) == 2, 'A third HTTP request must wait for a slot'
+            assert starts[1] - starts[0] == pytest.approx(5 * .61)
+        finally:
+            release.set()
+        assert all(future.result(3)['data']['ok'] for future in futures)
+    assert starts[2] - starts[1] == pytest.approx(5 * .61)
+    assert delays == pytest.approx([3.05, 3.05])
+
+
 def test_concurrent_projection_is_retrieved_only_once(tmp_path, monkeypatch):
     entered, release = threading.Event(), threading.Event()
     calls = []

@@ -12,6 +12,7 @@ from helper_variants.indexer import IndexedFasta, sha256_file
 
 from pvs1.models import PVS1Input
 from pvs1.molecular import (
+    VERSION as MOLECULAR_VERSION,
     compute_molecular_evidence, frame_effect, junction_distances,
     map_variant_to_cds, protein_region_change, reconstruct_cds, reconstruct_splice_product,
     transcript_facts, translate_altered_cds,
@@ -416,7 +417,7 @@ class SpliceReconstructionTest(unittest.TestCase):
                 self.assertEqual(product["functional_evidence"], event["functional_evidence"])
                 self.assertEqual(product["evidence_quality"], event["evidence_quality"])
                 sequence_sources = product["source_refs"]["sequence"]
-                self.assertIn("helper-pvs1-molecular-1.0", sequence_sources)
+                self.assertIn(MOLECULAR_VERSION, sequence_sources)
                 self.assertTrue(any("release=116|sha256:" in source for source in sequence_sources))
                 self.assertIn("synthetic:RNA-assay:v1:sample7", sequence_sources)
                 self.assertIn("does not experimentally validate", result["warnings"][0])

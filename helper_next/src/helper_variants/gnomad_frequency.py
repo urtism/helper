@@ -36,7 +36,9 @@ DATASETS = {"GRCh38": {"id": "gnomad_r4", "release": FREQUENCY_RELEASE,
                          "reference_genome": "GRCh38"}}
 PRODUCTS = {"exomes": "exome", "genomes": "genome", "joint": "joint"}
 _projection_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="helper-projection")
+_frequency_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="helper-frequency")
 _request_lock = threading.Lock()
+_request_slots = threading.BoundedSemaphore(2)
 _last_request = 0.0
 _last_cost = 0
 ERROR_RETRY_SECONDS = 30
@@ -389,13 +391,29 @@ def lookup_variants(alleles, database=None, timeout=12, *, record=None, batch_si
         originals, [attached[a] for a in originals], timeout=timeout)))
     output, resolution_map = {}, {}
     width = max(1, min(int(batch_size), 12 if include_non_ukb else 24))
-    while True:
-        items = list(islice(resolved_items, width))
-        if not items:
-            break
-        resolution_map.update(items)
-        unique = list(dict.fromkeys(value[0] for _, value in items if value[0] is not None))
-        output.update(_acquire_frequency_batch(unique, database, timeout, include_non_ukb))
+    pending = deque()
+    try:
+        while True:
+            items = list(islice(resolved_items, width))
+            if not items:
+                break
+            resolution_map.update(items)
+            unique = list(dict.fromkeys(value[0] for _, value in items if value[0] is not None))
+            if len(originals) <= width:
+                output.update(_acquire_frequency_batch(unique, database, timeout, include_non_ukb))
+            else:
+                # Resolve the next small group while this one fetches frequencies
+                # or coverage. At most two groups per caller and two workers
+                # globally; never queue a whole exome in the executor.
+                pending.append(_frequency_pool.submit(
+                    _acquire_frequency_batch, unique, database, timeout, include_non_ukb))
+                if len(pending) == 2:
+                    output.update(pending.popleft().result())
+        while pending:
+            output.update(pending.popleft().result())
+    finally:
+        for future in pending:
+            future.cancel()
     results = []
     for original in inputs:
         allele, resolution = resolution_map[original]
@@ -941,15 +959,16 @@ def _request_graphql(query, variables, timeout):
     for attempt in range(3):
         try:
             global _last_request, _last_cost
-            with _request_lock:
-                # Official defaults: 30 requests/minute, cost 100/minute.
-                # Pace by the previous request's cost, allowing a first cache miss immediately.
-                delay = max(0, max(2.05, _last_cost * 0.61) - (time.monotonic() - _last_request))
-                if delay:
-                    time.sleep(delay)
-                _last_request = time.monotonic()
-                _last_cost = max(1, len(re.findall(r"\bvariant\s*\(", query))
-                                 + 10 * len(re.findall(r"\bcoverage\s*\(", query)))
+            with _request_slots:
+                with _request_lock:
+                    # Pace request STARTS by the previous cost. Network reads
+                    # need not block the other bounded worker through a timeout.
+                    delay = max(0, max(2.05, _last_cost * 0.61) - (time.monotonic() - _last_request))
+                    if delay:
+                        time.sleep(delay)
+                    _last_request = time.monotonic()
+                    _last_cost = max(1, len(re.findall(r"\bvariant\s*\(", query))
+                                     + 10 * len(re.findall(r"\bcoverage\s*\(", query)))
                 with urlopen(request, timeout=timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, dict):

@@ -27,6 +27,19 @@ class CapturingBackgroundTasks:
         self.args = args
 
 
+@pytest.fixture(autouse=True)
+def isolate_run_preparation_sources(monkeypatch):
+    # Indexing now prepares run evidence. API contract tests do not use live
+    # sources; complete acquisition is covered by test_run_priority_preparation.
+    monkeypatch.setenv('HELPER_LIFTOVER_OFFLINE', '1')
+    variants.run_evidence.resume()
+    monkeypatch.setattr(variants.run_evidence, 'launch', lambda function, *args: function(*args))
+    monkeypatch.setattr(gene_phenotype, 'prepare_priority_contexts', lambda: {'status': 'ready', 'stale': False})
+    def unavailable(*args, **kwargs):
+        raise gnomad_frequency.GnomadFrequencyError('No live sources in API contract tests')
+    monkeypatch.setattr(gnomad_frequency, '_request_graphql', unavailable)
+
+
 def archived_run(tmp_path, run_name="RUN-API", position=10):
     run_dir = tmp_path / run_name
     annotation = run_dir / "results" / "ANNOTATION"

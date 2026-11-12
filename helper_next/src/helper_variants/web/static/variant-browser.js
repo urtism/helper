@@ -1,7 +1,9 @@
+import {installVariantTooltips} from "./variant-tooltips.js?v=20261112-tooltips-1";
+
 const ROW_HEIGHT = 36;
 const PAGE_SIZE = 200;
 const OVERSCAN = 8;
-const STYLESHEET_URL = new URL("./variant-browser.css?v=20261103-gnomad-1", import.meta.url).href;
+const STYLESHEET_URL = new URL("./variant-browser.css?v=20261112-tooltips-1", import.meta.url).href;
 const IGV_THEME_URL = new URL("./igv-theme.css?v=20261008-2", import.meta.url).href;
 const IGV_MODULE_URL = "https://cdn.jsdelivr.net/npm/igv@3.8.5/dist/igv.esm.min.js";
 const CLINICAL_BROWSER_URL = new URL("./clinical-browser.html?v=20261009-1", import.meta.url);
@@ -15,6 +17,7 @@ const VARIANT_COLUMNS = [
   {key: "hgvsc", label: "HGVSc", width: 160},
   {key: "hgvsp", label: "HGVSp", width: 160},
   {key: "population_af", label: "AF_max", width: 85},
+  {key: "acmg_classification", label: "ACMG", width: 144},
   {key: "clinvar_local", label: "ClinVar", width: 220},
   {key: "consequence", label: "Consequence", width: 180},
   {key: "exon_intron", label: "Exon / intron", width: 105},
@@ -78,10 +81,13 @@ class VariantBrowser extends HTMLElement {
     this.routeHandler = () => this.restoreRoute();
     this.activated = false;
     this.visibilityObserver = null;
+    this.viewportObserver = null;
     this.allowArchivedImport = false;
     this.columnOrder = this.loadColumnOrder();
     this.columnWidths = this.loadColumnWidths();
     this.draggedColumn = null;
+    this.draggedWorkspace = null;
+    this.detailPanelWidth = 46;
     this.activePickerId = null;
     this.igvLibrary = null;
     this.messageHandler = event => this.handleArchivedRunFiles(event);
@@ -129,6 +135,8 @@ class VariantBrowser extends HTMLElement {
         </div>
         <div id="dialog-layer"></div>
       </div>`;
+    this.disposeTooltips?.();
+    this.disposeTooltips = installVariantTooltips(this.shadowRoot);
     this.shadowRoot.querySelector("#run-search").addEventListener("input", () => this.renderRuns());
     const externalFile = this.shadowRoot.querySelector("#external-vcf-file");
     this.shadowRoot.querySelector("#upload-external-vcf").addEventListener("click", () => externalFile.click());
@@ -163,9 +171,11 @@ class VariantBrowser extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.disposeTooltips?.();
     window.removeEventListener("hashchange", this.routeHandler);
     if (this.allowArchivedImport) window.removeEventListener("message", this.messageHandler);
     this.visibilityObserver?.disconnect();
+    this.viewportObserver?.disconnect();
     for (const workspace of this.workspaces.values()) {
       workspace.pageController?.abort();
       workspace.focusVariantController?.abort();
@@ -174,6 +184,7 @@ class VariantBrowser extends HTMLElement {
       workspace.gnomadFrequencyController?.abort();
       workspace.carrierController?.abort();
       workspace.genePhenotypeController?.abort();
+      workspace.classificationController?.abort();
       window.clearTimeout(workspace.genePhenotypeTimer);
       this.removeIgvBrowser(workspace);
       if (workspace.clinicalFrame) workspace.clinicalFrame.src = "about:blank";
@@ -207,6 +218,26 @@ class VariantBrowser extends HTMLElement {
       responseCache.payload = payload;
     }
     return payload;
+  }
+
+  expandVariantTable(payload) {
+    if (payload.format !== "helper-variant-table-compact-v1") return payload;
+    const shared = payload.shared;
+    const expand = index => {
+      if (!Array.isArray(shared) || !Number.isInteger(index) || index < 0 || index >= shared.length) {
+        throw new Error("Invalid compact variant table; reload the application.");
+      }
+      return structuredClone(shared[index]);
+    };
+    return {...payload.table, items: (payload.table.items || []).map(item => {
+      const row = {...item};
+      if (item.filter_data && "annotations" in item.filter_data) row.filter_data = {...item.filter_data,
+        annotations: (item.filter_data.annotations || []).map(expand)};
+      if (item.clinvar_evidence && "provenance" in item.clinvar_evidence) {
+        row.clinvar_evidence = {...item.clinvar_evidence, provenance: expand(item.clinvar_evidence.provenance)};
+      }
+      return row;
+    })};
   }
 
   expandVariantDetail(payload) {
@@ -405,7 +436,14 @@ class VariantBrowser extends HTMLElement {
         run.reference_build || summary?.reference_build,
       ];
       values.forEach((fieldValue, index) => row.append(node(index === 0 ? "strong" : "span", value(fieldValue))));
-      row.append(node("span", run.index_status, `badge ${run.index_status}`));
+      const preparation = run.priority_preparation;
+      const label = ["queued", "running", "interrupted"].includes(preparation?.status)
+        ? preparation.phase === "ACMG" ? "preparing ACMG" : "preparing evidence"
+        : preparation?.status === "partial" ? "ready · evidence incomplete" : run.index_status;
+      const badge = node("span", label, `badge ${run.index_status}`);
+      const progress = preparation?.phase === "ACMG" ? preparation.acmg_preparation : preparation;
+      badge.title = preparation ? `${label} · ${progress?.attempted || 0} / ${progress?.total || 0} variants` : label;
+      row.append(badge);
       const actions = node("div", undefined, "run-row-actions");
       if (run.index_status !== "complete") {
         const indexButton = node("button", "↻", "icon-button");
@@ -419,6 +457,16 @@ class VariantBrowser extends HTMLElement {
         actions.append(indexButton);
       }
       if (run.index_status === "complete") {
+        const prepare = node("button", "Priority · ACMG", "secondary-button");
+        prepare.title = "Prepare or retry Priority evidence and ACMG classifications for this run";
+        prepare.addEventListener("click", async event => {
+          event.stopPropagation(); prepare.disabled = true;
+          try {
+            await this.request(`/runs/${encodeURIComponent(run.history_id)}/priority-evidence?force=true`, {method: "POST"});
+            this.pollIndex(run.history_id);
+          } catch (error) { this.setStatus(error.message, true); prepare.disabled = false; }
+        });
+        actions.append(prepare);
         const enrich = node("button", "gnomAD", "secondary-button");
         enrich.title = "Retrieve missing gnomAD frequencies for all unique run alleles";
         enrich.addEventListener("click", async event => {
@@ -565,11 +613,18 @@ class VariantBrowser extends HTMLElement {
     try {
       const status = await this.request(`/runs/${encodeURIComponent(historyId)}/index-status`);
       if (status.status === "indexing" || status.status === "pending") {
+        const evidence = status.priority_preparation;
+        if (evidence) this.setStatus(`Preparing run Priority evidence… ${evidence.attempted || 0} / ${evidence.total || 0} variants`);
         window.setTimeout(() => this.pollIndex(historyId), 1500);
         return;
       }
       await this.refreshRuns();
-      if (status.status === "complete") await this.selectRun(historyId);
+      if (status.status === "complete") {
+        await this.selectRun(historyId);
+        for (const workspace of this.workspaces.values()) {
+          if (workspace.runId === historyId && workspace.initialized) this.refreshVariantPriorities(workspace);
+        }
+      }
       else this.setStatus(status.error || status.sources?.find(source => source.error)?.error || "Indexing failed", true);
     } catch (error) { this.setStatus(error.message, true); }
   }
@@ -582,6 +637,9 @@ class VariantBrowser extends HTMLElement {
     this.renderRuns();
     this.setStatus("Loading samples…");
     try {
+      // Migrate older indexes once at run selection; new indexes already have
+      // their run job. Opening samples only reads its persistent status.
+      await this.request(`/runs/${encodeURIComponent(historyId)}/priority-evidence`, {method: "POST", cache: "no-store"});
       const payload = await this.request(`/runs/${encodeURIComponent(historyId)}/samples`);
       this.samples = payload.samples || [];
       this.shadowRoot.querySelector("#sample-search").value = "";
@@ -663,18 +721,20 @@ class VariantBrowser extends HTMLElement {
     const query = this.shadowRoot.querySelector("#sample-search").value.trim().toLowerCase();
     const filtered = this.samples.filter(sample => JSON.stringify(sample).toLowerCase().includes(query));
     const cards = filtered.map(sample => {
-      const details = node("details", undefined, "sample-card");
-      details.append(node("summary", sample.display_name));
+      const card = node("details", undefined, "sample-card");
+      const title = node("summary", sample.display_name, "sample-card-title");
+      title.title = sample.display_name;
+      card.append(title);
       const body = node("div", undefined, "sample-card-body");
       const facts = node("dl");
       this.sampleFacts(sample).forEach(([label, fieldValue]) => {
         facts.append(node("dt", label), node("dd", value(fieldValue)));
       });
-      const open = node("button", "Open sample", "open-sample");
+      const open = node("button", "Analyze variants", "open-sample");
       open.addEventListener("click", () => this.openSample(sample));
       body.append(facts, open);
-      details.append(body);
-      return details;
+      card.append(body);
+      return card;
     });
     const emptyMessage = this.samples.length ? "No matching samples." : "No indexed samples in this run.";
     strip.replaceChildren(...(cards.length ? cards : [node("p", emptyMessage, "empty")]));
@@ -763,6 +823,7 @@ class VariantBrowser extends HTMLElement {
     workspace?.gnomadFrequencyController?.abort();
     workspace?.carrierController?.abort();
     workspace?.genePhenotypeController?.abort();
+    workspace?.classificationController?.abort();
     window.clearTimeout(workspace?.genePhenotypeTimer);
     this.removeIgvBrowser(workspace);
     if (workspace?.clinicalFrame) workspace.clinicalFrame.src = "about:blank";
@@ -775,6 +836,17 @@ class VariantBrowser extends HTMLElement {
     this.renderWorkspace();
     const active = this.workspaces.get(this.activeWorkspace);
     this.setRoute(active?.runId || this.selectedRun, active?.sample.sample_id || null);
+  }
+
+  moveWorkspace(sourceKey, targetKey, after = false) {
+    const source = this.workspaces.get(sourceKey);
+    const target = this.workspaces.get(targetKey);
+    if (!source || !target || sourceKey === targetKey || source.runId !== target.runId) return;
+    const entries = Array.from(this.workspaces).filter(([key]) => key !== sourceKey);
+    const targetIndex = entries.findIndex(([key]) => key === targetKey);
+    entries.splice(targetIndex + (after ? 1 : 0), 0, [sourceKey, source]);
+    this.workspaces = new Map(entries);
+    this.renderTabs();
   }
 
   renderTabs() {
@@ -790,6 +862,55 @@ class VariantBrowser extends HTMLElement {
             : (workspace.gene
             ? `${workspace.gene} · ${workspace.sample.display_name}` : workspace.sample.display_name);
         const select = node("button", tabLabel);
+        wrapper.dataset.workspaceKey = workspace.key;
+        wrapper.draggable = true;
+        select.title = `${tabLabel} · Drag to reorder; Alt + Left/Right to move`;
+        select.setAttribute("aria-keyshortcuts", "Alt+ArrowLeft Alt+ArrowRight");
+        wrapper.addEventListener("dragstart", event => {
+          this.draggedWorkspace = workspace.key;
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", workspace.key);
+          wrapper.classList.add("dragging");
+        });
+        const clearDropTargets = () => tabs.querySelectorAll(".workspace-tab").forEach(tab => {
+          tab.classList.remove("drop-before", "drop-after");
+        });
+        wrapper.addEventListener("dragend", () => {
+          this.draggedWorkspace = null;
+          wrapper.classList.remove("dragging");
+          clearDropTargets();
+        });
+        wrapper.addEventListener("dragover", event => {
+          if (!this.draggedWorkspace || this.draggedWorkspace === workspace.key) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          clearDropTargets();
+          const bounds = wrapper.getBoundingClientRect();
+          wrapper.classList.add(event.clientX < bounds.left + bounds.width / 2 ? "drop-before" : "drop-after");
+        });
+        wrapper.addEventListener("dragleave", event => {
+          if (!wrapper.contains(event.relatedTarget)) wrapper.classList.remove("drop-before", "drop-after");
+        });
+        wrapper.addEventListener("drop", event => {
+          if (!this.draggedWorkspace) return;
+          event.preventDefault();
+          const bounds = wrapper.getBoundingClientRect();
+          const sourceKey = this.draggedWorkspace;
+          this.draggedWorkspace = null;
+          clearDropTargets();
+          this.moveWorkspace(sourceKey, workspace.key, event.clientX >= bounds.left + bounds.width / 2);
+        });
+        select.addEventListener("keydown", event => {
+          if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+          event.preventDefault();
+          const keys = Array.from(this.workspaces.values())
+            .filter(item => item.runId === workspace.runId).map(item => item.key);
+          const after = event.key === "ArrowRight";
+          const targetKey = keys[keys.indexOf(workspace.key) + (after ? 1 : -1)];
+          if (!targetKey) return;
+          this.moveWorkspace(workspace.key, targetKey, after);
+          Array.from(tabs.children).find(tab => tab.dataset.workspaceKey === workspace.key)?.querySelector("button").focus();
+        });
         select.addEventListener("click", () => {
           this.activeWorkspace = workspace.key;
           this.renderTabs();
@@ -814,14 +935,10 @@ class VariantBrowser extends HTMLElement {
   }
 
   async preparePriorityEvidence(workspace, controller) {
-    let after = 0;
-    let attempted = 0;
-    let unavailable = 0;
-    do {
+    while (true) {
       const result = await this.request(
-        `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}`
-          + `/priority-evidence?after_variant_id=${after}&limit=50`,
-        {method: "POST", signal: controller.signal, cache: "no-store"},
+        `/runs/${encodeURIComponent(workspace.runId)}/priority-evidence`,
+        {signal: controller.signal, cache: "no-store"},
       );
       if (controller.signal.aborted || workspace.pageController !== controller) return;
       if (result.gene_context) {
@@ -830,15 +947,34 @@ class VariantBrowser extends HTMLElement {
           : result.gene_context.stale || result.gene_context.preparation_error
             ? "Gene-disease update unavailable; using installed data" : "";
       }
-      attempted += result.attempted;
-      unavailable += Object.entries(result.outcomes || {})
-        .filter(([status]) => !["FOUND", "NOT_FOUND"].includes(status))
-        .reduce((sum, [, count]) => sum + count, 0);
-      after = result.next_after_variant_id;
-      workspace.loadingMessage = `Retrieving Priority evidence… ${attempted} / ${workspace.sample.variant_count ?? attempted} variants`;
+      if (["complete", "partial"].includes(result.status)) {
+        workspace.populationEvidenceUnavailable = Object.entries(result.outcomes || {})
+          .filter(([status]) => !["FOUND", "NOT_FOUND"].includes(status))
+          .reduce((sum, [, count]) => sum + count, 0);
+        return;
+      }
+      if (!["queued", "running", "interrupted"].includes(result.status)) {
+        throw new Error(result.error || "Prepare Priority evidence from the run browser before opening samples.");
+      }
+      workspace.loadingMessage = result.phase === "ACMG"
+        ? `Preparing run ACMG… ${result.acmg_preparation?.attempted || 0} / ${result.acmg_preparation?.total || 0} variants`
+        : `Preparing run Priority evidence… ${result.attempted || 0} / ${result.total || 0} variants`;
       if (workspace.key === this.activeWorkspace) this.renderWorkspace();
-    } while (after !== null && after !== undefined);
-    workspace.populationEvidenceUnavailable = unavailable;
+      await this.waitForPriorityEvidence(controller.signal);
+    }
+  }
+
+  waitForPriorityEvidence(signal) {
+    return new Promise((resolve, reject) => {
+      const abort = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", abort);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, 1500);
+      signal.addEventListener("abort", abort, {once: true});
+      if (signal.aborted) abort();
+    });
   }
 
   async loadPage(workspace) {
@@ -854,9 +990,9 @@ class VariantBrowser extends HTMLElement {
     workspace.initialized = false;
     workspace.cursor = null;
     workspace.priorityExplanation = null;
-    workspace.loadingMessage = "Preparing gene-disease and population evidence for all variants…";
+    workspace.loadingMessage = "Checking prepared run evidence…";
     this.renderWorkspace();
-    const params = new URLSearchParams({limit: String(PAGE_SIZE), load_all: "true"});
+    const params = new URLSearchParams({limit: String(PAGE_SIZE), load_all: "true", compact: "true"});
     if (workspace.sort?.key) {
       params.set("sort_by", workspace.sort.key);
       params.set("sort_direction", workspace.sort.direction);
@@ -866,10 +1002,10 @@ class VariantBrowser extends HTMLElement {
       if (controller.signal.aborted || workspace.pageController !== controller) return;
       workspace.loadingMessage = "Calculating Priority and loading all variants…";
       if (workspace.key === this.activeWorkspace) this.renderWorkspace();
-      const payload = await this.request(
+      const payload = this.expandVariantTable(await this.request(
         `/runs/${encodeURIComponent(workspace.runId)}/samples/${workspace.sample.sample_id}/variants?${params}`,
         {signal: controller.signal, cache: "no-store"},
-      );
+      ));
       if (controller.signal.aborted || workspace.pageController !== controller) return;
       if (payload.next_cursor) throw new Error("The server did not return all variants; reload the application.");
       const revision = JSON.stringify([payload.clinvar_snapshot_id, payload.clinvar_status]);
@@ -1680,8 +1816,12 @@ class VariantBrowser extends HTMLElement {
     try {
       const stored = JSON.parse(localStorage.getItem(COLUMN_STORAGE_KEY) || "[]");
       const saved = Array.isArray(stored) ? stored.filter(key => key !== "clinical_significance") : stored;
-      if (Array.isArray(saved) && saved.length === fallback.length
+      if (Array.isArray(saved) && new Set(saved).size === saved.length
           && saved[0] === "filter_alert" && saved.every(key => VARIANT_COLUMNS_BY_KEY.has(key))) {
+        for (const key of fallback.filter(key => !saved.includes(key))) {
+          const following = fallback.slice(fallback.indexOf(key) + 1).find(next => saved.includes(next));
+          saved.splice(following ? saved.indexOf(following) : saved.length, 0, key);
+        }
         return saved;
       }
     } catch {
@@ -1894,6 +2034,28 @@ class VariantBrowser extends HTMLElement {
 
   variantCellNode(workspace, item, key) {
     const cell = node("span");
+    if (key === "acmg_classification") {
+      const button = node("button", undefined, "table-acmg-classification");
+      button.type = "button";
+      button.dataset.variantId = String(item.variant_id);
+      button.setAttribute("aria-label", "Apri la classificazione ACMG della variante");
+      const classes = {PATHOGENIC: ["P", "pathogenic"], LIKELY_PATHOGENIC: ["LP", "likely-pathogenic"],
+        VUS: ["VUS", "uncertain"], LIKELY_BENIGN: ["LB", "likely-benign"], BENIGN: ["B", "benign"]};
+      const records = item.acmg_classifications || [];
+      for (const [code, [label, style]] of Object.entries(classes)) {
+        if (records.some(record => record.classification === code)) {
+          button.append(node("span", label, `clinvar-classification ${style}`));
+        }
+      }
+      if (!button.childElementCount) button.append(node("span", "—", "clinvar-classification other"));
+      button.addEventListener("click", event => {
+        event.stopPropagation();
+        this.loadDetail(workspace, item.variant_id, {section: "ACMG"});
+      });
+      button.addEventListener("keydown", event => event.stopPropagation());
+      cell.append(button, this.tableClassificationTooltip(workspace, item));
+      return cell;
+    }
     if (key === "clinvar_local") {
       const evidence = item.clinvar_evidence || {};
       cell.textContent = this.clinvarTableStatus(evidence);
@@ -1956,7 +2118,56 @@ class VariantBrowser extends HTMLElement {
     return cell;
   }
 
+  detailResizeHandle(host) {
+    const handle = node("div", undefined, "detail-resize-handle");
+    handle.tabIndex = 0;
+    handle.title = "Drag to resize Variant info · Double-click to reset";
+    handle.setAttribute("role", "separator");
+    handle.setAttribute("aria-label", "Resize Variant info");
+    handle.setAttribute("aria-orientation", "vertical");
+    handle.setAttribute("aria-controls", "variant-detail-panel");
+    handle.setAttribute("aria-valuemin", "20");
+    handle.setAttribute("aria-valuemax", "80");
+    handle.setAttribute("aria-valuenow", String(Math.round(this.detailPanelWidth)));
+    const setWidth = width => {
+      this.detailPanelWidth = Math.max(20, Math.min(80, width));
+      host.style.setProperty("--detail-panel-width", `${this.detailPanelWidth}%`);
+      handle.setAttribute("aria-valuenow", String(Math.round(this.detailPanelWidth)));
+    };
+    let drag = null;
+    handle.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || drag) return;
+      event.preventDefault();
+      const panel = host.querySelector(".detail-panel");
+      drag = {pointerId: event.pointerId, startX: event.clientX, startWidth: panel.getBoundingClientRect().width};
+      handle.setPointerCapture(event.pointerId);
+      host.classList.add("resizing-detail");
+    });
+    handle.addEventListener("pointermove", event => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      setWidth((drag.startWidth + drag.startX - event.clientX) / host.clientWidth * 100);
+    });
+    const stopResize = event => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      drag = null;
+      host.classList.remove("resizing-detail");
+      if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    };
+    handle.addEventListener("pointerup", stopResize);
+    handle.addEventListener("pointercancel", stopResize);
+    handle.addEventListener("lostpointercapture", stopResize);
+    handle.addEventListener("dblclick", () => setWidth(46));
+    handle.addEventListener("keydown", event => {
+      const widths = {ArrowLeft: this.detailPanelWidth + 2, ArrowRight: this.detailPanelWidth - 2, Home: 20, End: 80};
+      if (!(event.key in widths)) return;
+      event.preventDefault();
+      setWidth(widths[event.key]);
+    });
+    return handle;
+  }
+
   renderWorkspace() {
+    this.viewportObserver?.disconnect();
     const host = this.shadowRoot.querySelector("#workspace");
     const workspace = this.workspaces.get(this.activeWorkspace);
     if (!workspace) {
@@ -2049,13 +2260,10 @@ class VariantBrowser extends HTMLElement {
       more.addEventListener("click", () => this.loadPage(workspace));
       footer.append(more);
     } else if (workspace.initialized) {
-      footer.append(node("span", "All variants loaded · Priority calculated", "complete-text"));
-      if (workspace.populationEvidenceUnavailable) footer.append(node("span",
-        `Population data unavailable for ${workspace.populationEvidenceUnavailable} variants · N/A where unevaluable`, "filter-message"));
       if (workspace.geneContextWarning) footer.append(node("span", workspace.geneContextWarning, "filter-message"));
       if (workspace.clinvarStatus === "ERROR") footer.append(node("span", "Local ClinVar data unavailable", "filter-message"));
     }
-    tablePanel.append(footer);
+    if (footer.childElementCount) tablePanel.append(footer);
     if (workspace.priorityExplanation && !workspace.loading) {
       tablePanel.append(this.priorityExplanationPanel(workspace));
     }
@@ -2065,10 +2273,15 @@ class VariantBrowser extends HTMLElement {
       const retained = previous?.dataset.variantId === next.dataset.variantId;
       const detailScroll = retained ? previous.scrollTop : 0;
       if (retained) this.preserveDetailState(previous, next);
-      host.replaceChildren(tablePanel, next);
+      host.style.setProperty("--detail-panel-width", `${this.detailPanelWidth}%`);
+      host.replaceChildren(tablePanel, this.detailResizeHandle(host), next);
       next.scrollTop = detailScroll;
     }
     else host.replaceChildren(tablePanel);
+    if ("ResizeObserver" in window) {
+      this.viewportObserver = new ResizeObserver(renderVisible);
+      this.viewportObserver.observe(viewport);
+    }
     window.requestAnimationFrame(() => {
       viewport.scrollTop = workspace.scrollTop;
       viewport.scrollLeft = workspace.scrollLeft;
@@ -2729,7 +2942,11 @@ class VariantBrowser extends HTMLElement {
     workspace.igvLoadedTracks?.clear();
   }
 
-  async loadDetail(workspace, variantId) {
+  async loadDetail(workspace, variantId, {section = null, refresh = false} = {}) {
+    if (!refresh && workspace.detail?.variant_id === variantId && !workspace.detail.loading && !workspace.detail.error) {
+      if (section) this.focusDetailSection(workspace, section);
+      return;
+    }
     if (workspace.pinnedVariantId && workspace.pinnedVariantId !== variantId) {
       workspace.items = workspace.items.filter(item => item.variant_id !== workspace.pinnedVariantId);
       workspace.pinnedVariantId = null;
@@ -2780,7 +2997,9 @@ class VariantBrowser extends HTMLElement {
       }
       workspace.detail = {
         ...detail, variant_id: variantId, carriers: null, carriersLoading: true,
+        openSection: section,
         genePhenotypes: [], genePhenotypesLoading: true,
+        classifications: [], classificationsLoading: true,
         liftover: null, liftoverLoading: true,
         gnomadFrequency: detail.gnomad_frequency || null,
         gnomadFrequencyLoading: !detail.gnomad_frequency,
@@ -2791,6 +3010,7 @@ class VariantBrowser extends HTMLElement {
       if (error.name !== "AbortError") workspace.detail = {variant_id: variantId, error: error.message};
     }
     if (workspace.key === this.activeWorkspace) this.renderWorkspace();
+    if (section) this.focusDetailSection(workspace, section);
     if (loadCarriers) {
       this.loadLiftover(workspace, variantId);
       if (!workspace.detail.gnomadFrequency || workspace.detail.gnomadFrequency.partial
@@ -2878,6 +3098,7 @@ class VariantBrowser extends HTMLElement {
     if (attempt === 0) {
       workspace.genePhenotypeController?.abort();
       workspace.genePhenotypeController = new AbortController();
+      this.loadClassifications(workspace, variantId);
     }
     const controller = workspace.genePhenotypeController;
     if (workspace.detail?.variant_id !== variantId) return;
@@ -2886,6 +3107,7 @@ class VariantBrowser extends HTMLElement {
       workspace.detail.genePhenotypes = [];
       workspace.detail.genePhenotypesLoading = false;
       this.renderDetailSection(workspace, "Gene–phenotype");
+      this.renderDetailSection(workspace, "ACMG");
       return;
     }
     try {
@@ -2908,7 +3130,13 @@ class VariantBrowser extends HTMLElement {
       const waitingForConstraint = results.some(result => result.gene_constraint?.refreshing);
       workspace.detail.genePhenotypes = results;
       workspace.detail.genePhenotypesLoading = waitingForCache;
+      if (!waitingForCache && workspace.detail.automaticContextReady === false && !workspace.detail.classificationsLoading
+          && !workspace.detail.automaticContextRetried) {
+        workspace.detail.automaticContextRetried = true;
+        this.loadClassifications(workspace, variantId, {refresh: true});
+      }
       this.renderDetailSection(workspace, "Gene–phenotype");
+      this.renderDetailSection(workspace, "ACMG");
       if ((waitingForCache || waitingForConstraint) && attempt < 12) {
         workspace.genePhenotypeTimer = window.setTimeout(
           () => this.loadGenePhenotypes(workspace, variantId, attempt + 1),
@@ -2920,7 +3148,280 @@ class VariantBrowser extends HTMLElement {
       workspace.detail.genePhenotypesError = error.message;
       workspace.detail.genePhenotypesLoading = false;
       this.renderDetailSection(workspace, "Gene–phenotype");
+      this.renderDetailSection(workspace, "ACMG");
     }
+  }
+
+  async loadClassifications(workspace, variantId, {refresh = false} = {}) {
+    const detail = workspace.detail;
+    if (!detail || detail.variant_id !== variantId) return;
+    const {gnomad_enrichment, ...metadata} = detail.metadata || {};
+    const signature = JSON.stringify([detail.acmg_revision, detail.annotations, metadata]);
+    workspace.classificationCache ||= new Map();
+    let cached = workspace.classificationCache.get(variantId);
+    if (refresh || cached?.signature !== signature || Date.now() - cached.createdAt > 25 * 60 * 1000) cached = null;
+    try {
+      if (!cached) {
+        if (!workspace.classificationController || workspace.classificationController.signal.aborted) workspace.classificationController = new AbortController();
+        cached = {signature, createdAt: Date.now()};
+        cached.promise = (async () => {
+          const response = await fetch("/api/acmg-calculator/classification/automatic", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            signal: workspace.classificationController.signal,
+            body: JSON.stringify({run_id: workspace.runId, sample_id: workspace.sample.sample_id, variant_id: variantId}),
+          });
+          const payload = await response.json();
+          if (!response.ok) throw Error(payload.detail || "Classificazioni non disponibili");
+          return payload;
+        })();
+        workspace.classificationCache.delete(variantId);
+        workspace.classificationCache.set(variantId, cached);
+        while (workspace.classificationCache.size > 64) workspace.classificationCache.delete(workspace.classificationCache.keys().next().value);
+      }
+      detail.classificationsLoading = !cached.state;
+      const payload = await cached.promise;
+      delete detail.classificationsError;
+      const state = cached.state;
+      detail.classifications = state?.classifications || payload.items || [];
+      detail.automaticClassifications = state?.automaticClassifications || payload.automatic || [];
+      detail.classificationMains = state?.classificationMains || payload.mains || [];
+      detail.automaticContextReady = state?.automaticContextReady ?? payload.context_ready;
+      detail.automaticContextRetried ||= state?.automaticContextRetried;
+      if (payload.contexts) {
+        const refreshed = new Set(payload.contexts.annotations.map(item => item.annotation_id));
+        detail.interpretation_context = {...payload.contexts, annotations: [
+          ...(detail.interpretation_context?.annotations || []).filter(item => !refreshed.has(item.annotation_id)),
+          ...payload.contexts.annotations,
+        ]};
+      }
+      cached.state = {classifications: detail.classifications, automaticClassifications: detail.automaticClassifications,
+        classificationMains: detail.classificationMains, automaticContextReady: detail.automaticContextReady,
+        automaticContextRetried: detail.automaticContextRetried};
+    } catch (error) {
+      if (workspace.classificationCache.get(variantId) === cached) workspace.classificationCache.delete(variantId);
+      if (error.name === "AbortError") return;
+      detail.classificationsError = error.message;
+    }
+    if (workspace.detail !== detail) return;
+    detail.classificationsLoading = false;
+    this.updateTableClassifications(workspace);
+    this.renderDetailSection(workspace, "ACMG");
+  }
+
+  tableClassificationTooltip(workspace, item) {
+    const tooltip = node("span");
+    tooltip.setAttribute("role", "tooltip");
+    const detail = String(workspace.detail?.variant_id) === String(item.variant_id) ? workspace.detail : null;
+    const labels = {PATHOGENIC: "P", LIKELY_PATHOGENIC: "LP", VUS: "VUS", LIKELY_BENIGN: "LB", BENIGN: "B"};
+    const modes = {AUTOSOMAL_DOMINANT: "AD", AUTOSOMAL_RECESSIVE: "AR", X_LINKED: "XL",
+      X_LINKED_DOMINANT: "XLD", X_LINKED_RECESSIVE: "XLR", Y_LINKED: "YL", MITOCHONDRIAL: "MT",
+      SEMIDOMINANT: "SD", SEMI_DOMINANT: "SD", AUTOSOMAL_SEMIDOMINANT: "SD"};
+    const groups = new Map();
+    for (const record of item.acmg_classifications || []) {
+      const identity = record.identity;
+      const annotation = detail?.interpretation_context?.annotations?.find(annotation =>
+        annotation.transcript === identity.transcript && annotation.contexts?.some(choice =>
+          choice.context.gene?.identifier === identity.gene && choice.context.disease?.identifier === identity.disease));
+      const context = annotation?.contexts.find(choice => choice.context.gene?.identifier === identity.gene
+        && choice.context.disease?.identifier === identity.disease)?.context;
+      const gene = record.gene_label || context?.gene?.label || annotation?.gene_symbol
+        || identity.gene || item.gene || "Gene non disponibile";
+      const key = JSON.stringify([identity.gene || gene, identity.transcript]);
+      if (!groups.has(key)) groups.set(key, {gene, transcript: identity.transcript, rows: []});
+      const association = detail?.genePhenotypes?.filter(result => String(result.gene).toUpperCase() === gene.toUpperCase())
+        .flatMap(result => result.associations || []).find(association => association.disease_id === identity.disease);
+      const disease = record.disease_label || context?.disease?.label || association?.disease;
+      const phenotype = disease && disease !== identity.disease ? disease : "Fenotipo non disponibile";
+      const inheritance = (identity.inheritance || []).map(mode => modes[mode] || mode).join("/") || "Ereditarietà non disponibile";
+      const criteria = (record.applied_criteria || record.assessment?.criteria || []).map(criterion => {
+        const standard = criterion.code === "PVS1" ? "VERY_STRONG" : criterion.code === "BA1" ? "STAND_ALONE"
+          : /^(PS|BS)/.test(criterion.code) ? "STRONG" : criterion.code.startsWith("PM") ? "MODERATE" : "SUPPORTING";
+        const suffix = {SUPPORTING: "supp", MODERATE: "mod", STRONG: "str", VERY_STRONG: "vstr"}[criterion.strength];
+        return `${criterion.code}${suffix && criterion.strength !== standard ? `_${suffix}` : ""}`;
+      }).join(", ");
+      groups.get(key).rows.push(`${phenotype} (${inheritance}) · ${labels[record.classification] || "Non valutata"}${criteria ? ` (${criteria})` : ""}${record.requires_review || record.needs_review ? " · da ricontrollare" : ""}`);
+    }
+    for (const {gene, transcript, rows} of groups.values()) {
+      tooltip.append(node("strong", `${gene} (${transcript || "Trascritto non disponibile"})`));
+      const list = node("ul");
+      for (const row of rows) list.append(node("li", row));
+      tooltip.append(list);
+    }
+    if (!groups.size) {
+      tooltip.append(node("strong", `${item.gene || "Gene non disponibile"} (${item.transcript || "Trascritto non disponibile"})`),
+        node("span", "Non valutata · Apri ACMG"));
+    }
+    return tooltip;
+  }
+
+  updateTableClassifications(workspace) {
+    const detail = workspace.detail;
+    if (!detail || detail.loading || detail.classificationsError) return;
+    const cached = workspace.classificationCache?.get(detail.variant_id);
+    if (cached) cached.state = {classifications: detail.classifications, automaticClassifications: detail.automaticClassifications,
+      classificationMains: detail.classificationMains, automaticContextReady: detail.automaticContextReady,
+      automaticContextRetried: detail.automaticContextRetried};
+    const records = this.classificationRecords(detail);
+    for (const items of [workspace.items, workspace.allItems]) {
+      const item = items?.find(item => String(item.variant_id) === String(detail.variant_id));
+      if (item) item.acmg_classifications = records;
+    }
+    if (workspace.key !== this.activeWorkspace) return;
+    const item = workspace.items?.find(item => String(item.variant_id) === String(detail.variant_id));
+    if (!item) return;
+    for (const button of this.shadowRoot.querySelectorAll(".table-acmg-classification")) {
+      if (button.dataset.variantId !== String(item.variant_id)) continue;
+      const focused = this.shadowRoot.activeElement === button;
+      const cell = this.variantCellNode(workspace, item, "acmg_classification");
+      button.parentElement.replaceWith(cell);
+      if (focused) cell.querySelector("button").focus({preventScroll: true});
+    }
+  }
+
+  focusDetailSection(workspace, title) {
+    if (workspace.key !== this.activeWorkspace) return;
+    const panel = this.shadowRoot.querySelector(".detail-panel");
+    const section = [...(panel?.children || [])].find(item => item.dataset.disclosureKey === title);
+    if (!section) return;
+    section.open = true;
+    section.querySelector("summary")?.focus({preventScroll: true});
+    section.scrollIntoView({block: "nearest"});
+    delete workspace.detail.openSection;
+  }
+
+  acmgAssociations(workspace) {
+    const detail = workspace.detail;
+    return this.genePhenotypeGenes(detail.annotations || []).flatMap(gene => {
+      const result = (detail.genePhenotypes || []).find(item => String(item.gene).toUpperCase() === gene.symbol.toUpperCase());
+      const associations = new Map((result?.associations || []).map(item => [item.disease_id || item.disease, item]));
+      // The indexed context is already present when the knowledge cache is updating.
+      for (const annotation of detail.interpretation_context?.annotations || []) {
+        for (const choice of annotation.contexts || []) {
+          const context = choice.context;
+          const matches = gene.hgnc ? context.gene?.identifier === gene.hgnc
+            : String(annotation.gene_symbol || "").toUpperCase() === gene.symbol.toUpperCase();
+          if (matches && context.disease?.identifier && !associations.has(context.disease.identifier)) {
+            associations.set(context.disease.identifier, {disease_id: context.disease.identifier,
+              disease: context.disease.label || context.disease.identifier});
+          }
+        }
+      }
+      return [...associations.values()].map(association => ({gene, association}));
+    });
+  }
+
+  acmgContent(workspace, associations) {
+    const content = node("div", undefined, "detail-content acmg-content");
+    if (workspace.detail.classificationMains?.length) content.append(node("p", "Automatico sul trascritto main: PVS1. Criteri aggiuntivi nella scheda.", "detail-note"));
+    if (!associations.length) {
+      content.append(node("p", workspace.detail.genePhenotypesError || (workspace.detail.genePhenotypesLoading
+        ? "Caricamento associazioni gene–fenotipo…" : "Nessuna associazione gene–fenotipo disponibile."), "empty"));
+      return content;
+    }
+    for (const {gene, association} of associations) {
+      const row = node("div", undefined, "acmg-association-row");
+      const label = node("div", undefined, "acmg-association-label");
+      label.append(node("strong", `${gene.symbol} · ${association.disease || association.disease_id}`));
+      const inheritance = [...new Set(this.classificationContexts(workspace.detail, gene, association)
+        .flatMap(item => item.choice.context.inheritance_modes || []))];
+      const modes = {AUTOSOMAL_DOMINANT: "AD", AUTOSOMAL_RECESSIVE: "AR", X_LINKED: "X-linked", Y_LINKED: "Y-linked", MITOCHONDRIAL: "Mitocondriale"};
+      const main = workspace.detail.classificationMains?.find(item => item.gene.toUpperCase() === gene.symbol.toUpperCase());
+      label.append(node("small", [association.disease_id, ...inheritance.map(mode => modes[mode] || mode), main && `Main: ${main.transcript}`].filter(Boolean).join(" · ")));
+      row.append(label, this.classificationButton(workspace, gene, association));
+      content.append(row);
+    }
+    return content;
+  }
+
+  acmgClassificationSummary(workspace, associations) {
+    const summary = node("span", undefined, "clinvar-classifications acmg-classifications");
+    summary.setAttribute("aria-label", "Classificazioni ACMG HELPER");
+    const detail = workspace.detail;
+    if (detail.classificationsLoading || detail.classificationsError) {
+      summary.append(node("span", detail.classificationsLoading ? "Caricamento…" : "Classificazioni non disponibili ⚠", "clinvar-classification other"));
+      return summary;
+    }
+    const keys = new Set(associations.flatMap(({gene, association}) => this.classificationContexts(detail, gene, association)
+      .map(item => JSON.stringify([item.choice.context.gene.identifier, association.disease_id]))));
+    const counts = new Map();
+    const assessed = new Set();
+    for (const record of this.classificationRecords(detail)) {
+      const key = JSON.stringify([record.identity.gene, record.identity.disease]);
+      if (!keys.has(key)) continue;
+      assessed.add(key);
+      counts.set(record.classification, (counts.get(record.classification) || 0) + 1);
+    }
+    const unassessed = [...keys].filter(key => !assessed.has(key)).length;
+    if (unassessed) counts.set("NOT_EVALUATED", (counts.get("NOT_EVALUATED") || 0) + unassessed);
+    if (!counts.size) counts.set("NOT_EVALUATED", 1);
+    const classes = {PATHOGENIC: ["P", "pathogenic"], LIKELY_PATHOGENIC: ["LP", "likely-pathogenic"],
+      VUS: ["VUS", "uncertain"], LIKELY_BENIGN: ["LB", "likely-benign"],
+      BENIGN: ["B", "benign"], NOT_EVALUATED: ["Non valutata", "other"]};
+    for (const [code, [label, style]] of Object.entries(classes)) {
+      if (!counts.has(code)) continue;
+      const badge = node("span", `${label}${counts.get(code) > 1 ? ` (${counts.get(code)})` : ""}`, `clinvar-classification ${style}`);
+      badge.dataset.classification = code;
+      badge.title = "Classificazioni HELPER per associazione, trascritto ed ereditarietà; i risultati automatici usano il main";
+      summary.append(badge);
+    }
+    return summary;
+  }
+
+  classificationContexts(detail, gene, association) {
+    return (detail.interpretation_context?.annotations || []).flatMap(annotation => (
+      annotation.contexts || []
+    ).filter(choice => choice.context?.disease?.identifier === association.disease_id && (
+      gene.hgnc ? choice.context?.gene?.identifier === gene.hgnc
+        : String(annotation.gene_symbol || "").toUpperCase() === gene.symbol.toUpperCase()
+    )).map(choice => ({annotation, choice})));
+  }
+
+  classificationRecords(detail) {
+    const key = item => JSON.stringify([item.identity.gene, item.identity.disease, item.identity.transcript, item.identity.inheritance]);
+    const records = new Map((detail.automaticClassifications || []).map(item => [key(item), {...item,
+      classification: item.assessment.classification, points: item.assessment.total_points, requires_review: item.assessment.requires_review}]));
+    // A saved worksheet wins only for its exact transcript, disease and inheritance.
+    for (const item of detail.classifications || []) records.set(key(item), item);
+    return [...records.values()];
+  }
+
+  classificationButton(workspace, gene, association) {
+    const button = node("button", "Non valutata", "variant-classification-button");
+    button.type = "button";
+    button.dataset.disease = association.disease_id || "";
+    button.setAttribute("aria-label", `Classificazione della variante per ${association.disease || association.disease_id}`);
+    const contexts = this.classificationContexts(workspace.detail, gene, association);
+    const genes = new Set(contexts.map(item => item.choice.context.gene.identifier));
+    const saved = this.classificationRecords(workspace.detail).filter(item => (
+      item.identity.disease === association.disease_id && genes.has(item.identity.gene)
+    ));
+    const labels = {PATHOGENIC: "P", LIKELY_PATHOGENIC: "LP", VUS: "VUS",
+      LIKELY_BENIGN: "LB", BENIGN: "B", NOT_EVALUATED: "Non valutata"};
+    if (saved.length === 1) {
+      button.textContent = `${labels[saved[0].classification] || "Non valutata"}${saved[0].requires_review || saved[0].needs_review ? " ⚠" : ""}`;
+      button.dataset.classification = saved[0].classification;
+      button.dataset.origin = saved[0].automatic ? "AUTOMATIC" : "SAVED";
+      button.title = `${saved[0].automatic ? "Automatico" : "Salvata"} · ${saved[0].identity.transcript} · ${saved[0].identity.inheritance.join(", ")} · ${saved[0].points} punti`;
+      if (saved[0].automatic) button.title += ` · PVS1: ${saved[0].error || saved[0].pvs1?.reason || "Non determinato"}`;
+      else button.title += ` · rev. ${saved[0].revision}${saved[0].needs_review ? " · da ricontrollare" : ""}`;
+    } else if (saved.length > 1) {
+      button.textContent = `${saved.length} classificazioni`;
+      button.title = "Classificazioni distinte per trascritto ed ereditarietà";
+    } else button.title = "Apri la scheda ACMG a punti per questa variante e questo fenotipo";
+    if (workspace.detail.classificationsLoading) { button.textContent = "Caricamento…"; button.disabled = true; }
+    if (workspace.detail.classificationsError) { button.textContent = "Classifica · ⚠"; button.title = workspace.detail.classificationsError; }
+    if (!contexts.length) { button.disabled = true; button.title = "Contesto gene–malattia non disponibile nell'annotazione"; }
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const cached = workspace.classificationCache?.get(workspace.detail.variant_id);
+        if (cached && Date.now() - cached.createdAt > 25 * 60 * 1000) await this.loadClassifications(workspace, workspace.detail.variant_id);
+        const module = await import("./acmg-classification.js?v=20261112-acmg-cache-1");
+        module.openClassification(this, workspace, gene, association, saved);
+      } catch (error) { button.title = error.message; button.textContent = "Classifica · ⚠"; }
+      finally { button.disabled = false; }
+    });
+    return button;
   }
 
   preserveDetailState(previous, next) {
@@ -2963,6 +3464,7 @@ class VariantBrowser extends HTMLElement {
 
   renderDetail(workspace, section = null) {
     const panel = node("aside", undefined, "detail-panel");
+    panel.id = "variant-detail-panel";
     panel.dataset.variantId = String(workspace.detail.variant_id);
     const heading = node("div", undefined, "detail-heading");
     const close = node("button", "×", "detail-close");
@@ -2985,11 +3487,11 @@ class VariantBrowser extends HTMLElement {
       this.renderWorkspace();
     });
     const headingActions = node("div", undefined, "detail-heading-actions");
-    const calculator = node("button", "Valuta ACMG", "new-acmg-open");
+    const calculator = node("button", "Valuta PVS1", "new-acmg-open");
     calculator.type = "button";
     calculator.disabled = Boolean(workspace.detail.loading || workspace.detail.error);
     calculator.addEventListener("click", async () => {
-      const {openAcmgCalculator} = await import("./acmg-calculator.js");
+      const {openAcmgCalculator} = await import("./acmg-calculator.js?v=20261112-acmg-cache-1");
       openAcmgCalculator(this, workspace);
     });
     const inspect = node("button", "Inspect reads", "igv-open");
@@ -3099,6 +3601,14 @@ class VariantBrowser extends HTMLElement {
       vcepSection.classList.add("vcep-disclosure");
       vcepSection.querySelector("summary strong").after(this.vcepSourceInformation(vcepEvidence));
       panel.append(vcepSection);
+    }
+
+    if (!section || section === "ACMG") {
+      const associations = this.acmgAssociations(workspace);
+      const acmgSection = this.detailDisclosure("ACMG", this.acmgContent(workspace, associations), {open: detail.openSection === "ACMG"});
+      acmgSection.classList.add("acmg-disclosure");
+      acmgSection.querySelector("summary").append(this.acmgClassificationSummary(workspace, associations));
+      panel.append(acmgSection);
     }
 
     if (!section || section === "Gene–phenotype") {
@@ -3735,7 +4245,7 @@ class VariantBrowser extends HTMLElement {
           if (workspace.detail?.clinvar_evidence !== evidence || !disclosure.isConnected) return;
           const page = next;
           if (page.snapshot_id !== evidence.snapshot_id) {
-            await this.loadDetail(workspace, variantId);
+            await this.loadDetail(workspace, variantId, {refresh: true});
             return;
           }
           if (page.submissions_error) throw new Error(page.submissions_error);

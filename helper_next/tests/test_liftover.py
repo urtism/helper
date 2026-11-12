@@ -1,3 +1,5 @@
+import pytest
+
 from helper_variants import liftover
 
 
@@ -46,7 +48,70 @@ def test_projects_exact_grch37_allele_to_grch38_and_caches_it(tmp_path, monkeypa
         "hg19", "1", 12033120, "G", "C", database=database
     )
     assert cached["cache"] == "hit"
+    assert len(calls) == 1
+    assert result['validation']['vcf_conversion'] == 'SPDI_SNV'
+
+
+@pytest.mark.parametrize('position,reference,alternate', [
+    (0, 'A', 'G'), (100, 'T', 'C'), (100, 'C', 'G'),
+])
+def test_contextual_snv_needs_no_second_request(tmp_path, monkeypatch, position, reference, alternate):
+    calls = []
+    def request(path, timeout):
+        calls.append(path)
+        assert path.endswith('all_equivalent_contextual')
+        return {'data': {'spdis': [dict(seq_id='NC_000001.11', position=position,
+                                       deleted_sequence=reference, inserted_sequence=alternate)]}}
+    monkeypatch.setattr(liftover, '_request_json', request)
+    result = liftover.project_variant('GRCh37', '1', 123, 'G', 'T', database=tmp_path / 'projection.sqlite3')
+    assert result['status'] == 'mapped'
+    assert result['target']['position'] == position + 1
+    assert result['target']['reference'] == reference and result['target']['alternate'] == alternate
+    assert result['validation']['vcf_conversion'] == 'SPDI_SNV'
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('source_ref,source_alt,target_ref,target_alt', [
+    ('AT', 'A', 'TT', 'T'), ('A', 'AT', 'T', 'TT'),
+    ('A', 'G', 'T', 'TT'), ('AT', 'GC', 'A', 'C'),
+])
+def test_non_snv_keeps_ncbi_vcf_conversion(tmp_path, monkeypatch, source_ref, source_alt, target_ref, target_alt):
+    calls = []
+    def request(path, timeout):
+        calls.append(path)
+        if path.endswith('all_equivalent_contextual'):
+            return {'data': {'spdis': [dict(seq_id='NC_000001.11', position=100,
+                                           deleted_sequence=target_ref, inserted_sequence=target_alt)]}}
+        assert path.endswith('vcf_fields')
+        return {'data': dict(chrom='NC_000001.11', pos=99, ref=target_ref, alt=target_alt)}
+    monkeypatch.setattr(liftover, '_request_json', request)
+    result = liftover.project_variant('GRCh37', '1', 123, source_ref, source_alt,
+                                     database=tmp_path / 'projection.sqlite3')
+    assert result['status'] == 'mapped' and result['target']['position'] == 99
+    assert result['validation']['vcf_conversion'] == 'NCBI_VCF_FIELDS'
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('change', [
+    {'position': -1}, {'position': '100'}, {'position': True},
+    {'deleted_sequence': 'N'}, {'inserted_sequence': ''},
+    {'inserted_sequence': 'A'}, {'deleted_sequence': 1},
+])
+def test_uncertain_contextual_representation_uses_original_converter(change):
+    spdi = dict(seq_id='NC_000001.11', position=100, deleted_sequence='A', inserted_sequence='G')
+    spdi.update(change)
+    assert liftover._snv_vcf_fields(spdi) is None
+
+
+@pytest.mark.parametrize('targets,status', [([], 'not_mapped'), ([100, 200], 'ambiguous')])
+def test_snv_optimization_preserves_missing_and_ambiguous_projection(tmp_path, monkeypatch, targets, status):
+    def request(path, timeout):
+        assert path.endswith('all_equivalent_contextual')
+        return {'data': {'spdis': [dict(seq_id='NC_000001.11', position=pos,
+                                       deleted_sequence='G', inserted_sequence='T') for pos in targets]}}
+    monkeypatch.setattr(liftover, '_request_json', request)
+    result = liftover.project_variant('GRCh37', '1', 123, 'G', 'T', database=tmp_path / 'projection.sqlite3')
+    assert result['status'] == status and result['target'] is None
 
 
 def test_projects_in_both_directions(tmp_path, monkeypatch):

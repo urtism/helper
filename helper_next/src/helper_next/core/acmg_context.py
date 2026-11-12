@@ -47,7 +47,7 @@ def inheritance_modes(association):
     return sorted(modes)
 
 
-def build(detail):
+def build(detail, *, lookup_gene=None):
     """Immutable, source-linked choices for each exact transcript annotation."""
     annotations = []
     lookups = {}
@@ -57,7 +57,7 @@ def build(detail):
         raw_hgnc = [key for key in raw_genes if key.startswith("HGNC:")]
         lookup_key = (symbol, raw_hgnc[0] if len(raw_hgnc) == 1 else "")
         if lookup_key not in lookups:
-            lookups[lookup_key] = gene_phenotype.query_gene(*lookup_key)
+            lookups[lookup_key] = (lookup_gene or gene_phenotype.query_gene)(*lookup_key)
         knowledge = lookups[lookup_key]
         cache = knowledge.get("cache", {})
         g2p = knowledge.get("g2p_records", [])

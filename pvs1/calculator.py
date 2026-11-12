@@ -1,9 +1,11 @@
-"""Conservative STANDARD PVS1 MVP. No engine, network, sequence fetch or inference.
+"""STANDARD PVS1 prediction policy. No engine, network, sequence fetch or inference.
 
 decision_trace remains the model's list[str]: each string is a JSON requirement
 record, allowing clients to inspect status/value/threshold/source independently.
 Biological assertions are used only with field-specific citations; missing exon
 relevance, LoF tolerance and rescue assertions produce non-blocking warnings.
+Canonical predicted products can activate PVS1; unassessed splice alternatives
+remain explicit non-blocking warnings, without becoming observed RNA evidence.
 """
 import json
 import re
@@ -14,7 +16,7 @@ from helper_next.core.acmg_transcripts import genomic_to_mrna
 
 
 RULESET_ID = "PVS1_GENERAL"
-RULESET_VERSION = "1.1.0"
+RULESET_VERSION = "1.3.0"
 _REQUIREMENTS = (
     ("policy", "Policy STANDARD", "STEP1"),
     ("input", "Validità strutturale dell'input PVS1", "STEP2"),
@@ -27,7 +29,7 @@ _REQUIREMENTS = (
     ("tolerance", "Esone non tollerante a LoF frequenti", "P07/P12–P13"),
     ("rescue", "Assenza documentata di rescue funzionale", "P10/P37–P38"),
     ("splice_basis", "Base dell'evidenza splice", "P15/P34–P35"),
-    ("splice_scenarios", "Scenari splice alternativi e motivi atipici", "P15/P36"),
+    ("splice_scenarios", "Scenari splice alternativi e motivi atipici (non bloccanti per predizioni canoniche)", "P15/P36"),
     ("rna_quality", "Adeguatezza e completezza dell'evidenza RNA", "P40–P45"),
     ("product", "Prodotto molecolare e PTC determinati", "P08/P16–P18"),
     ("nmd", "Predizione NMD secondo il modello generale", "P08–P10"),
@@ -43,7 +45,7 @@ def _refs(block, *fields):
 def calculate_pvs1(input, policy="STANDARD") -> PVS1Result:
     """Evaluate only documented, unambiguous branches of STEP0's general model.
 
-    RNA assay weighting, alternative splice scenarios, inferred mechanisms,
+    RNA assay weighting, alternative splice scenarios, conflicting mechanisms,
     multiple products, start-loss and CNV remain explicit unevaluated checks.
     Neither a missing fact nor a negative NMD prediction excludes PVS1 by itself.
     """
@@ -92,21 +94,33 @@ def calculate_pvs1(input, policy="STANDARD") -> PVS1Result:
         unknown("context", "Mancano associazione gene–malattia, ereditarietà o ambito disease-specific documentati.",
                 {k: context.get(k) for k in ("gene", "disease", "inheritance", "scope")}, _refs(context, "scope", "disease", "inheritance"))
     mechanism, confidence = context.get("molecular_mechanism"), context.get("confidence")
-    mechanism_ready = bool(context_ready and confidence == "DEFINITIVE" and _refs(context, "molecular_mechanism")
-                           and _refs(context, "confidence"))
+    mechanism_scope = context.get("mechanism_scope") or context.get("scope")
+    inferred_lof = mechanism == "LoF" and confidence == "INFERRED"
+    accepted_mechanism = ((confidence == "DEFINITIVE" and mechanism_scope == "DISEASE_SPECIFIC")
+                          or (inferred_lof and mechanism_scope in {"DISEASE_SPECIFIC", "GENE_LEVEL"}))
+    mechanism_ready = bool(context_ready and accepted_mechanism and _refs(context, "molecular_mechanism")
+                           and _refs(context, "confidence")
+                           and (not context.get("mechanism_scope") or _refs(context, "mechanism_scope")))
     if mechanism_ready and mechanism in ("GoF", "DN", "OTHER"):
         record("mechanism", "FAIL", mechanism, _refs(context, "molecular_mechanism", "confidence"),
                "Il meccanismo documentato in questo contesto non è LoF.")
         return finish("INACTIVE", "PVS1 non applicabile al meccanismo documentato.")
     if mechanism_ready and mechanism == "LoF":
-        record("mechanism", "PASS", {"mechanism": mechanism, "confidence": confidence},
-               _refs(context, "molecular_mechanism", "confidence"), "Curazione esplicita; nessuna inferenza da validità del gene o VEP.")
-    elif mechanism == "LoF" and confidence in ("INFERRED", "DISPUTED"):
+        reason = ("LoF inferito accettato dalla policy predittiva; ambito e fonti conservati."
+                  if inferred_lof else "Curazione esplicita; nessuna inferenza da validità del gene o VEP.")
+        record("mechanism", "PASS", {"mechanism": mechanism, "confidence": confidence, "scope": mechanism_scope},
+               _refs(context, "molecular_mechanism", "confidence", "mechanism_scope"), reason)
+        if inferred_lof:
+            warnings.append("Meccanismo LoF inferito, accettato dalla policy predittiva: "
+                            + ("evidenza riferita al gene, non dimostrazione del meccanismo per la malattia selezionata."
+                               if mechanism_scope == "GENE_LEVEL" else "meccanismo non dimostrato direttamente.")
+                            + " Fonti conservate nella traccia del meccanismo.")
+    elif confidence == "DISPUTED":
         record("mechanism", "NOT_EVALUATED", {"mechanism": mechanism, "confidence": confidence},
-               _refs(context, "molecular_mechanism", "confidence"), "Riduzioni P02–P05 non implementate per questo contesto.")
-        review.append("Meccanismo inferito/disputato: serve revisione, senza strength STANDARD automatica.")
+               _refs(context, "molecular_mechanism", "confidence"), "Meccanismo o associazione contestati: revisione richiesta.")
+        review.append("Meccanismo o associazione discordanti/disputati: serve revisione, senza strength STANDARD automatica.")
     else:
-        unknown("mechanism", "Meccanismo LoF disease-specific definitivo e relative fonti non disponibili.",
+        unknown("mechanism", "Meccanismo LoF provato o inferito e relative fonti non disponibili per il contesto selezionato.",
                 {"mechanism": mechanism, "confidence": confidence}, _refs(context, "molecular_mechanism", "confidence"))
 
     terms = set(variant["consequence"].replace(",", "&").split("&"))
@@ -121,9 +135,9 @@ def calculate_pvs1(input, policy="STANDARD") -> PVS1Result:
         return finish("NOT_EVALUABLE", "Start-loss, CNV e conseguenze non univoche non sono implementati nel MVP.")
     record("consequence", "PASS", kind, _refs(variant, "consequence"))
     if conditional_splice:
-        reason = "Prodotto codificante condizionale sullo splicing reference: conseguenza splice concomitante da valutare prima di applicare PVS1."
-        review.append(reason)
-        warnings.append(reason)
+        warnings.append("Prodotto codificante condizionale sullo splicing reference: la conseguenza splice concomitante può modificare il prodotto predetto; PVS1 è riferito allo scenario calcolato.")
+        if any(product.get("basis") != "PREDICTED" for product in (effect.get("products") or [])):
+            review.append("Conseguenza splice concomitante: revisione del prodotto non predetto richiesta.")
     if re.fullmatch(r".+\.[0-9]+", tx.get("accession") or "") and _refs(tx, "accession"):
         record("transcript", "PASS", tx["accession"], _refs(tx, "accession"))
     else:
@@ -170,13 +184,20 @@ def calculate_pvs1(input, policy="STANDARD") -> PVS1Result:
             record("splice_basis", "PASS", basis, event_sources, "L'evento conserva la propria base; il calcolo non conferma un esperimento.")
         if basis == "PREDICTED":
             offset, site = effect.get("splice_site_offset"), effect.get("splice_site_type")
-            canonical = site in ("DONOR", "ACCEPTOR") and offset in (-2, -1, 1, 2)
+            canonical = ((site == "DONOR" and offset in (1, 2) and effect.get("native_splice_motif") == "GT")
+                         or (site == "ACCEPTOR" and offset in (-2, -1) and effect.get("native_splice_motif") == "AG"))
+            canonical = canonical and all(_refs(effect, key) for key in
+                                          ("splice_site_type", "splice_site_offset", "native_splice_motif"))
             if not canonical:
                 unknown("splice_scenarios", "Predizione splice non canonica o canonicità non documentata: PVS1 predittivo non assegnabile (P34).")
             else:
                 record("splice_scenarios", "NOT_EVALUATED", {"offset": offset, "motif": effect.get("native_splice_motif")},
-                       _refs(effect, "splice_site_offset", "native_splice_motif"), "Valutazione degli scenari alternativi e motivi atipici non implementata.")
-                review.append("Splice predetta canonica: revisione degli scenari alternativi richiesta (P15/P36).")
+                       _refs(effect, "splice_site_offset", "native_splice_motif"),
+                       "PVS1 valutato sul prodotto predetto; scenari alternativi e motivi atipici non valutati, non bloccanti nella policy predittiva.")
+                alternatives = ("Exon skipping e altri prodotti alternativi" if product.get("event_type") == "CRYPTIC_SITE"
+                                else "Siti criptici, ritenzione intronica e splicing residuo")
+                warnings.append("PVS1 basato su un prodotto splice PREDICTED, non su RNA osservato. "
+                                + alternatives + " non valutati; strength riferita allo scenario predetto.")
             record("rna_quality", "NOT_APPLICABLE", reason="Il prodotto è predetto, non un'evidenza RNA osservata.")
         elif basis == "OBSERVED":
             record("splice_scenarios", "NOT_APPLICABLE", reason="Si esamina il prodotto RNA descritto, senza inventare altri eventi.")
@@ -266,7 +287,7 @@ def calculate_pvs1(input, policy="STANDARD") -> PVS1Result:
         if critical is True and _refs(product, "lost_region_critical") and product.get("functional_evidence"):
             strength = "STRONG"
             record("region", "PASS", {"critical": True}, _refs(product, "lost_region_critical"), "Regione documentata critica; nessuna inferenza da dominio annotato.")
-            if splice:
+            if splice and basis != "PREDICTED":
                 review.append("Regione critica splice: valutazione P39 e contesto RNA non implementati integralmente.")
         else:
             region, cds = product.get("lost_protein_region"), tx.get("cds_interval")
@@ -288,4 +309,6 @@ def calculate_pvs1(input, policy="STANDARD") -> PVS1Result:
         return finish("NOT_EVALUABLE", "; ".join(dict.fromkeys(missing + review)))
     if review or strength is None:
         return finish("REQUIRES_REVIEW", "; ".join(review) or "Ramo scientifico non completamente valutato dal MVP.")
+    if (splice and basis == "PREDICTED") or conditional_splice:
+        return finish("ACTIVE", "PVS1 applicato sul prodotto predetto; strength riferita allo scenario e al contesto selezionati. Consultare i warning per le alternative splice e i controlli biologici non documentati.", strength)
     return finish("ACTIVE", "Prerequisiti obbligatori e ramo generale soddisfatti; strength assegnata al solo criterio PVS1. Consultare i warning per i controlli biologici non documentati.", strength)

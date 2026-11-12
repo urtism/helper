@@ -184,9 +184,15 @@ def _retrieve(source_build, target_build, chromosome, position, reference, alter
         match["seq_id"], match["position"], match["deleted_sequence"],
         match["inserted_sequence"],
     )
-    converted = _request_json(
-        "/spdi/{}/vcf_fields".format(quote(target_spdi, safe="")), timeout
-    ).get("data") or {}
+    # A contextual SNV already contains the complete VCF allele: SPDI uses
+    # zero-based coordinates, VCF one-based. It cannot need an anchor or shifting.
+    # Keep NCBI's VCF conversion for indels and every non-simple representation.
+    converted = _snv_vcf_fields(match) if len(reference) == len(alternate) == 1 else None
+    conversion = "SPDI_SNV" if converted is not None else "NCBI_VCF_FIELDS"
+    if converted is None:
+        converted = _request_json(
+            "/spdi/{}/vcf_fields".format(quote(target_spdi, safe="")), timeout
+        ).get("data") or {}
     if converted.get("chrom") != target_accession:
         raise LiftoverError("NCBI returned VCF fields for an unexpected target accession")
     target = _locus(
@@ -199,8 +205,19 @@ def _retrieve(source_build, target_build, chromosome, position, reference, alter
         validation={
             "status": "contextual_allele", "reference_match": None,
             "label": "Allele projected and normalized by NCBI Variation Services",
+            "vcf_conversion": conversion,
         },
     )
+
+
+def _snv_vcf_fields(spdi):
+    reference, alternate = spdi.get("deleted_sequence"), spdi.get("inserted_sequence")
+    position = spdi.get("position")
+    if (not isinstance(position, int) or isinstance(position, bool) or position < 0
+            or reference not in ("A", "C", "G", "T")
+            or alternate not in ("A", "C", "G", "T") or reference == alternate):
+        return None
+    return dict(chrom=spdi["seq_id"], pos=position + 1, ref=reference, alt=alternate)
 
 
 def _request_json(path, timeout):

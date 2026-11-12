@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from helper_next.core import acmg_reference
+from helper_next.core import acmg_reference, acmg_automatic_store
 from helper_prioritization import RULESET_VERSION
 from helper_variants import clinvar_local, clingen_vcep_local, gene_phenotype, gnomad_frequency, liftover
 
@@ -41,6 +41,7 @@ def detail_etag(database, record, identity, sample_id, variant_id, *, compact=Fa
     # Freshness labels may change with time even without a database write.
     token = dict(format="helper-detail-revision-1", files=[file_revision(path) for path in paths],
                  record=record, reference_config=config, ruleset=RULESET_VERSION,
+                 interpretations=acmg_automatic_store.user_revision((record or {}).get("run_dir")),
                  sample=sample_id, variant=variant_id, compact=compact,
                  limit=submissions_limit, offset=submissions_offset, scoring_version=scoring_version,
                  freshness_window=int(time.time() // 60))

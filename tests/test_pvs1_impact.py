@@ -1,6 +1,8 @@
 """Synthetic allele/reference fixtures; expected metrics use explicit arithmetic."""
 import copy
 import json
+import shutil
+import subprocess
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -16,6 +18,15 @@ from pvs1.models import PVS1Input
 
 GENE = "ENSG00000000001"
 TX = "ENST00000000001.1"
+
+
+@pytest.fixture(autouse=True)
+def isolated_molecular_cache(monkeypatch, tmp_path):
+    from collections import OrderedDict
+    from helper_next.core import acmg_molecular_impact as core
+    monkeypatch.setattr(core, "_MOLECULAR_CACHE", OrderedDict())
+    monkeypatch.setattr(core, "_MOLECULAR_CACHE_BYTES", 0)
+    monkeypatch.setenv("HELPER_VEP_CACHE", str(tmp_path / "vep"))
 
 
 def reference(cds="ATGAAACTAAAGCAATAA", utr="CCC", strand="+", first_exon=None, tx=TX):
@@ -87,6 +98,21 @@ def test_stop_gain_eighty_percent_is_not_physical_deletion():
     assert row["reference_amino_acids_lost"] == 400
     assert row["reference_cds_untranslated_percent"] == row["protein_impact_percent"] == 80
     assert row["physical_cds_deleted_percent"] == 0 and row["nmd_predicted"] is True
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_multicodon_stop_gain_retains_preceding_amino_acid_changes(strand):
+    ref, _ = reference(cds="ATG" + "CAA" * 4 + "TAA", strand=strand)
+    positions = [mrna_to_genomic(ref["exons"], strand, ref["cds_start"] + offset) for offset in (3, 6)]
+    variant = {"assembly": "GRCh38", "contig": "1", "position": min(positions),
+               "reference_allele": "CAAC" if strand == "+" else complement("CAAC"),
+               "alternate_allele": "GAAT" if strand == "+" else complement("GAAT"),
+               "coordinate_system": "genomic_1_based"}
+    row = molecular_impact(variant, GENE, TX, ref, "stop_gained")
+    assert row["status"] == "AFFECTED_CODING"
+    assert row["calculation"]["translation"]["protein"] == "ME"
+    assert row["termination_codon"] == 3
+    assert row["product_resolution"] == {"status": "DETERMINED", "method": "CODON_VERIFICATION", "reason_codes": []}
 
 
 def test_terminal_stop_gain_has_no_nmd():
@@ -172,12 +198,19 @@ def test_partial_cds_or_wrong_alleles_never_produce_metrics():
         assert row["status"] == "INSUFFICIENT_DATA" and row["pvs1_input"] is None
 
 
-def test_mixed_splice_frameshift_is_computed_but_pvs1_requires_review():
+@pytest.mark.parametrize("basis", ["PREDICTED", "OBSERVED"])
+def test_mixed_splice_frameshift_applies_pvs1_to_the_predicted_product(basis):
     ref, _ = reference(cds="ATGAAACTAAAGCAA" + "CAA" * 40 + "TAA", first_exon=100)
     row = molecular_impact(allele(ref, delete=True), GENE, TX, ref, "frameshift_variant&splice_region_variant")
     assert row["status"] == "AFFECTED_CODING" and row["conditional"]
+    product = row["pvs1_input"]["molecular_effect"]["products"][0]
+    product["basis"] = basis
+    product["source_refs"]["basis"] = ["synthetic:" + basis]
     result = decision(allele(ref, delete=True), row, "frameshift_variant&splice_region_variant")
-    assert result.status == "REQUIRES_REVIEW" and result.applied_strength is None
+    if basis == "PREDICTED":
+        assert result.status == "ACTIVE" and result.applied_strength == "VERY_STRONG"
+    else:
+        assert result.status == "REQUIRES_REVIEW" and result.applied_strength is None
     assert any("condizionale" in m for m in result.warnings)
 
 
@@ -210,6 +243,139 @@ def annotation(tx=TX, consequence="stop_gained", identifier=1):
     return {"id": identifier, "gene": "SYNTHETIC", "transcript": tx, "consequence": consequence,
             "release_key": "synthetic-116", "metadata": {"fields": {"Gene": GENE, "BIOTYPE": "protein_coding"}},
             "release_resources": {"header_metadata": ['##VEP="v116" ensembl=116.1']}}
+
+
+def write_vep_cache(root, ref):
+    """A real compressed Storable region, with small synthetic Ensembl data."""
+    if not shutil.which("perl"):
+        pytest.skip("Offline VEP extraction requires Perl standard modules")
+    directory = root / "homo_sapiens_merged" / "116_GRCh38"
+    region = directory / "1" / "1-1000000.gz"
+    region.parent.mkdir(parents=True, exist_ok=True)
+    (directory / "info.txt").write_text("assembly\tGRCh38\nspecies\thomo_sapiens\n")
+    record = dict(stable_id=ref["transcript"]["accession"], version=int(ref["transcript"]["version"]),
+                  _gene_stable_id=GENE, _source_cache="Ensembl", biotype="protein_coding", is_canonical=1,
+                  strand=1 if ref["strand"] == "+" else -1,
+                  slice=dict(start=1, strand=1, seq_region_name="1"),
+                  cdna_coding_start=ref["cds_start"], cdna_coding_end=ref["cds_end"],
+                  translation=dict(stable_id=ref["protein_accession"], version=1),
+                  _variation_effect_feature_cache=dict(
+                      translateable_seq=ref["cds"], peptide=ref["protein"], codon_table=1,
+                      five_prime_utr=dict(primary_seq=dict(seq=ref["cdna"][:ref["cds_start"] - 1])),
+                      three_prime_utr=dict(primary_seq=dict(seq=ref["cdna"][ref["cds_end"]:])),
+                      sorted_exons=[dict(stable_id=e["exon_id"], start=e["genomic_start"], end=e["genomic_end"],
+                                         strand=1 if ref["strand"] == "+" else -1) for e in ref["exons"]]))
+    writer = ('use Storable qw(nfreeze); use IO::Compress::Gzip qw(gzip); use JSON::PP; '
+              'local $/; my $bytes="pst0".nfreeze(decode_json(<STDIN>)); '
+              'gzip(\\$bytes => $ARGV[0]) or die "Cannot write test cache";')
+    subprocess.run(["perl", "-e", writer, str(region)], input=json.dumps({"1": [record]}),
+                   text=True, capture_output=True, check=True, timeout=10)
+    return region
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_exact_offline_vep_reference_reconstructs_both_strands(tmp_path, monkeypatch, strand):
+    from helper_next.core import acmg_vep_reference as local
+    from unittest.mock import patch
+    ref, _ = reference(strand=strand, first_exon=12)
+    root = tmp_path / "vep"
+    write_vep_cache(root, ref)
+    variant = dict(allele(ref, delete=True), contig="chr1")
+    with patch.object(local.subprocess, "run", wraps=subprocess.run) as extraction:
+        source = local.local_transcript_reference(variant, GENE, TX, "116")
+        assert source["status"] == "CACHED"
+        recovered = source["data"]
+        for key in ("cdna", "cds", "protein", "exons", "cds_start", "cds_end", "strand"):
+            assert recovered[key] == ref[key]
+        assert recovered["reference_origin"] == "LOCAL_VEP_CACHE"
+        row = molecular_impact(variant, GENE, TX, recovered, "frameshift_variant")
+        assert row["product_resolution"]["status"] == "DETERMINED"
+        assert row["termination_codon"] == 3
+        recovered["exons"][0]["genomic_start"] = -1
+        second = local.local_transcript_reference(variant, GENE, TX, "116")
+        assert second["data"]["exons"] == ref["exons"]
+        assert extraction.call_count == 1
+
+
+def test_local_vep_product_reaches_api_without_remote_fetch(tmp_path, monkeypatch):
+    from helper_next.api import acmg_calculator as api
+    ref, raw = reference()
+    write_vep_cache(tmp_path / "vep", ref)
+    manager, calls, _ = sources(tmp_path, [raw])
+    monkeypatch.setenv("HELPER_TRANSCRIPT_FETCH", "0")
+    selected = annotation(consequence="frameshift_variant")
+    detail = detail_for(dict(allele(ref, delete=True), contig="chr1"), [selected])
+    monkeypatch.setattr(api, "_selected_annotation", lambda _: (detail, selected))
+    monkeypatch.setattr(api, "analyze_transcripts", lambda d, a, **kwargs: analyze_transcripts(d, a, manager, **kwargs))
+    response = api.evaluate_pvs1({"policy": "STANDARD"})
+    assert calls == []
+    assert response["molecular_origin"] == "TRANSCRIPT_MOLECULAR_ANALYSIS"
+    assert len(response["input"]["molecular_effect"]["products"]) == 1
+    assert not any("Manca un prodotto" in message for message in response["result"]["missing_data"])
+    assert response["molecular_impact"]["transcripts"][0]["provenance"]["reference_origin"] == "LOCAL_VEP_CACHE"
+
+
+@pytest.mark.parametrize("change, status", [
+    ({"gene": "ENSG00000000002"}, "ERROR"),
+    ({"transcript": TX.replace(".1", ".2")}, "ERROR"),
+    ({"release": "115"}, "NOT_AVAILABLE"),
+    ({"assembly": "GRCh37"}, "NOT_AVAILABLE"),
+    ({"contig": "chr2"}, "NOT_AVAILABLE"),
+])
+def test_local_vep_never_substitutes_identity_or_release(tmp_path, change, status):
+    from helper_next.core.acmg_vep_reference import local_transcript_reference
+    ref, _ = reference()
+    write_vep_cache(tmp_path / "vep", ref)
+    variant = allele(ref)
+    args = dict(gene=GENE, transcript=TX, release="116")
+    for key, value in change.items():
+        (variant if key in variant else args)[key] = value
+    source = local_transcript_reference(variant, **args)
+    assert source["status"] == status and source["data"] is None
+
+
+def test_local_vep_cache_change_invalidates_qualified_reference(tmp_path):
+    from helper_next.core.acmg_vep_reference import local_transcript_reference
+    ref, _ = reference()
+    root = tmp_path / "vep"
+    region = write_vep_cache(root, ref)
+    assert local_transcript_reference(allele(ref), GENE, TX, "116")["status"] == "CACHED"
+    # Same accession and release, but corrupted sequence: cannot reuse old facts.
+    ref["cds"] = "CCC" + ref["cds"][3:]
+    write_vep_cache(root, ref)
+    source = local_transcript_reference(allele(ref), GENE, TX, "116")
+    assert source["status"] == "ERROR" and source["data"] is None
+    assert "CDS/translation disagreement" in source["missing"]
+    region.write_bytes(b"broken gzip")
+    assert local_transcript_reference(allele(ref), GENE, TX, "116")["status"] == "ERROR"
+
+
+@pytest.mark.parametrize("consequence", ["stop_gained", "frameshift_variant"])
+def test_primary_chromosome_aliases_keep_molecular_identity_checks(consequence):
+    ref, _ = reference()
+    variant = dict(allele(ref, delete=consequence == "frameshift_variant"), contig="chr1")
+    assert molecular_impact(variant, GENE, TX, ref, consequence)["pvs1_input"]
+    for contig in ("chr2", "chr1_random"):
+        assert molecular_impact(dict(variant, contig=contig), GENE, TX, ref, consequence)["pvs1_input"] is None
+
+
+@pytest.mark.parametrize("verified", [True, False])
+def test_api_requirement_explains_why_the_product_is_unavailable(monkeypatch, verified):
+    from helper_next.api import acmg_calculator as api
+    ref, _ = reference()
+    selected = annotation()
+    detail = detail_for(allele(ref), [selected])
+    row = molecular_impact(allele(ref), GENE, TX, None, "stop_gained")
+    row.update(selected=True)
+    row["missing_data"].append("Configured release is unavailable on this Ensembl host")
+    impact = dict(transcripts=[row], release_verified=verified, warnings=[])
+    monkeypatch.setattr(api, "_selected_annotation", lambda _: (detail, selected))
+    monkeypatch.setattr(api, "analyze_transcripts", lambda *a, **kw: impact)
+    response = api.evaluate_pvs1({})
+    requirement = next(json.loads(raw) for raw in response["result"]["decision_trace"] if json.loads(raw)["id"] == "product")
+    assert "Configured release is unavailable" in requirement["reason"]
+    assert requirement["value"]["reason_codes"] == ["REFERENCE_UNAVAILABLE"]
+    assert ("Release dell'annotazione non verificata" in requirement["reason"]) is not verified
 
 
 def sources(tmp_path, raws, extra=None):
@@ -273,6 +439,97 @@ def test_gene_catalog_fills_in_missing_vep_with_independent_consequences_and_cac
     detail["alternate"] = "G"
     analyze_transcripts(detail, selected, manager)
     assert len(calls) == count
+
+
+def test_selected_transcript_is_direct_and_reused_by_gene_comparison(tmp_path, monkeypatch):
+    from unittest.mock import patch
+    from helper_next.core import acmg_molecular_impact as core
+    monkeypatch.setenv("HELPER_TRANSCRIPT_FETCH", "1")
+    ref, raw = reference(cds="ATG" + "CAA" * 4 + "TAA")
+    raw["lookup"]["MANE"] = [{"type": "MANE_Select"}]
+    _, other = reference(tx="ENST00000000002.1")
+    manager, calls, _ = sources(tmp_path, [raw, other])
+    selected = annotation()
+    detail = detail_for(allele(ref, 4), [selected])
+    with patch.object(core, "molecular_impact", wraps=molecular_impact) as reconstruct:
+        first = analyze_transcripts(detail, selected, manager, selected_only=True)
+        assert first["scope"] == "SELECTED" and len(first["transcripts"]) == 1
+        assert first["transcripts"][0]["mane"] == "SELECT"
+        assert not any("/lookup/id/" + GENE in url for url in calls)
+        assert reconstruct.call_count == 1
+        # Simulate API projection and caller mutation: cached technical input
+        # must still be intact for the next disease-context evaluation.
+        first["transcripts"][0].pop("pvs1_input")
+        first["transcripts"][0]["warnings"].append("caller mutation")
+        second = analyze_transcripts(detail, selected, manager, selected_only=True)
+        assert reconstruct.call_count == 1
+        assert second["transcripts"][0]["pvs1_input"]
+        assert "caller mutation" not in second["transcripts"][0]["warnings"]
+        comparison = analyze_transcripts(detail, selected, manager)
+        assert comparison["scope"] == "GENE" and len(comparison["transcripts"]) == 2
+        assert reconstruct.call_count == 2  # Only the additional transcript.
+
+
+def test_molecular_cache_rejects_changed_allele_reference_and_annotation(monkeypatch):
+    from unittest.mock import patch
+    from helper_next.core import acmg_molecular_impact as core
+    ref, _ = reference(cds="ATG" + "CAA" * 4 + "TAA")
+    variant = allele(ref, 4)
+    selected = annotation()
+    with patch.object(core, "molecular_impact", wraps=molecular_impact) as reconstruct:
+        row = core._molecular_result(variant, GENE, TX, ref, "stop_gained", selected)
+        assert row["status"] == "AFFECTED_CODING"
+        changed = dict(variant, alternate_allele="G")
+        assert core._molecular_result(changed, GENE, TX, ref, "stop_gained", selected)["pvs1_input"] is None
+        revised = copy.deepcopy(ref)
+        revised["cdna"] = "A" + revised["cdna"][1:]  # Same artifact label; distinct sequence.
+        core._molecular_result(variant, GENE, TX, revised, "stop_gained", selected)
+        selected["hgvsp"] = "p.Gln3Ter"
+        assert core._molecular_result(variant, GENE, TX, ref, "stop_gained", selected)["pvs1_input"] is None
+        assert reconstruct.call_count == 4
+        selected.pop("hgvsp")
+        assert core._molecular_result(variant, GENE, TX, ref, "stop_gained", selected)["pvs1_input"]
+        assert reconstruct.call_count == 4
+    # An offline miss does not poison a later reference acquisition.
+    assert core._molecular_result(variant, GENE, TX, None, "stop_gained", selected)["status"] == "INSUFFICIENT_DATA"
+    assert core._molecular_result(variant, GENE, TX, ref, "stop_gained", selected)["pvs1_input"]
+
+
+@pytest.mark.parametrize("consequence,code", [
+    ("splice_donor_variant", "SPLICE_EVENT_REQUIRED"),
+    ("start_lost", "INITIATION_UNRESOLVED"),
+    ("stop_lost", "TERMINATION_UNRESOLVED"),
+])
+def test_unresolved_products_identify_the_missing_evidence(consequence, code):
+    ref, _ = reference(cds="ATG" + "CAA" * 4 + "TAA", first_exon=9)
+    variant = allele(ref, 1 if consequence == "start_lost" else 16 if consequence == "stop_lost" else 4)
+    if consequence == "stop_lost":
+        variant["alternate_allele"] = "C"
+    if consequence.startswith("splice_"):
+        variant.update(position=ref["exons"][0]["genomic_end"] + 1, reference_allele="G", alternate_allele="A")
+    row = molecular_impact(variant, GENE, TX, ref, consequence)
+    assert row["product_resolution"]["status"] == "UNRESOLVED"
+    assert code in row["product_resolution"]["reason_codes"]
+    assert row["missing_data"] and row["pvs1_input"] is None
+
+
+def test_synonymous_coding_sequence_does_not_resolve_a_splice_effect():
+    ref, _ = reference(cds="ATG" + "CAA" * 4 + "TAA")
+    variant = dict(allele(ref, 6), alternate_allele="G")  # CAA -> CAG.
+    row = molecular_impact(variant, GENE, TX, ref, "synonymous_variant&splice_region_variant")
+    assert row["product_resolution"]["status"] == "UNRESOLVED"
+    assert row["product_resolution"]["reason_codes"] == ["SPLICE_EVENT_REQUIRED"]
+    assert row["missing_data"] and row["pvs1_input"] is None
+
+
+def test_selected_unversioned_transcript_uses_the_pinned_catalog(tmp_path):
+    ref, raw = reference(cds="ATG" + "CAA" * 4 + "TAA")
+    manager, calls, _ = sources(tmp_path, [raw])
+    selected = annotation(tx=TX.split(".")[0])
+    result = analyze_transcripts(detail_for(allele(ref, 4), [selected]), selected, manager, selected_only=True)
+    assert len(result["transcripts"]) == 1 and result["transcripts"][0]["transcript"] == TX
+    assert result["transcripts"][0]["pvs1_input"]
+    assert any("/lookup/id/" + GENE in url for url in calls)
 
 
 def test_catalog_not_affected_and_partial_cds_rows_remain_visible(tmp_path, monkeypatch):
@@ -348,7 +605,7 @@ def test_api_molecular_analysis_survives_missing_disease_mechanism(tmp_path, mon
     monkeypatch.setattr(api, "_entry", lambda _: {})
     monkeypatch.setattr(api, "_entry_database", lambda _: "synthetic")
     monkeypatch.setattr(api.query, "variant_detail", lambda *args: detail)
-    monkeypatch.setattr(api, "analyze_transcripts", lambda d, a: analyze_transcripts(d, a, manager))
+    monkeypatch.setattr(api, "analyze_transcripts", lambda d, a, **kwargs: analyze_transcripts(d, a, manager, **kwargs))
     response = api.evaluate_pvs1({"run_id": "synthetic", "sample_id": 1, "variant_id": 1, "annotation_id": 1, "transcript": TX})
     assert response["result"]["status"] == "NOT_EVALUABLE"  # No LoF context.
     assert response["molecular_impact"]["transcripts"][0]["protein_impact_percent"] == 80
@@ -396,12 +653,16 @@ def test_api_never_selects_the_strongest_transcript(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "_entry", lambda _: {})
     monkeypatch.setattr(api, "_entry_database", lambda _: "synthetic")
     monkeypatch.setattr(api.query, "variant_detail", lambda *args: detail)
-    monkeypatch.setattr(api, "analyze_transcripts", lambda d, a: analyze_transcripts(d, a, manager))
-    monkeypatch.setattr(api, "prepare_pvs1_input", lambda *args: (sample, "TRANSCRIPT_CACHE", []))
+    monkeypatch.setattr(api, "analyze_transcripts", lambda d, a, **kwargs: analyze_transcripts(d, a, manager, **kwargs))
+    monkeypatch.setattr(api, "prepare_pvs1_input", lambda *args: (sample, "TRANSCRIPT_CACHE", [], None))
     response = api.evaluate_pvs1({"run_id": "synthetic", "sample_id": 1, "variant_id": 1, "annotation_id": 1, "transcript": TX})
-    rows = response["molecular_impact"]["transcripts"]
+    assert len(response["molecular_impact"]["transcripts"]) == 1
+    assert response["molecular_impact"]["transcripts"][0]["nmd_predicted"] is False
+    comparison = api.evaluate_molecular_impact({"run_id": "synthetic", "sample_id": 1, "variant_id": 1, "annotation_id": 1, "transcript": TX})
+    rows = comparison["transcripts"]
     assert rows[0]["nmd_predicted"] is False and rows[1]["nmd_predicted"] is True
+    assert all("pvs1_input" not in row for row in rows)
     assert response["input"]["transcript"]["accession"] == TX
     assert response["result"]["applied_strength"] == "STRONG"
-    assert response["result"]["ruleset_version"] == "1.1.0"
+    assert response["result"]["ruleset_version"] == "1.3.0"
     assert sum("Dato opzionale" in warning for warning in response["result"]["warnings"]) == 3

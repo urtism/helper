@@ -13,12 +13,15 @@ from helper_next.api.pipelines import router as pipelines_router
 from helper_next.api.samplesheet import router as samplesheet_router
 from helper_next.api.tools import router as tools_router
 from helper_next.api.variants import router as variants_router
+from helper_next.api.variants import recover_run_priority_preparations
 from helper_next.api.acmg_calculator import router as acmg_calculator_router
 from helper_next.api.acmg_mechanisms import router as acmg_mechanisms_router
 from helper_next.core.panels import load_panel_registry
 from helper_next.core.project import get_project_paths, list_named_files
 from helper_next.core.data_source_checks import periodic_checks
 import helper_variants
+from helper_variants import run_evidence
+import threading
 
 
 def create_app():
@@ -27,9 +30,13 @@ def create_app():
     @app.on_event("startup")
     async def start_release_checks():
         app.state.clinvar_checks = asyncio.create_task(periodic_checks())
+        run_evidence.resume()
+        threading.Thread(target=recover_run_priority_preparations, daemon=True,
+                         name='recover-run-priority').start()
 
     @app.on_event("shutdown")
     async def stop_release_checks():
+        run_evidence.stop()
         task = app.state.clinvar_checks
         task.cancel()
         with suppress(asyncio.CancelledError):

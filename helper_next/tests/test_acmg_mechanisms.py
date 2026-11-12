@@ -345,6 +345,41 @@ def test_real_index_accessor_reuses_current_formats_and_independent_g2p(tmp_path
     assert result.direct_evidence[0].source_dataset_version is None
 
 
+@pytest.mark.parametrize("ambiguous,requested_gene,symbol,qualified", [
+    (False, "HGNC:1", "GENE_X", True), (True, "HGNC:1", "GENE_X", False),
+    (False, "HGNC:2", "GENE_X", False), (False, "HGNC:1", "WRONG_SYMBOL", False),
+])
+def test_local_hi_and_pli_mapping_requires_a_unique_curated_symbol(tmp_path, ambiguous, requested_gene, symbol, qualified):
+    from helper_next.core.acmg_mechanism_assessment import assess
+    database = tmp_path / "gene.sqlite"
+    rows = ("g2p id,gene symbol,hgnc id,disease name,disease MONDO,allelic requirement,confidence,molecular mechanism\n"
+            "G2P-1,GENE_X,HGNC:1,Synthetic,MONDO:1,monoallelic_autosomal,strong,unknown\n")
+    if ambiguous:
+        rows += "G2P-2,GENE_X,HGNC:2,Synthetic,MONDO:1,monoallelic_autosomal,strong,unknown\n"
+    dosage = "#Gene Symbol\tGene ID\tHaploinsufficiency Score\tTriplosensitivity Score\nGENE_X\t123\t3\t0\n"
+    gene_phenotype.build_cache(io.StringIO(HEADER), database, g2p_stream=io.StringIO(rows), dosage_stream=io.StringIO(dosage))
+    with sqlite3.connect(database) as db:
+        db.execute("INSERT INTO gnomad_constraints (gene_symbol,gene_id,transcript_id,available,pli,updated_at,source_url) "
+                   "VALUES (?,?,?,?,?,?,?)", ("GENE_X", "ENSG000001", "ENST000001", 1, 0.99, STAMP, "https://example.test/gene"))
+    sources = SourceManager(gene_database=database, mechanism_fetch=False)
+    cache = MechanismEvidenceCache(sources, tmp_path / "mechanism.sqlite")
+    result = cache.resolve_gene_disease_mechanism(requested_gene, "MONDO:1", "AD", symbol=symbol)
+    assessment = assess(result)
+    assert (assessment.mechanism == "LOSS_OF_FUNCTION") is qualified
+    assert assessment.mechanism_confidence == ("INFERRED" if qualified else "UNKNOWN")
+    assert bool(assessment.gene_level_indicators) == (symbol == "GENE_X")
+    for evidence in assessment.contextual_evidence:
+        assert (evidence.gene_id == requested_gene) is qualified
+        assert evidence.raw_assertion["gene_id"] in {"123", "ENSG000001"}
+        if qualified:
+            assert evidence.raw_assertion["gene_mapping"]["method"] == "LOCAL_CURATED_UNIQUE_SYMBOL"
+            assert evidence.applicability == "GENE_LEVEL"
+    if qualified:
+        assert len(assessment.gene_level_indicators) == 2
+        pli, = [i for i in assessment.gene_level_indicators if i["metric"] == "pLI"]
+        assert pli["value"] == 0.99 and "UNVERIFIED_RELEASE" in pli["issues"]
+
+
 def test_existing_orpha_mapping_alone_never_establishes_equivalence(tmp_path):
     database = tmp_path / "gene.sqlite"
     rows = "g2p id,gene symbol,hgnc id,disease name,disease MONDO,allelic requirement,confidence,molecular mechanism\nG2P-1,GENE_X,HGNC:1,Synthetic,MONDO:1,monoallelic,strong,loss of function\n"

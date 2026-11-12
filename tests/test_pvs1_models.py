@@ -55,6 +55,7 @@ class PVS1ModelsTest(unittest.TestCase):
             ("variant", "typo", "unsupported"),
             ("disease_context", "molecular_mechanism", "invented"),
             ("disease_context", "confidence", "HIGH"),
+            ("disease_context", "mechanism_scope", "UNKNOWN_SCOPE"),
             ("transcript", "cds_interval", [420, 31]),
             ("transcript", "exon_phases", [0, 0]),
             ("transcript", "exon_phases", [0, 3, 0]),

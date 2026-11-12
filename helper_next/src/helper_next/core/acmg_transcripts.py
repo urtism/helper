@@ -113,6 +113,12 @@ def qualify(raw, transcript, assembly, release):
                           for left, right in zip(exons, exons[1:])]}
 
 
+def primary_chromosome(value):
+    """Conventional UCSC/Ensembl aliases only; do not rewrite other contigs."""
+    match = re.fullmatch(r"(?:chr)?([1-9]|1[0-9]|2[0-2]|X|Y)", str(value))
+    return match[1] if match else value
+
+
 class TranscriptReferenceProvider:
     def __init__(self, cache=None, release=None, fetch_json=None, rest_url=None):
         self.cache = Path(cache or os.environ.get("HELPER_TRANSCRIPT_CACHE", Path.home() / ".cache/helper/transcripts"))

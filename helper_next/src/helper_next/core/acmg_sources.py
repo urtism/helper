@@ -73,7 +73,7 @@ class SourceManager:
             if candidate.is_file():
                 stat = candidate.stat()
                 tokens.append((stat.st_ino, stat.st_size, stat.st_mtime_ns))
-        return tokens
+        return {"adapter_version": "mechanism-gene-mapping-1", "index": tokens}
 
     def mechanism_records(self, gene_id, symbol="", sources=None, refresh=False, timeout=15):
         """Reuse indexed datasets; only the existing targeted gnomAD fetch can run.
@@ -99,6 +99,10 @@ class SourceManager:
             from helper_next.core.analysis_history import now
             result = {s: {"source": s, "status": "ERROR", "records": [], "retrieved_at": now(),
                           "limitations": ["Existing public source index could not be read"]} for s in selected}
+        if "gnomad" in result:
+            # The accessor also serves the constraint UI. SourcePacket already
+            # carries release/status/limitations, without the UI-only manifest.
+            result["gnomad"].pop("manifest", None)
         if remote_error:
             result["gnomad"].update(status=remote_error, records=[], refresh_scope="TARGETED_REMOTE")
         elif refresh and "gnomad" in selected and symbol and allow_fetch:

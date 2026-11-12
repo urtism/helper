@@ -1,6 +1,6 @@
 """Local nonsense sequence reconstruction reused by the PVS1 molecular library."""
 from helper_next.core.acmg_digest import digest
-from helper_next.core.acmg_transcripts import genomic_to_mrna, mrna_to_genomic, translate, complement
+from helper_next.core.acmg_transcripts import genomic_to_mrna, mrna_to_genomic, translate, complement, primary_chromosome
 
 
 SOFTWARE = "helper-nonsense-1.0"
@@ -10,7 +10,7 @@ def nonsense(identity, annotation, reference):
     """Reconstruct a premature stop for a contiguous equal-length substitution."""
     selected = reference["transcript"]["accession"] + "." + reference["transcript"]["version"]
     if (annotation["transcript"] != selected or identity["assembly"] != reference["assembly"]
-            or identity["chromosome"] != reference["chromosome"]):
+            or primary_chromosome(identity["chromosome"]) != reference["chromosome"]):
         raise ValueError("Selected variant assembly/chromosome/transcript does not match reference")
     ref, alt = identity["reference"], identity["alternate"]
     if len(ref) != len(alt) or not ref or set(ref + alt) - set("ACGT") or ref == alt:
@@ -28,7 +28,12 @@ def nonsense(identity, annotation, reference):
     coding_position = start - reference["cds_start"] + 1
     offset = coding_position - 1
     altered_cds = reference["cds"][:offset] + transcript_alt + reference["cds"][offset + len(ref):]
-    stop_index = translate(altered_cds).find("*")
+    # The qualified reference has no internal stop. Only codons touched by
+    # this equal-length substitution can introduce one, including an MNV.
+    first_codon = offset // 3 * 3
+    changed_end = (offset + len(ref) + 2) // 3 * 3
+    local_stop = translate(altered_cds[first_codon:changed_end]).find("*")
+    stop_index = first_codon // 3 + local_stop if local_stop >= 0 else -1
     if stop_index < 0 or stop_index >= reference["protein_length"]:
         raise ValueError("Reconstructed allele does not introduce a premature in-frame stop")
     ptc = reference["cds_start"] + 3 * stop_index

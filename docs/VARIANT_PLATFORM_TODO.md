@@ -4,6 +4,11 @@ This roadmap builds the variant viewer first on durable, testable storage. Each
 milestone must leave the application usable and preserve the original VCF/GVCF
 as the source of truth.
 
+The implementation plan for sharing variant facts across runs and scaling WES/WGS
+consultation is [VSC — Shared variant catalog](VARIANT_SHARED_CATALOG_PLAN.md).
+It defines a derived catalog, contextual sample results, resumable preparation
+and indexed views; it does not automatically publish a clinical cohort.
+
 ## Architectural invariants
 
 - A run database is an immutable snapshot of what was known when the run was

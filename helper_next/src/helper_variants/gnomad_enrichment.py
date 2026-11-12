@@ -11,6 +11,12 @@ from helper_variants import gene_phenotype, gnomad_frequency, indexer, store
 
 def prepare_sample(database, sample_id, *, after_variant_id=0, limit=50, record=None,
                    prepare_gene_context=False):
+    return prepare_batch(database, sample_id=sample_id, after_variant_id=after_variant_id,
+                         limit=limit, record=record, prepare_gene_context=prepare_gene_context)
+
+
+def prepare_batch(database, *, sample_id=None, after_variant_id=0, limit=50, record=None,
+                  prepare_gene_context=False):
     """Acquire required population evidence before scoring/display, in bounded batches.
 
     Each sequence-resolved sample allele is visited once per pass, independently
@@ -21,41 +27,50 @@ def prepare_sample(database, sample_id, *, after_variant_id=0, limit=50, record=
     if not 1 <= limit <= 100 or after_variant_id < 0:
         raise ValueError('Invalid evidence batch limit or cursor')
     with store.connect(database) as connection:
-        if not connection.execute('SELECT 1 FROM samples WHERE id=?', (sample_id,)).fetchone():
+        if sample_id is not None and not connection.execute('SELECT 1 FROM samples WHERE id=?', (sample_id,)).fetchone():
             raise ValueError('sample not found')
+        membership = (' AND EXISTS (SELECT 1 FROM calls c JOIN analyses a ON a.id=c.analysis_id '
+                      'WHERE c.variant_id=v.id AND a.sample_id=?)') if sample_id is not None else ''
+        parameters = (after_variant_id, sample_id, limit + 1) if sample_id is not None else (after_variant_id, limit + 1)
         rows = connection.execute(
             'SELECT v.id,v.reference_build,v.chromosome,v.position,v.reference,v.alternate,v.metadata_json '
-            'FROM variants v WHERE ' + store.SEQUENCE_VARIANT_FILTER + ' AND v.id>? AND EXISTS ('
-            'SELECT 1 FROM calls c JOIN analyses a ON a.id=c.analysis_id '
-            'WHERE c.variant_id=v.id AND a.sample_id=?) ORDER BY v.id LIMIT ?',
-            (after_variant_id, sample_id, limit + 1),
+            'FROM variants v WHERE ' + store.SEQUENCE_VARIANT_FILTER + ' AND v.id>?'
+            + membership + ' ORDER BY v.id LIMIT ?', parameters,
         ).fetchall()
     batch = rows[:limit]
     attached = [json.loads(row[6] or '{}') for row in batch]
     cached = gnomad_frequency.cached_variants([tuple(row)[1:6] for row in batch], metadata=attached, priority_only=True)
-    needs_acquisition = any(not gnomad_frequency._reusable(result, include_non_ukb=False)
-                            or gnomad_frequency._needs_region_coverage(result) for result in cached)
-    if needs_acquisition:
-        # Return progress after five remote lookups instead of waiting for fifty
-        # sequential GRCh37 projections. Fully cached batches keep the large size.
-        batch = batch[:5]
-        attached = attached[:5]
+    ready = [gnomad_frequency._reusable(result, include_non_ukb=False)
+             and not gnomad_frequency._needs_region_coverage(result) for result in cached]
+    first_missing = next((i for i, available in enumerate(ready) if not available), None)
+    if first_missing is not None:
+        # Report the cached prefix immediately, without making it wait behind
+        # remote timeouts. At a cache miss keep acquisition bounded to five.
+        width = first_missing or 5
+        batch, attached = batch[:width], attached[:width]
+        cached, ready = cached[:width], ready[:width]
     shared_context = gene_phenotype.prepare_priority_contexts() if prepare_gene_context else None
     if shared_context and shared_context.get('refreshing'):
         raise ValueError('Gene-disease update is still running; retry sample loading after it completes')
-    # Start gnomAD after the first three resolved alleles while the remaining
-    # projections continue. Fully resolved/cached samples retain wide batches.
-    pipeline = needs_acquisition and any(
-        str(row[1]).lower() in ('grch37', 'hg19', 'b37', '37', 'grch37hg19')
-        and gnomad_frequency._supplied_target(tuple(row)[1:6], data) is None
-        for row, data in zip(batch, attached))
-    results = gnomad_frequency.lookup_variants([tuple(row)[1:6] for row in batch], record=record,
-                    metadata=attached, include_non_ukb=False, batch_size=3 if pipeline else 24) if batch else []
-    if len(results) != len(batch):
+    alleles = [tuple(row)[1:6] for row in batch]
+    # Reconstruct source-bound identities locally, including projections already
+    # in the shared cache. Only unresolved projections need the narrow pipeline.
+    resolutions = gnomad_frequency.resolve_alleles(alleles, metadata=attached, fetch=False)
+    pending = [i for i, available in enumerate(ready) if not available]
+    pipeline = any(resolutions[i][0] is None for i in pending)
+    acquired = gnomad_frequency.lookup_variants([alleles[i] for i in pending], record=record,
+                    metadata=[attached[i] for i in pending], include_non_ukb=False,
+                    batch_size=3 if pipeline else 24) if pending else []
+    if len(acquired) != len(pending):
         raise ValueError('Population provider returned an incomplete batch; reopen the sample')
+    results = [dict(value, identity_resolution=resolution) if available else None
+               for value, available, (_, resolution) in zip(cached, ready, resolutions)]
+    for i, value in zip(pending, acquired):
+        results[i] = value
     outcomes = Counter()
+    updated = 0
     with store.connect(database) as connection:
-        for row, result in zip(batch, results):
+        for row, result, available in zip(batch, results, ready):
             outcome = result.get('retrieval_status', 'UNAVAILABLE')
             if result.get('partial') or result.get('region_coverage_pending'):
                 outcome = 'UNAVAILABLE'
@@ -71,14 +86,27 @@ def prepare_sample(database, sample_id, *, after_variant_id=0, limit=50, record=
             target = resolution.get('target_identity') or {}
             key = (gnomad_frequency.cache_key(*gnomad_frequency._identity_allele(target['identity']))
                    if target.get('status') == 'RESOLVED' else None)
-            metadata['gnomad_enrichment'] = dict(
+            binding = dict(
                 retrieval_status=outcome, release=gnomad_frequency.FREQUENCY_RELEASE,
                 cache_key=key, allele_ref=target.get('allele_ref'),
                 error=result.get('error') or result.get('message') or None,
                 attempted_at=datetime.now(timezone.utc).isoformat(), identity_resolution=resolution,
             )
+            previous = metadata.get('gnomad_enrichment') or {}
+            previous_resolution = previous.get('identity_resolution') or {}
+            # A cache read is not a new acquisition. Preserve the original
+            # provenance/timestamp and avoid invalidating detail/table caches.
+            if (available and key and all(previous.get(k) == binding[k] for k in
+                    ('retrieval_status', 'release', 'cache_key', 'allele_ref', 'error'))
+                    and previous_resolution.get('original') == resolution.get('original')
+                    and (previous_resolution.get('target_identity') or {}).get('identity') == target.get('identity')
+                    and (previous_resolution.get('target_identity') or {}).get('status') == 'RESOLVED'):
+                continue
+            metadata['gnomad_enrichment'] = binding
             connection.execute('UPDATE variants SET metadata_json=? WHERE id=?', (json.dumps(metadata), row[0]))
+            updated += 1
     result = dict(attempted=len(batch), outcomes=dict(outcomes),
+                  cached=len(batch) - len(pending), acquired=len(pending), updated=updated,
                   next_after_variant_id=batch[-1][0] if len(rows) > len(batch) else None)
     if shared_context is not None:
         result['gene_context'] = {key: shared_context.get(key) for key in

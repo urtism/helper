@@ -1,8 +1,11 @@
 # Caricamento completo del campione e preparazione Priority
 
-Aggiornamento: 5 novembre 2026.
+Aggiornamento: 9 novembre 2026.
 
-L'apertura del campione acquisisce le evidenze prima di mostrare le varianti.
+La preparazione delle evidenze avviene nell'indicizzazione della run, prima
+dell'apertura dei campioni. Stato persistente, checkpoint, retry e gestione
+degli indici precedenti sono descritti in
+[Preparazione della run](RUN_PRIORITY_PREPARATION.md).
 La consultazione ClinVar non calcola più il checksum dell'intero FASTA. Restano
 le letture locali degli intervalli REF e la normalizzazione degli alleli usate
 dal matching ClinVar; la provenance indica `checksum_status=NOT_CHECKED`, senza
@@ -11,20 +14,22 @@ evitano il checksum integrale. Le verifiche esplicite che richiedono il digest
 lo conservano su disco e lo riusano dopo il riavvio del backend; vedere
 [Dettagli delle varianti e cache del riferimento](VARIANT_DETAIL_LOADING.md).
 
-Il browser esegue questo flusso:
+Il flusso attuale è:
 
-1. Prepara i dati gene-malattia GenCC/Gene2Phenotype tramite l'indice esistente.
+1. Dopo l'indicizzazione VCF, il job della run prepara i dati gene-malattia
+   GenCC/Gene2Phenotype tramite l'indice esistente.
    Riusa un indice corrente, attende un aggiornamento già avviato o tenta il
    refresh se manca o è scaduto. Se il refresh fallisce conserva i dati installati
    e segnala il limite. Un aggiornamento ancora in corso impedisce di mostrare
    punteggi provvisori.
-2. Visita tutti gli alleli distinti del campione in lotti fino a 50, indipendentemente
+2. Visita tutti gli alleli distinti della run in lotti fino a 50, indipendentemente
    dai filtri di visualizzazione. Quando servono acquisizioni remote, limita il
    lotto a cinque per aggiornare prima l'avanzamento. Recupera tramite il provider gnomAD esistente
    frequenze, proiezione GRCh37→38 e, per i negativi, copertura regionale.
    Riusa le risposte valide in cache e mostra il numero di varianti elaborate.
    Gli stessi alleli condivisi fra campioni riusano le cache esistenti.
-3. Alla fine dell'acquisizione richiede `variants?load_all=true`, senza applicare
+3. Aprendo un campione, il browser legge lo stato del job della run. Alla fine
+   della preparazione richiede `variants?load_all=true`, senza applicare
    i filtri della tabella. La query integra
    frequenze, contesto gene-malattia, ClinVar locale, annotazioni/predittori VCF,
    dati familiari e ricorrenza nella run; calcola e ordina prima della risposta.
@@ -48,6 +53,101 @@ non si generano nuovi predittori né si scaricano automaticamente snapshot ClinV
 Un'origine irraggiungibile non diventa una variante assente: le evidenze mancanti
 restano N/A e le limitazioni di acquisizione sono riportate nel campione. Nessuna
 modifica alla scala AF, alle formule o ai criteri clinici.
+
+Le sezioni seguenti documentano le misure e le ottimizzazioni precedenti del
+provider, che rimangono usate dal job della run. Il vecchio ciclo di
+acquisizione per campione non è più usato dal browser.
+
+## Rallentamento durante il recupero Priority: 590 / 756
+
+Nel campione ID 7 della run `20261015_Run_723_CancerHS2`, il tratto intorno
+alla variante 590 coincide con evidenze ancora da acquisire dopo una lunga parte
+già in cache. Sono presenti errori gnomAD `The read operation timed out`, anche
+su alleli con proiezione GRCh38 già disponibile. Il contatore si aggiorna alla
+fine del lotto: non distingue da solo un'attesa remota dal lavoro locale.
+
+La preparazione ora restituisce immediatamente il prefisso già in cache prima
+di incontrare una variante mancante. Se il lotto inizia con un'acquisizione
+necessaria, resta limitato a cinque alleli; soltanto gli alleli mancanti o con
+copertura da completare entrano nel provider. Le proiezioni presenti nella cache
+condivisa sono riconosciute prima di scegliere la pipeline: un lotto già
+proiettato non viene diviso inutilmente in tre più due richieste alleliche.
+
+Il riuso locale ricostruisce l'associazione esatta sorgente/destinazione e
+aggiunge il collegamento nell'indice se manca, anche quando le evidenze erano
+state acquisite da altri campioni. Un collegamento già coerente conserva
+provenienza e timestamp: non viene riscritto per una semplice lettura. Questo
+evita anche invalidazioni superflue della cache dei dettagli. I contatori API
+aggiuntivi `cached`, `acquired` e `updated` distinguono riuso, alleli avviati al
+provider (inclusi fallimenti) e righe effettivamente aggiornate.
+
+Misura senza rete su due copie temporanee dello stesso indice reale, campione 7,
+primo lotto di 50 varianti già disponibili nella cache condivisa:
+
+| Operazione | Prima | Dopo |
+| --- | ---: | ---: |
+| Preparazione del lotto | 0,807 s | 0,113 s |
+| Aggiornamenti delle righe varianti | 50 | 0 |
+| Esito e avanzamento | 50 FOUND, cursore 94 | 50 FOUND, cursore 94 |
+
+È una misura del riuso locale, non del primo caricamento dell'intero campione.
+Le latenze remote rimangono: timeout, backoff, limiti gnomAD, controllo della
+copertura e condizioni del punteggio restano invariati. Non si saltano alleli e
+non si attribuiscono punti per un errore di recupero. Passati 125 test mirati,
+inclusi Chrome, identità/proiezioni, lotti misti, riapertura senza scritture,
+acquisizione della copertura sui negativi in cache e regressioni del provider.
+Verificato anche l'endpoint del backend attivo: un allele già disponibile
+restituisce `cached=1`, `acquired=0`, `updated=0`.
+
+## Prima acquisizione senza cache
+
+Il riuso locale non risolve da solo le attese degli alleli nuovi. Due ulteriori
+ottimizzazioni intervengono sul percorso remoto:
+
+- Per una SNV sorgente e una SNV contestuale di destinazione, entrambe con basi
+  A/C/G/T distinte, la prima risposta NCBI contiene già l'intero allele VCF.
+  La posizione SPDI interbase viene convertita in posizione VCF aggiungendo uno.
+  Non occorre la seconda chiamata `vcf_fields`. La proiezione continua a essere
+  acquisita e qualificata da NCBI sull'accession esatta della assembly di
+  destinazione. Indel, rappresentazioni complesse, dati non idonei, proiezioni
+  ambigue e assenti conservano il percorso completo o l'esito precedente.
+  La provenance aggiunge `validation.vcf_conversion` (`SPDI_SNV` oppure
+  `NCBI_VCF_FIELDS`). Le cache esistenti restano valide. La conversione segue il
+  [modello SPDI descritto da NCBI](https://pmc.ncbi.nlm.nih.gov/articles/PMC7523648/)
+  e la [distinzione fra SPDI e VCF](https://ncbiinsights.ncbi.nlm.nih.gov/2017/02/09/new-web-services-for-comparing-and-grouping-sequence-variants/).
+- La pipeline può acquisire due piccoli gruppi contemporaneamente, sovrapponendo
+  proiezione, recupero frequenze e copertura. Usa due worker condivisi e al
+  massimo due gruppi per chiamante; non accoda l'intero campione nell'executor.
+  Il gate HTTP mantiene la distanza fra gli avvii secondo il costo della query
+  e limita a due le richieste attive. L'attesa di una lettura HTTP non trattiene
+  più il lock del gate: una richiesta lenta non impedisce al secondo gruppo di
+  partire quando il pacing lo consente. Risposte e identità sono ricomposte
+  nell'ordine originale, conservando deduplicazione, single-flight e backoff.
+
+Nel campione da 756 varianti, 607 sono SNV sorgente; la scorciatoia si applica
+soltanto se anche il target NCBI soddisfa i requisiti sopra. Prova online su
+cache SQLite temporanee inizialmente vuote, cinque SNV reali note alla fonte,
+due gruppi da tre e due alleli, confronto con il codice precedente:
+
+| Operazione | Prima | Dopo |
+| --- | ---: | ---: |
+| Proiezione + acquisizione gnomAD di cinque alleli | 12,644 s | 5,279 s |
+| Esiti | 5 FOUND | 5 FOUND |
+| Alleli, dataset completi e flag restituiti | Identici | Identici |
+
+Una prova separata sulle sole proiezioni di tre SNV ha ridotto le chiamate NCBI
+da sei a tre (10,119 s → 7,514 s), con destinazioni identiche. Sono misure di
+lotti specifici: non garantiscono gli stessi tempi per indel, copertura o
+timeout remoti, né per un intero esoma/genoma. I limiti delle fonti rimangono;
+per la prima acquisizione su scala WES/WGS resta necessario il percorso con
+fonti locali descritto nel [piano del catalogo condiviso](VARIANT_SHARED_CATALOG_PLAN.md#11-prima-preparazione-di-esomi-e-genomi).
+
+Le regressioni verificano la conversione SNV in entrambe le direzioni, gli
+indel sul convertitore originale, il rifiuto delle scorciatoie ambigue,
+l'ordine dei risultati, la sovrapposizione di letture lente, il limite di due
+richieste attive, il pacing per costo e la pressione sull'executor durante un
+campione più grande. Nessun campo QC, regola Priority o controllo di copertura
+è stato rimosso.
 
 ## Verifica
 

@@ -32,6 +32,22 @@ def forbidden(*args, **kwargs):
     pytest.fail("A lightweight request must not rebuild the full variant detail")
 
 
+def test_detail_validator_changes_for_manual_saves_but_not_automatic_cache_writes(tmp_path, monkeypatch):
+    from helper_next.core import acmg_automatic_store, acmg_classification_store, acmg_classification
+    database, sample, _, record = local_entry(tmp_path, monkeypatch)
+    monkeypatch.setattr(variant_detail_cache.time, "time", lambda: 1800000000)
+    allele = query.variant_identity(database, sample, 1)
+    token = lambda: variant_detail_cache.detail_etag(database, record, allele, sample, 1)
+    original = token()
+    identity = dict(sample="sample", assembly="GRCh38", chromosome="1", position=1, reference="A", alternate="G",
+                    gene="HGNC:1", disease="MONDO:1", transcript="TX.1", inheritance=["AUTOSOMAL_DOMINANT"])
+    assessment = acmg_classification.combine([])
+    acmg_automatic_store.save(tmp_path, identity, "signature", dict(identity=identity, assessment=assessment), None, "source", "inputs")
+    assert token() == original
+    acmg_classification_store.save(tmp_path, identity, "signature", assessment)
+    assert token() != original
+
+
 def test_secondary_endpoints_read_only_the_sample_allele(tmp_path, monkeypatch):
     database, sample, other, _ = local_entry(tmp_path, monkeypatch)
     monkeypatch.setattr(query, "variant_detail", forbidden)

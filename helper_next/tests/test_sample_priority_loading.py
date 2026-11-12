@@ -11,7 +11,7 @@ import pytest
 
 from helper_next.api import variants as api
 from helper_next.core import acmg_reference
-from helper_variants import clinvar_local, gene_phenotype, gnomad_enrichment, gnomad_frequency, query, store
+from helper_variants import clinvar_local, gene_phenotype, gnomad_enrichment, gnomad_frequency, liftover, query, store
 from test_clinvar_local import build, summary
 from test_gnomad_frequency import official, provider
 from test_variant_query import query_store
@@ -228,8 +228,84 @@ def test_remote_batches_return_progress_early_and_cached_batches_remain_large(tm
         after = batch['next_after_variant_id']
     assert len(calls) == 4
     monkeypatch.setattr(gnomad_frequency, '_request_graphql', lambda *a: pytest.fail('Already acquired'))
-    cached = gnomad_enrichment.prepare_sample(database, sample, limit=50)
+    monkeypatch.setattr(gnomad_frequency, 'lookup_variants', lambda *a, **kw: pytest.fail('Use cached evidence directly'))
+    with sqlite3.connect(database) as observer:
+        before_version = observer.execute('PRAGMA data_version').fetchone()[0]
+        before = observer.execute('SELECT id,metadata_json FROM variants ORDER BY id').fetchall()
+        cached = gnomad_enrichment.prepare_sample(database, sample, limit=50)
+        assert observer.execute('PRAGMA data_version').fetchone()[0] == before_version
+        assert observer.execute('SELECT id,metadata_json FROM variants ORDER BY id').fetchall() == before
     assert cached['attempted'] == 20 and cached['next_after_variant_id'] is None
+    assert cached['cached'] == 20 and cached['acquired'] == cached['updated'] == 0
+
+
+def test_cached_prefix_returns_before_remote_work_and_mixed_batch_only_acquires_misses(tmp_path, monkeypatch):
+    database, sample, _ = query_store(tmp_path)
+    calls = provider(monkeypatch)
+    with store.connect(database) as db:
+        rows = db.execute('SELECT reference_build,chromosome,position,reference,alternate '
+                          'FROM variants WHERE id IN (1,2,4,5) ORDER BY id').fetchall()
+    # Public evidence can already exist from a different run/sample, without a
+    # binding in this run. Such evidence must still receive its exact identity.
+    gnomad_frequency.lookup_variants([tuple(row) for row in rows], include_non_ukb=False)
+    calls.clear()
+    prefix = gnomad_enrichment.prepare_sample(database, sample)
+    assert prefix['attempted'] == prefix['cached'] == prefix['updated'] == 2
+    assert prefix['acquired'] == 0 and prefix['next_after_variant_id'] == 2
+    assert not calls, 'Cached progress must not wait for a missing allele'
+    rest = gnomad_enrichment.prepare_sample(database, sample, after_variant_id=2)
+    assert rest['attempted'] == 3 and rest['cached'] == 2 and rest['acquired'] == 1
+    assert rest['next_after_variant_id'] is None
+    assert len(calls) == 1 and len(calls[0][1]) == 1
+    assert calls[0][1]['id0'] == '1-3-A-G'
+    with store.connect(database) as db:
+        for row in db.execute('SELECT reference_build,chromosome,position,reference,alternate,metadata_json '
+                              'FROM variants WHERE id<=5 ORDER BY id'):
+            binding = json.loads(row[5])['gnomad_enrichment']
+            assert binding['identity_resolution']['original'] == list(row[:5])
+            assert binding['cache_key'] == gnomad_frequency.cache_key(*row[:5])
+
+
+def test_cached_projections_keep_frequency_batch_together(tmp_path, monkeypatch):
+    database, sample, _ = query_store(tmp_path)
+    monkeypatch.setenv('HELPER_LIFTOVER_CACHE', str(tmp_path / 'projections.sqlite3'))
+    monkeypatch.delenv('HELPER_GNOMAD_OFFLINE', raising=False)
+    with store.connect(database) as db:
+        db.execute("UPDATE variants SET reference_build='GRCh37'")
+        rows = db.execute('SELECT reference_build,chromosome,position,reference,alternate '
+                          'FROM variants WHERE id<=5 ORDER BY id').fetchall()
+    for row in rows:
+        source = tuple(row)
+        target = ('GRCh38', row[1], row[2] + 100, row[3], row[4])
+        projection = liftover._result('mapped', source=liftover._locus(*source), target=liftover._locus(*target))
+        liftover._store(liftover.cache_path(), '|'.join(map(str, source)), projection)
+    monkeypatch.setattr(liftover, '_retrieve', lambda *a, **kw: pytest.fail('Projection already cached'))
+    calls = provider(monkeypatch)
+    result = gnomad_enrichment.prepare_sample(database, sample)
+    assert result['attempted'] == result['acquired'] == 5
+    assert result['outcomes'] == {'FOUND': 5}
+    assert len(calls) == 1 and len(calls[0][1]) == 5
+    assert set(calls[0][1].values()) == {f'1-{row[2] + 100}-{row[3]}-{row[4]}' for row in rows}
+
+
+def test_cached_missing_allele_still_acquires_required_coverage(tmp_path, monkeypatch):
+    from test_gnomad_region_coverage import provider as missing_provider
+
+    database, sample, _ = query_store(tmp_path)
+    allele = ('GRCh38', '1', 3, 'A', 'G')
+    cached = gnomad_frequency._parse_response({'data': {'variant': None}},
+                                             gnomad_frequency.DATASETS['GRCh38'], allele, '')
+    gnomad_frequency._store(gnomad_frequency.cache_path(), gnomad_frequency.cache_key(*allele), cached)
+    calls = missing_provider(monkeypatch)
+    result = gnomad_enrichment.prepare_sample(database, sample, after_variant_id=2, limit=1)
+    assert result['acquired'] == 1 and result['cached'] == 0
+    assert result['outcomes'] == {'NOT_FOUND': 1}
+    assert len(calls) == 1 and 'coverage(dataset:' in calls[0][0]
+    assert gnomad_frequency.cached_variant(*allele)['region_coverage']['status'] == 'ADEQUATE'
+    calls.clear()
+    warm = gnomad_enrichment.prepare_sample(database, sample, after_variant_id=2, limit=1)
+    assert warm['cached'] == 1 and warm['acquired'] == warm['updated'] == 0
+    assert not calls
 
 
 def test_gene_disease_refresh_completes_before_population_acquisition(tmp_path, monkeypatch):
@@ -318,6 +394,7 @@ def run_loading_js(script):
       const rendered = [];
       viewer.renderWorkspace = () => rendered.push(workspace.items.length);
       const tick = () => new Promise(resolve => setImmediate(resolve));
+      viewer.waitForPriorityEvidence = async () => {};
     '''
     result = subprocess.run([node, "-e", setup + '\n(async () => {\n' + script +
                              '\n})().catch(error => {console.error(error);process.exitCode=1;});', str(asset)],
@@ -325,23 +402,22 @@ def run_loading_js(script):
     assert result.returncode == 0, result.stderr
 
 
-def test_browser_acquires_every_batch_before_loading_and_displays_all_rows_atomically():
+def test_browser_polls_run_preparation_then_displays_all_rows_atomically():
     run_loading_js(r'''
       let release;
-      const finalBatch = new Promise(resolve => { release = resolve; });
+      const finalState = new Promise(resolve => { release = resolve; });
       const calls = [];
       viewer.request = async (url, options) => {
         calls.push(url);
         assert.equal(options.cache, 'no-store');
+        assert.equal(options.method, undefined, 'Sample opening only reads');
         assert.equal(workspace.items.length, 0, 'No provisional priority visible');
-        if (url.includes('/priority-evidence?')) {
-          assert.equal(options.method, 'POST');
-          const after = Number(new URL(url, 'http://test').searchParams.get('after_variant_id'));
-          if (after === 250) return finalBatch;
-          return {attempted: 50, outcomes: {FOUND: 50}, next_after_variant_id: after + 50};
+        if (url.includes('/priority-evidence')) {
+          assert.ok(!url.includes('/samples/'), 'Evidence belongs to the run');
+          if (calls.length === 6) return finalState;
+          return {status: 'running', attempted: calls.length * 50, total: 252};
         }
         assert.ok(url.includes('load_all=true'));
-        assert.ok(!url.includes('cursor='));
         return {items: Array.from({length: 252}, (_, i) => ({variant_id: i + 1,
           priority: {normalized_score: 25}})), next_cursor: null,
           clinvar_snapshot_id: 'A', clinvar_status: 'AVAILABLE'};
@@ -349,15 +425,15 @@ def test_browser_acquires_every_batch_before_loading_and_displays_all_rows_atomi
       const loading = viewer.loadPage(workspace);
       await tick();
       assert.equal(calls.length, 6);
-      assert.ok(calls.every(url => url.includes('/priority-evidence?')));
+      assert.ok(calls.every(url => url.includes('/priority-evidence')));
       assert.equal(workspace.items.length, 0);
       assert.equal(workspace.loading, true);
-      release({attempted: 2, outcomes: {FOUND: 1, UNAVAILABLE: 1}, next_after_variant_id: null});
+      assert.ok(workspace.loadingMessage.includes('Preparing run Priority evidence'));
+      release({status: 'partial', attempted: 252, total: 252, outcomes: {FOUND: 251, UNAVAILABLE: 1}});
       await loading;
       assert.equal(calls.length, 7);
       assert.equal(workspace.items.length, 252);
       assert.equal(workspace.populationEvidenceUnavailable, 1);
-      assert.equal(workspace.cursor, null);
       assert.equal(workspace.initialized, true);
       assert.equal(workspace.loading, false);
       assert.ok(rendered.every(count => count === 0 || count === 252));
@@ -371,9 +447,9 @@ def test_cancelled_preparation_cannot_overwrite_new_load_or_clear_loading_state(
       const newList = new Promise(resolve => {releaseNew = resolve;});
       let batches = 0;
       viewer.request = async url => {
-        if (url.includes('/priority-evidence?')) {
+        if (url.includes('/priority-evidence')) {
           batches++;
-          return batches === 1 ? oldBatch : {attempted: 0, outcomes: {}, next_after_variant_id: null};
+          return batches === 1 ? oldBatch : {status: 'complete', attempted: 0, outcomes: {}, next_after_variant_id: null};
         }
         return newList;
       };
@@ -383,7 +459,7 @@ def test_cancelled_preparation_cannot_overwrite_new_load_or_clear_loading_state(
       workspace.loading = false;
       const newLoad = viewer.loadPage(workspace);
       await tick();
-      releaseOld({attempted: 50, outcomes: {FOUND: 50}, next_after_variant_id: 50});
+      releaseOld({status: 'complete', attempted: 50, outcomes: {FOUND: 50}, next_after_variant_id: 50});
       await oldLoad;
       assert.equal(workspace.loading, true);
       assert.equal(workspace.items.length, 0);
@@ -397,7 +473,7 @@ def test_cancelled_preparation_cannot_overwrite_new_load_or_clear_loading_state(
 def test_preparation_failure_never_displays_old_or_partially_scored_rows():
     run_loading_js(r'''
       viewer.request = async url => {
-        assert.ok(url.includes('/priority-evidence?'), 'No list requested before acquisition completes');
+        assert.ok(url.includes('/priority-evidence'), 'No list requested before acquisition completes');
         throw new Error('Acquisition failed');
       };
       await viewer.loadPage(workspace);
@@ -479,7 +555,7 @@ def test_sort_changes_during_loading_keep_the_same_acquisition_and_use_the_lates
       const pending = new Promise(resolve => {release = resolve;});
       let preparations = 0, reads = 0;
       viewer.request = async url => {
-        if (url.includes('/priority-evidence?')) {
+        if (url.includes('/priority-evidence')) {
           preparations++;
           return pending;
         }
@@ -492,7 +568,7 @@ def test_sort_changes_during_loading_keep_the_same_acquisition_and_use_the_lates
       assert.equal(workspace.pageController, controller);
       assert.equal(controller.signal.aborted, false);
       assert.equal(workspace.loading, true);
-      release({attempted: 2, outcomes: {FOUND: 2}, next_after_variant_id: null});
+      release({status: 'complete', attempted: 2, outcomes: {FOUND: 2}, next_after_variant_id: null});
       await loading;
       assert.equal(preparations, 1);
       assert.equal(reads, 1);
@@ -584,7 +660,7 @@ def test_filters_changed_during_loading_do_not_restart_acquisition_or_hide_the_s
       const pending = new Promise(resolve => {release = resolve;});
       let acquisitions = 0, reads = 0;
       viewer.request = async url => {
-        if (url.includes('/priority-evidence?')) {acquisitions++; return pending;}
+        if (url.includes('/priority-evidence')) {acquisitions++; return pending;}
         reads++;
         const params = new URL(url, 'http://test').searchParams;
         assert.equal(params.has('genes'), false, 'Load the full sample regardless of active filters');
@@ -597,7 +673,7 @@ def test_filters_changed_during_loading_do_not_restart_acquisition_or_hide_the_s
       viewer.restartFilteredWorkspace(workspace);
       assert.equal(workspace.pageController, controller);
       assert.equal(controller.signal.aborted, false);
-      release({attempted: 2, outcomes: {FOUND: 2}, next_after_variant_id: null});
+      release({status: 'complete', attempted: 2, outcomes: {FOUND: 2}, next_after_variant_id: null});
       await loading;
       assert.equal(acquisitions, 1); assert.equal(reads, 1);
       assert.deepEqual(workspace.items.map(item => item.variant_id), [2]);
@@ -636,9 +712,9 @@ def test_explicit_evidence_refresh_replaces_source_rows_and_keeps_active_filters
     run_loading_js(r'''
       let reads = 0, acquisitions = 0;
       viewer.request = async url => {
-        if (url.includes('/priority-evidence?')) {
+        if (url.includes('/priority-evidence')) {
           acquisitions++;
-          return {attempted: 2, outcomes: {FOUND: 2}, next_after_variant_id: null};
+          return {status: 'complete', attempted: 2, outcomes: {FOUND: 2}, next_after_variant_id: null};
         }
         reads++;
         return {items: [{variant_id: reads, gene: 'A'}, {variant_id: 100+reads, gene: 'B'}], next_cursor: null};
@@ -698,37 +774,53 @@ def test_real_browser_shows_complete_sample_only_after_evidence_acquisition(tmp_
         const root = viewer.shadowRoot;
         const style = root.querySelector('link');
         if (!style.sheet) await new Promise((resolve, reject) => {style.onload=resolve;style.onerror=reject;});
+        viewer.runs = [{history_id: 'RUN', run_id: 'Prepared run', index_status: 'complete',
+          priority_preparation: {status: 'complete', attempted: 606, total: 606}}];
+        viewer.renderRuns();
+        const runRow = root.querySelector('.run-row:not(.run-table-header)');
+        const actions = runRow.querySelector('.run-row-actions');
+        assert([...actions.querySelectorAll('button')].some(button => button.textContent.startsWith('Priority')), 'Run retry available');
+        assert([...actions.querySelectorAll('button')].some(button => button.textContent === 'gnomAD'), 'Full enrichment retained');
+        assert(runRow.querySelector('.badge').getBoundingClientRect().right <= actions.getBoundingClientRect().left,
+          'Run actions do not overlap the evidence status');
+        assert(actions.lastElementChild.getBoundingClientRect().right <= runRow.getBoundingClientRect().right,
+          'All run controls fit their row');
         const items = Array.from({length: 606}, (_, index) => ({...ITEM, variant_id: index+1, filter_data: undefined,
           population_af: index / 1000, gene: index % 2 ? 'GENE2' : 'GENE1'}));
         let release;
         const firstBatch = new Promise(resolve => {release = resolve;});
         let reads = 0, preparations = 0;
         viewer.request = async (url, options) => {
-          if (url.includes('/priority-evidence?')) {
+          if (url.includes('/priority-evidence')) {
             preparations++;
-            assert(options.method === 'POST', 'Explicit evidence acquisition');
+            assert(!options.method, 'Sample opening only reads run status');
             const after = Number(new URL(url, 'http://test').searchParams.get('after_variant_id'));
             if (after === 0) return firstBatch;
-            return {attempted: Math.min(50, 606-after), outcomes: {FOUND: Math.min(50, 606-after)},
+            return {status: 'complete', attempted: Math.min(50, 606-after), outcomes: {FOUND: Math.min(50, 606-after)},
               next_after_variant_id: after < 600 ? after+50 : null};
           }
           assert(url.includes('load_all=true'), 'Request the complete sample');
+          assert(url.includes('compact=true'), 'Request lossless compact table data');
           reads++;
-          return {items, next_cursor: null, clinvar_status: 'AVAILABLE', clinvar_snapshot_id: 'TEST'};
+          return {format: 'helper-variant-table-compact-v1', shared: [items[0].clinvar_evidence.provenance],
+            table: {items: items.map(item => ({...item,
+              clinvar_evidence: {...item.clinvar_evidence, provenance: 0}})),
+              next_cursor: null, clinvar_status: 'AVAILABLE', clinvar_snapshot_id: 'TEST'}};
         };
         const opening = viewer.openSample({sample_id: 1, display_name: 'Synthetic sample', variant_count: 606}, false);
         await Promise.resolve();
         const workspace = viewer.workspaces.get(viewer.activeWorkspace);
         assert(workspace.items.length === 0 && reads === 0, 'No scores before acquisition finishes');
         assert(!root.querySelector('.variant-row'), 'No provisional row visible');
-        assert(root.textContent.includes('Preparing gene-disease and population evidence'), 'Preparation state visible');
-        release({attempted: 50, outcomes: {FOUND: 50}, next_after_variant_id: 50});
+        assert(root.textContent.includes('Checking prepared run evidence'), 'Preparation state visible');
+        release({status: 'complete', attempted: 50, outcomes: {FOUND: 50}, next_after_variant_id: 50});
         await opening;
         await new Promise(resolve => requestAnimationFrame(resolve));
         assert(workspace.items.length === 606, 'All variants loaded beyond page cap');
         assert(workspace.cursor === null && reads === 1, 'No deferred pages');
         assert(root.textContent.includes('606 loaded / 606'), 'Complete sample count');
-        assert(root.textContent.includes('All variants loaded · Priority calculated'), 'Calculation completed before display');
+        assert(workspace.initialized && !workspace.loading && workspace.items.every(item => item.priority?.ruleset),
+          'Calculation completed before display');
         const visible = root.querySelectorAll('.variant-row').length;
         assert(visible > 0 && visible < 606, 'Virtual rendering with all data loaded');
         assert(!root.textContent.includes('Load next page'), 'No manual pagination');

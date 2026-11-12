@@ -88,7 +88,7 @@ def test_local_evidence_submissions_and_snapshot_change_in_real_browser(tmp_path
         const calls = [];
         viewer.request = async path => {
           calls.push(path);
-          if (path.includes("/priority-evidence?")) return {attempted: 5, outcomes: {FOUND: 5}, next_after_variant_id: null};
+          if (path.includes("/priority-evidence")) return {status: "complete", attempted: 5, total: 5, outcomes: {FOUND: 5}};
           if (path.includes("/filter-options")) return {};
           if (path.includes("/clinvar-submissions?")) return structuredClone(payload.more);
           if (path.includes("/variants/1?compact=true")) return structuredClone(payload.detail);

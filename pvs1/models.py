@@ -40,6 +40,7 @@ class DiseaseContextData(TypedDict, total=False):
     molecular_mechanism: Optional[Literal["LoF", "GoF", "DN", "OTHER", "UNKNOWN"]]
     confidence: Optional[Literal["DEFINITIVE", "INFERRED", "DISPUTED", "UNKNOWN"]]
     scope: Optional[Literal["DISEASE_SPECIFIC", "GENE_LEVEL"]]
+    mechanism_scope: Optional[Literal["DISEASE_SPECIFIC", "GENE_LEVEL"]]
     source_refs: Optional[SourceReferences]
 
 
@@ -220,6 +221,7 @@ class PVS1Input:
         _choice(context.get("molecular_mechanism"), ("LoF", "GoF", "DN", "OTHER", "UNKNOWN"), "molecular_mechanism")
         _choice(context.get("confidence"), ("DEFINITIVE", "INFERRED", "DISPUTED", "UNKNOWN"), "confidence")
         _choice(context.get("scope"), ("DISEASE_SPECIFIC", "GENE_LEVEL"), "scope")
+        _choice(context.get("mechanism_scope"), ("DISEASE_SPECIFIC", "GENE_LEVEL"), "mechanism_scope")
         _sources(context.get("source_refs"), "disease_context.source_refs")
         if self.transcript is not None:
             self._validate_transcript()

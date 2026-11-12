@@ -221,6 +221,20 @@ button:disabled {
   display: block;
 }
 
+@media (min-width: 1051px) {
+  .workspace:has(#variants.active) {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+    padding-bottom: 0;
+  }
+
+  .workspace:has(#variants.active) > .topbar { flex-shrink: 0; }
+  #variants.active { flex: 1; min-height: 0; }
+  #variants > variant-browser { height: 100%; min-height: 0; }
+}
+
 .module-header,
 article,
 .collapsible-panel {

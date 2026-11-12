@@ -9,7 +9,7 @@ from helper_next.core.acmg_mechanism_models import (
 )
 
 
-NORMALIZATION_VERSION = "mechanism-normalizer-1.1"
+NORMALIZATION_VERSION = "mechanism-normalizer-1.2"
 RECONCILIATION_VERSION = "mechanism-reconciliation-1.0"
 MAPPING_VERSION = "registry-qualified-association-2.0"
 INHERITANCE_CROSSWALK = "Roberts et al. 2024, Table 2; doi:10.1016/j.gim.2023.101029"
@@ -147,6 +147,14 @@ def normalize(request, records, registry=None):
     for packet, row, ref in records:
         info = describe(packet.source, row)
         source = packet.source
+        gene_mapping = row.get("gene_mapping")
+        if (source in {"clingen_dosage", "gnomad"} and info["gene_id"]
+                and isinstance(gene_mapping, dict)
+                and gene_mapping.get("method") == "LOCAL_CURATED_UNIQUE_SYMBOL"
+                and gene_mapping.get("gene_id") == request.gene_id
+                and gene_mapping.get("source_urls")
+                and str(gene_mapping.get("gene_symbol", "")).casefold() == text(row, "gene_symbol").casefold()):
+            info["gene_id"] = request.gene_id
         gene_matches = info["gene_id"] == request.gene_id
         primary_disease = text(row, "disease_curie") or text(row, "disease_mim") or text(row, "disease_original_curie")
         primary_matches = bool(primary_disease and curie(primary_disease) in aliases)

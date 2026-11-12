@@ -1,9 +1,10 @@
-"""Gene-wide molecular analysis using SourceManager's Ensembl JSON cache.
+"""Molecular analysis using exact local VEP or cached Ensembl REST references.
 
 No clinical strength selection. VEP rows are immutable evidence, not a complete
 transcript catalog. All cache/network access is public gene/reference data.
 """
 import copy
+import json
 import os
 import re
 import threading
@@ -13,12 +14,22 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 from helper_next.core.acmg_sources import SourceManager
-from helper_next.core.acmg_transcripts import TranscriptReferenceProvider
+from helper_next.core.acmg_digest import digest
+from helper_next.core.acmg_pvs1 import SOFTWARE as NONSENSE_VERSION
+from helper_next.core.acmg_transcripts import TranscriptReferenceProvider, primary_chromosome
+from helper_next.core.acmg_vep_reference import local_transcript_reference
+from helper_next.core.acmg_splice import splice_impact
+from helper_next.core.acmg_splice_prediction import spliceai_prediction
 from pvs1.impact import VERSION, molecular_impact
+from pvs1.molecular import VERSION as MOLECULAR_VERSION
 
 
 _FAILURES = OrderedDict()
 _FAILURE_LOCK = threading.Lock()
+_MOLECULAR_CACHE = OrderedDict()
+_MOLECULAR_CACHE_LOCK = threading.Lock()
+_MOLECULAR_CACHE_BYTES = 0
+_MOLECULAR_CACHE_LIMIT = 32 * 1024 * 1024
 
 
 @lru_cache(maxsize=512)
@@ -42,6 +53,40 @@ def _reference_source(manager, method, identifier, assembly, fetch):
                 while len(_FAILURES) > 128:
                     _FAILURES.popitem(last=False)
         return result
+
+
+def _molecular_result(variant, gene, transcript, reference, consequence, annotation):
+    """Reuse sequence facts across disease contexts; never cache absent references.
+
+    Key the complete supplied reference, including its release, sequence and
+    provenance, rather than trusting an accession or an artifact label alone.
+    Returned records are private copies: API projection cannot corrupt a hit.
+    """
+    global _MOLECULAR_CACHE_BYTES
+    if not reference:
+        return molecular_impact(variant, gene, transcript, reference, consequence, annotation)
+    key = digest([VERSION, MOLECULAR_VERSION, NONSENSE_VERSION, variant, gene, transcript, reference, consequence,
+                  (annotation or {}).get("hgvsp"),
+                  (annotation or {}).get("metadata", {}).get("fields", {}).get("CDS_position")])["value"]
+    with _source_lock(("molecular", key)):
+        with _MOLECULAR_CACHE_LOCK:
+            cached = _MOLECULAR_CACHE.get(key)
+            if cached:
+                _MOLECULAR_CACHE.move_to_end(key)
+                return copy.deepcopy(cached[1])
+        row = molecular_impact(variant, gene, transcript, reference, consequence, annotation)
+        # Retry incomplete analyses after evidence/reference acquisition.
+        if row["status"] != "INSUFFICIENT_DATA" and row["product_resolution"]["status"] != "UNRESOLVED":
+            size = len(json.dumps(row, ensure_ascii=False).encode())
+            if size <= _MOLECULAR_CACHE_LIMIT:
+                with _MOLECULAR_CACHE_LOCK:
+                    while _MOLECULAR_CACHE and (len(_MOLECULAR_CACHE) >= 128
+                                               or _MOLECULAR_CACHE_BYTES + size > _MOLECULAR_CACHE_LIMIT):
+                        _, (previous_size, _) = _MOLECULAR_CACHE.popitem(last=False)
+                        _MOLECULAR_CACHE_BYTES -= previous_size
+                    _MOLECULAR_CACHE[key] = (size, copy.deepcopy(row))
+                    _MOLECULAR_CACHE_BYTES += size
+        return row
 
 
 def annotation_release(annotation):
@@ -74,8 +119,8 @@ def _gene(annotation):
     return None
 
 
-def analyze_transcripts(detail, selected, manager=None):
-    """Return every catalog member plus indexed rows absent from that release.
+def analyze_transcripts(detail, selected, manager=None, *, selected_only=False, record=None):
+    """Analyze the exact selection or every release-qualified catalog member.
 
     Retrieval defaults to enabled for this explicitly requested analysis; the
     existing HELPER_TRANSCRIPT_FETCH=0 switch keeps it strictly offline.
@@ -100,16 +145,19 @@ def analyze_transcripts(detail, selected, manager=None):
                "reference_allele": detail["reference"], "alternate_allele": detail["alternate"],
                "coordinate_system": "genomic_1_based"}
     fetch = os.environ.get("HELPER_TRANSCRIPT_FETCH", "1") != "0"
-    catalog = _reference_source(manager, "gene_transcripts", gene, assembly, fetch) if gene and release else {}
+    # An exact selected accession can be fetched directly. An unversioned one
+    # needs the release-qualified catalog to resolve its version unambiguously.
+    needs_catalog = not selected_only or not re.fullmatch(r"ENST[0-9]+\.[0-9]+", selected.get("transcript") or "")
+    catalog = _reference_source(manager, "gene_transcripts", gene, assembly, fetch) if gene and release and needs_catalog else {}
     data = catalog.get("data") or {}
     if data and (data.get("gene") != gene.split(".")[0] or data.get("assembly") != assembly
-                 or data.get("chromosome") != variant["contig"] or data.get("annotation_release") != release):
+                 or data.get("chromosome") != primary_chromosome(variant["contig"]) or data.get("annotation_release") != release):
         data = {}
         warnings.append("Gene catalog does not match the selected allele/gene/assembly/release")
-    if not data:
+    if not data and needs_catalog:
         warnings.append(catalog.get("missing") or "Complete gene transcript catalog unavailable; showing indexed transcripts only")
     annotations = []
-    for annotation in detail.get("annotations", []):
+    for annotation in ([selected] if selected_only else detail.get("annotations", [])):
         if selected.get("release_key") and annotation.get("release_key") != selected["release_key"]:
             continue
         if (gene and _gene(annotation) == gene) or annotation is selected:
@@ -133,6 +181,9 @@ def analyze_transcripts(detail, selected, manager=None):
     selected_name = selected.get("transcript")
     if selected_name and selected_name not in entries and not any(tx.split(".")[0] == selected_name for tx in entries):
         entries[selected_name] = {"transcript": selected_name, "outside_catalog": bool(data)}
+    if selected_only:
+        entries = {name: entry for name, entry in entries.items()
+                   if any(a.get("id") == selected.get("id") for a in by_transcript.get(name, []))}
 
     def evaluate(entry):
         name = entry["transcript"]
@@ -156,28 +207,56 @@ def analyze_transcripts(detail, selected, manager=None):
         if noncoding:
             row = molecular_impact(variant, gene or "UNKNOWN", name, None, consequence)
             row.update(status="NON_CODING", missing_data=[], warnings=["No applicable CDS"], provenance={"gene_catalog": data.get("artifact_digest")})
+            row["product_resolution"] = {"status": "NOT_APPLICABLE", "method": None, "reason_codes": []}
         elif entry.get("outside_catalog") or not gene or not release or not re.fullmatch(r"ENST[0-9]+\.[0-9]+", name):
             row = molecular_impact(variant, gene or "UNKNOWN", name, None, consequence)
             row["missing_data"].append("Exact transcript version/gene/release is unavailable or differs from the gene catalog")
+            row["product_resolution"]["reason_codes"].append("TRANSCRIPT_IDENTITY_UNRESOLVED")
         else:
-            source = _reference_source(manager, "transcript", name, assembly, fetch and bool(data))
+            source = local_transcript_reference(variant, gene.split(".")[0], name, release)
+            if source["status"] == "NOT_AVAILABLE":
+                source = _reference_source(manager, "transcript", name, assembly, fetch and (selected_only or bool(data)))
             reference = source.get("data")
             if reference and str(reference.get("annotation_release")) != release:
                 reference = None
-            row = molecular_impact(variant, gene.split(".")[0], name, reference, consequence, annotation)
+            row = _molecular_result(variant, gene.split(".")[0], name, reference, consequence, annotation)
+            original = detail.get("metadata", {}).get("original_vcf") or {}
+            has_splice_prediction = (any(key.startswith("SpliceAI_pred") and fields[key] not in (None, "", ".") for key in fields)
+                                     or (annotation or {}).get("metadata", {}).get("spliceai_prediction") is not None
+                                     or (original.get("info") or {}).get("SpliceAI") is not None)
+            prediction = spliceai_prediction(annotation, variant, original) if has_splice_prediction else None
+            has_splice_prediction = bool(prediction and prediction["status"] == "AVAILABLE"
+                                         and any(r["DS_AG"] > 0 or r["DS_DG"] > 0 for r in prediction["records"]))
+            if (reference and (any(t.startswith("splice_") for t in terms) or has_splice_prediction)
+                    and not terms.intersection({"stop_gained", "frameshift_variant", "start_lost", "stop_lost"})
+                    and "REFERENCE_INVALID" not in row["product_resolution"]["reason_codes"]):
+                row = splice_impact(row, variant, gene.split(".")[0], reference, record=record,
+                                    annotation=annotation, original=original, prediction=prediction)
             if not reference:
                 row["missing_data"].append(source.get("missing") or "Reference release mismatch")
+        if not release_verified:
+            row["product_resolution"]["reason_codes"].append("ANNOTATION_RELEASE_UNVERIFIED")
+            if row["product_resolution"]["status"] == "DETERMINED":
+                row["product_resolution"]["status"] = "CONDITIONAL"
+        if flags["mane"] == "NONE" and row.get("mane") in {"SELECT", "PLUS_CLINICAL"}:
+            flags["mane"] = row["mane"]
+        flags["canonical"] = flags["canonical"] or bool(row.get("canonical"))
+        flags["appris"] = flags["appris"] or row.get("appris")
         row.update({k: v for k, v in flags.items() if v is not None})
         row["provenance"].update(annotation_ids=[a.get("id") for a in rows],
                                  annotation_release_basis=release_basis, release_verified=release_verified,
                                  source_status=source.get("status"), gene_catalog_digest=data.get("artifact_digest"))
         return row
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        results = list(executor.map(evaluate, entries.values()))
+    if selected_only:
+        results = [evaluate(entry) for entry in entries.values()]
+    else:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(executor.map(evaluate, entries.values()))
     results.sort(key=lambda row: (0 if row["selected"] else 1 if row.get("mane") == "SELECT" else
                                  2 if row.get("mane") == "PLUS_CLINICAL" else 3 if row.get("has_translation") or row.get("biotype") == "protein_coding" else 4,
                                  row["transcript"]))
     return {"algorithm_version": VERSION, "gene": gene, "assembly": assembly, "release": release,
             "release_basis": release_basis, "release_verified": release_verified,
-            "catalog_complete": bool(data.get("complete")), "warnings": warnings, "transcripts": results}
+            "catalog_complete": bool(data.get("complete")), "scope": "SELECTED" if selected_only else "GENE",
+            "warnings": warnings, "transcripts": results}

@@ -15,14 +15,16 @@ import re
 from helper_next.core.acmg_pvs1 import nonsense as task25_nonsense
 from helper_next.core.acmg_transcripts import (
     VERSION as REFERENCE_VERSION, complement, genomic_to_mrna, mrna_to_genomic,
-    translate,
+    primary_chromosome, translate,
 )
 
 from pvs1.models import PVS1Input
 from helper_variants.indexer import IndexedFasta, sha256_file
+from helper_next.core import reference_validation
+from helper_next.core.acmg_digest import digest
 
 
-VERSION = "helper-pvs1-molecular-1.0"
+VERSION = "helper-pvs1-molecular-1.1"
 
 
 def _result(data=None, reason=None):
@@ -62,7 +64,7 @@ def _reference(sample, reference):
     identity = reference["transcript"]
     _require(selected == identity["accession"] + "." + str(identity["version"]), "reference: transcript/version mismatch")
     variant = sample.variant
-    _require(reference["assembly"] == variant["assembly"] and reference["chromosome"] == variant["contig"],
+    _require(reference["assembly"] == variant["assembly"] and reference["chromosome"] == primary_chromosome(variant["contig"]),
              "reference: assembly/contig mismatch")
     _require(sample.disease_context["gene"] in reference["gene_ids"], "reference: gene identity mismatch")
     _require(reference["strand"] in ("+", "-"), "reference.strand: explicit orientation required")
@@ -247,15 +249,20 @@ def translate_altered_cds(reference_cds, altered_cds, edit_interval, cds_start, 
         _require(start >= 3 and end <= len(reference_cds) - 3,
                  "edit: initiation/native stop affected; qualified initiation/termination evidence required")
         translated_sequence = altered_cds + downstream_sequence
-        protein = translate(translated_sequence[:len(translated_sequence) // 3 * 3])
-        stop = protein.find("*")
-        if stop < 0:
-            return _result({"translated_prefix": protein, "ptc_start": None},
+        # Codons before the edit are unchanged and already qualified. Translate
+        # only the altered tail, retaining a partial boundary codon if needed.
+        first_codon = start // 3 * 3
+        prefix = reference_translation[:first_codon // 3]
+        tail = translate(translated_sequence[first_codon:len(translated_sequence) // 3 * 3])
+        local_stop = tail.find("*")
+        if local_stop < 0:
+            return _result({"translated_prefix": prefix + tail, "ptc_start": None},
                            "product: no stop in the supplied altered CDS; downstream sequence/termination unresolved")
+        stop = len(prefix) + local_stop
         native_stop = len(reference_cds) - 3 + delta
         first_stop = stop * 3
         premature = first_stop < native_stop
-        return _result({"protein": protein[:stop], "first_stop_cds_position": first_stop + 1,
+        return _result({"protein": prefix + tail[:local_stop], "first_stop_cds_position": first_stop + 1,
                         "ptc_start": cds_start + first_stop if premature else None,
                         "termination_start": cds_start + first_stop,
                         "extends_into_utr": first_stop + 3 > len(altered_cds),
@@ -320,21 +327,29 @@ def _verified_intronic_sequence(ref, flanking_exons, interval, supplied, genome)
         _require(isinstance(genome.get(key), str) and bool(genome[key].strip()), "genomic_reference." + key + ": required")
     reader = genome.get("reader")
     _require(isinstance(reader, IndexedFasta), "genomic_reference.reader: existing IndexedFasta required")
-    _require(ref["chromosome"] in reader.contigs, "genomic_reference: exact chromosome identity required")
-    checksum = sha256_file(reader.path)
-    _require(genome.get("artifact_digest") == {"algorithm": "sha256", "value": checksum},
-             "genomic_reference: FASTA checksum missing/mismatch")
+    chromosome = genome.get("fasta_chromosome", ref["chromosome"])
+    _require(chromosome in reader.contigs and primary_chromosome(chromosome) == ref["chromosome"],
+             "genomic_reference: exact chromosome identity required")
+    state = reference_validation.reference_state(reader)
+    if genome.get("verified_file_state") is not None:
+        _require(genome["verified_file_state"] == state, "genomic_reference: FASTA/FAI file identity mismatch")
+        identity = "local-windows:" + digest(state)["value"]
+    else:
+        checksum = sha256_file(reader.path)
+        _require(genome.get("artifact_digest") == {"algorithm": "sha256", "value": checksum},
+                 "genomic_reference: FASTA checksum missing/mismatch")
+        identity = "sha256:" + checksum
     for exon in flanking_exons:
-        observed = _dna(reader.sequence(ref["chromosome"], exon["genomic_start"],
+        observed = _dna(reader.sequence(chromosome, exon["genomic_start"],
                                          exon["genomic_end"] - exon["genomic_start"] + 1), "genomic exon")
         observed = observed if ref["strand"] == "+" else complement(observed)
         _require(observed == ref["cdna"][exon["mrna_start"] - 1:exon["mrna_end"]],
                  "genomic_reference: flanking exon sequence disagrees with selected transcript")
     start, end = interval
-    sequence = _dna(reader.sequence(ref["chromosome"], start, end - start + 1), "intronic reference")
+    sequence = _dna(reader.sequence(chromosome, start, end - start + 1), "intronic reference")
     _require(len(sequence) == end - start + 1, "intronic reference: incomplete interval coverage")
     sequence = sequence if ref["strand"] == "+" else complement(sequence)
-    sources = ["{}|version={}|sha256:{}".format(genome["source_ref"], genome["source_version"], checksum)]
+    sources = ["{}|version={}|{}".format(genome["source_ref"], genome["source_version"], identity)]
     if supplied is not None:
         _require(isinstance(supplied, dict), "intronic_sequence: qualified sequence object required")
         _require(supplied.get("assembly") == ref["assembly"] and supplied.get("chromosome") == ref["chromosome"]
@@ -349,13 +364,40 @@ def _verified_intronic_sequence(ref, flanking_exons, interval, supplied, genome)
         _require(_dna(supplied.get("sequence"), "intronic_sequence.sequence") == sequence,
                  "intronic_sequence: sequence disagrees with verified genomic reference")
         sources.append("{}|version={}".format(supplied["source_ref"], supplied["source_version"]))
+    _require(reference_validation.reference_state(reader) == state, "genomic_reference: FASTA/FAI changed during reconstruction")
     return {"assembly": ref["assembly"], "chromosome": ref["chromosome"], "genomic_interval": interval,
             "strand": ref["strand"], "coordinate_system": "genomic_1_based_closed", "sequence": sequence,
-            "source_refs": sources}, sources
+            "reference_file_state": state, "sequence_digest": digest(sequence), "source_refs": sources}, sources
+
+
+def _retained_intronic_variant(sequence, interval, variant, strand):
+    """Apply the exact allele when an extended exon retains the edited intron."""
+    position, ref, alt = variant["position"], variant["reference_allele"], variant["alternate_allele"]
+    while ref and alt and ref[0] == alt[0]:
+        position, ref, alt = position + 1, ref[1:], alt[1:]
+    while ref and alt and ref[-1] == alt[-1]:
+        ref, alt = ref[:-1], alt[:-1]
+    start, end = interval
+    if ref:
+        if position > end or position + len(ref) - 1 < start:
+            return sequence, None
+        _require(start <= position and position + len(ref) - 1 <= end,
+                 "variant: edit crosses the retained intronic boundary; combined event unresolved")
+    else:
+        if position < start or position > end + 1:
+            return sequence, None
+        _require(start < position <= end, "variant: insertion at retained intronic boundary is ambiguous")
+    forward = sequence if strand == "+" else complement(sequence)
+    offset = position - start
+    _require(forward[offset:offset + len(ref)] == ref, "variant: retained intronic REF mismatch")
+    changed = forward[:offset] + alt + forward[offset + len(ref):]
+    return (changed if strand == "+" else complement(changed)), {
+        "position": position, "reference": ref, "alternate": alt, "coordinate_system": "genomic_1_based",
+        "length_delta_nt": len(alt) - len(ref)}
 
 
 def reconstruct_splice_product(sample, reference, event=None, product_ref=None, *,
-                               intronic_sequence=None, genomic_reference=None):
+                               intronic_sequence=None, genomic_reference=None, apply_retained_variant=False):
     """Reconstruct an explicit exon skip or exonic/intronic cryptic boundary.
 
     event is a MolecularProductData record with basis and involved_exons (base 1
@@ -365,6 +407,10 @@ def reconstruct_splice_product(sample, reference, event=None, product_ref=None, 
     Alternatively one explicit genomic_junctions pair extends that exon into
     its adjacent intron, using a verified caller-open IndexedFasta. Optional
     intronic_sequence must match that FASTA; source metadata alone cannot verify it.
+    A caller may bind local-window verification to verified_file_state instead
+    of a whole-file digest; flanking exons and interval bases are still read and
+    verified, and file state must remain unchanged. apply_retained_variant also
+    applies the exact DNA allele to any retained intronic insertion before translation.
     OBSERVED requires an original RNA citation on the event description.
     Other supplied consequences remain in calculation.input_event, not assertions
     adopted by this calculation. product_ref names the resulting RNA coordinate
@@ -379,6 +425,7 @@ def reconstruct_splice_product(sample, reference, event=None, product_ref=None, 
         _require(event.get("basis") != "UNKNOWN", "event: UNKNOWN basis; RNA event not determined")
         event_type = event.get("event_type")
         _require(event_type in ("EXON_SKIPPING", "CRYPTIC_SITE"), "event: explicit EXON_SKIPPING or CRYPTIC_SITE required")
+        retained_variant = None
         intronic = (event_type == "CRYPTIC_SITE" and event.get("retained_exon_interval") is None
                     and event.get("genomic_junctions") is not None)
         _require(intronic or (intronic_sequence is None and genomic_reference is None),
@@ -434,6 +481,8 @@ def reconstruct_splice_product(sample, reference, event=None, product_ref=None, 
             sequence_audit, sequence_sources = _verified_intronic_sequence(
                 ref, [upstream, downstream], span, intronic_sequence, genomic_reference)
             inserted = sequence_audit["sequence"]
+            if apply_retained_variant:
+                inserted, retained_variant = _retained_intronic_variant(inserted, span, sample.variant, ref["strand"])
             left = right = upstream["mrna_end"]
             retained = [(i, dict(e)) for i, e in enumerate(exons, 1)]
             extended = retained[index - 1][1]
@@ -521,7 +570,8 @@ def reconstruct_splice_product(sample, reference, event=None, product_ref=None, 
                          cryptic_site_position=(new_donor if donor else new_acceptor) if intronic else (end if donor else start))
         if intronic:
             audit.update(intronic_sequence=sequence_audit, input_intronic_sequence=copy.deepcopy(intronic_sequence),
-                         cryptic_site_coordinate_system="genomic_1_based")
+                         cryptic_site_coordinate_system="genomic_1_based", retained_variant_edit=retained_variant,
+                         inserted_rna_sequence=inserted)
         if product["ptc_start"] is not None:
             geometry = junction_distances(product["ptc_start"], [j["mrna_position"] for j in junctions], product_ref)
             _require(geometry["status"] == "COMPLETE", "; ".join(geometry["missing_data"]))
@@ -587,7 +637,9 @@ def compute_molecular_evidence(sample, reference, product_ref):
                  "reference": variant["reference_allele"], "alternate": variant["alternate_allele"]},
                 {"transcript": sample.transcript["accession"]}, reference)
             offset = legacy["ptc_mrna_position"] - reference["cds_start"]
-            translated = _result({"ptc_start": legacy["ptc_mrna_position"], "protein": translate(altered_cds[:offset]),
+            first_codon = edit["cds_edit_interval"][0] // 3 * 3
+            predicted = reference["protein"][:first_codon // 3] + translate(altered_cds[first_codon:offset])
+            translated = _result({"ptc_start": legacy["ptc_mrna_position"], "protein": predicted,
                                   "first_stop_cds_position": offset + 1, "stop_kind": "PREMATURE"})
         else:
             translated = translate_altered_cds(reference["cds"], altered_cds, edit["cds_edit_interval"],

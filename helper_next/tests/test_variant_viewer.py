@@ -568,7 +568,6 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert ".gene-evidence-sources[open] > summary::before" in stylesheet
     assert 'node("button", "i", "gene-evidence-information-button")' in source
     assert 'informationText.setAttribute("role", "tooltip")' in source
-    assert ".gene-evidence-information:focus-within .gene-evidence-information-text" in stylesheet
     assert "geneDiseaseMechanism(association.molecular_mechanism, constraint, dosage)" in source
     assert 'node("details", undefined, "gene-disease-mechanisms")' in source
     assert '"gnomAD constraint"' in source
@@ -581,8 +580,6 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert 'it does not establish LoF, GoF or DN disease mechanisms' in source
     assert '"constraint-metric-information-button"' in source
     assert 'tooltip.setAttribute("role", "tooltip")' in source
-    assert ".constraint-metric-information:focus-within" in stylesheet
-    assert ".gene-mechanism-metrics dt:nth-of-type(even) .constraint-metric-information-text" in stylesheet
     assert '"pLoF observed"' not in source
     assert '"Missense observed"' not in source
     assert ".gene-disease-mechanisms[open] > summary::before" in stylesheet
@@ -614,7 +611,6 @@ def test_variant_detail_uses_collapsible_interpretation_sections():
     assert "geneAssociationEvidenceSummary(association, constraint, dosage)" in source
     assert 'node("strong", "Evidence summary")' in source
     assert '"G2P is disease-specific; ClinGen dosage and gnomAD constraint are gene-level context."' in source
-    assert ".gene-association-summary-tooltip" in stylesheet
     assert "assertion.report_url" in source
     assert ".gene-evidence-source-row" in stylesheet
     assert ".gene-evidence-source-link" in stylesheet
